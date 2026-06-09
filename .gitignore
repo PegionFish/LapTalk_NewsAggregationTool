@@ -10,3 +10,4 @@ logs/*.log
 *.db
 *.db.*
 *.backup.*
+.superpowers/
