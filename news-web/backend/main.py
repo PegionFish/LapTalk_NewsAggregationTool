@@ -50,6 +50,21 @@ async def global_exception_handler(request: Request, exc: Exception):
 def health():
     return {"status": "ok", "db_path": config.db_path or "(not configured)"}
 
+# ── Register API routers ──────────────────────────────────
+from api.settings import router as settings_router
+from api.stats import router as stats_router
+from api.articles import router as articles_router
+from api.events import router as events_router
+from api.chains import router as chains_router
+from api.relations import router as relations_router
+
+app.include_router(settings_router)
+app.include_router(stats_router)
+app.include_router(articles_router)
+app.include_router(events_router)
+app.include_router(chains_router)
+app.include_router(relations_router)
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=True)
