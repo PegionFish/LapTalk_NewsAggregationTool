@@ -2,10 +2,11 @@
 
 ## Overview
 
-基于 `claw_skill_news_aggregation` 新闻搜集 Skill 的知识聚合中心 Web 应用。Skill 端（Hermes/OpenClaw 节点）定时抓取新闻并写入 SQLite，Web 端通过可视化方式让局域网用户搜索、审查、关联新闻事件，构建逻辑链。
+基于 `claw_skill_news_aggregation` 新闻搜集 Skill 的知识聚合中心 Web 应用。Web 端直接集成新闻抓取 Pipeline（无需 Hermes/OpenClaw），通过 APScheduler 定时执行（每天 10:00/17:00），让局域网用户搜索、审查、关联新闻事件，构建逻辑链。
 
 **目标用户：** 局域网内多名成员（基于 QNAP NAS 账户体系的认证将在后续版本接入）
 **部署目标：** Mac / Linux 主机
+**架构变更：** 不再依赖 Hermes/OpenClaw 节点 — Pipeline 作为后台任务集成在 FastAPI 进程中
 
 ---
 
@@ -81,8 +82,10 @@ CREATE TABLE chain_relations (
 ```
 news-web/
 ├── backend/
-│   ├── main.py              # FastAPI 入口 + CORS + 生命周期
-│   ├── config.py            # 动态 DB 路径 + UA 配置管理
+│   ├── main.py              # FastAPI 入口 + CORS + 生命周期 + 调度启动
+│   ├── config.py            # 动态 DB/UA/OpenAI 配置管理
+│   ├── scheduler.py         # APScheduler 定时任务 (10:00 / 17:00)
+│   ├── ai_client.py         # OpenAI 兼容 API 客户端
 │   ├── api/
 │   │   ├── articles.py      # 文章列表/搜索/审核
 │   │   ├── events.py        # 事件 CRUD/合并/拆分
@@ -93,6 +96,12 @@ news-web/
 │   ├── db/
 │   │   ├── news_db.py       # 从 Skill 仓库同步的 ORM 层
 │   │   └── migrations.py    # 新增表（logic_chains 等）迁移
+│   ├── pipeline/            # 从 Skill 仓库同步的抓取分析脚本
+│   │   ├── run_all.py       # 编排整个流程
+│   │   ├── fetch_english_news.py
+│   │   ├── collect_data.py
+│   │   ├── fetch_content.py
+│   │   └── analyze.py
 │   └── requirements.txt
 ├── frontend/
 │   ├── src/
@@ -101,7 +110,7 @@ news-web/
 │   │   │   ├── Workspace.tsx       # 逻辑链工作台（核心页面）
 │   │   │   ├── ArticleSearch.tsx   # 文章检索
 │   │   │   ├── ChainList.tsx       # 逻辑链列表
-│   │   │   └── Settings.tsx
+│   │   │   └── Settings.tsx        # 含 DB/AI/抓取调度配置
 │   │   ├── components/
 │   │   │   ├── SearchPanel.tsx     # 左栏搜索面板
 │   │   │   ├── EventCard.tsx       # 事件容器块
@@ -117,22 +126,26 @@ news-web/
 │   │   └── App.tsx
 │   ├── package.json
 │   └── vite.config.ts
-└── config.json                # 运行时配置（DB路径、UA等）
+└── config.json                # 运行时配置（DB路径、UA、OpenAI、调度开关）
 ```
 
 ### 2.3 数据流
 
 ```
-Skill 抓取 → news_db.py → SQLite (可配置路径: 本地 / NAS 共享)
-                                     ↓
+Pipeline 定时抓取 (APScheduler 10:00/17:00)
+  → fetch_english_news.py → RSS 40源
+  → collect_data.py → 去重聚类 → SQLite
+  → AI 分析 (通过 OpenAI 兼容 API 调用)
+       ↓
 Web 后端 (FastAPI) ← import news_db.py → 读取/写入 DB
        ↓  REST API
 Web 前端 (React + React Flow)
 ```
 
-- Skill 端和 Web 端共享同一 SQLite 文件（WAL 模式，读写并发安全）
 - `news_db.py` 作为 ORM 层直接包含在 Web 项目中，随包分发
 - 后端通过 config.py 动态设置 DB 路径，通过 `PRAGMA journal_mode=WAL` 打开连接
+- AI 分析可通过任何 OpenAI 兼容端点（OpenAI、DeepSeek、Ollama 等）
+- Pipeline 运行在独立的子进程中，不阻塞 API 响应
 
 ---
 
@@ -187,7 +200,9 @@ Web 前端 (React + React Flow)
 ### 3.6 设置面板
 
 - 数据库路径（本地路径或 NAS 共享挂载点）
-- 默认 User-Agent（Skill 抓取时模拟浏览器 + 打开原文时携带）
+- AI 配置：API 地址（OpenAI 兼容）、API Key、模型名称
+- 默认 User-Agent（Pipeline 抓取时模拟浏览器 + 打开原文时携带）
+- Pipeline 调度开关（启用/禁用定时抓取）
 - 配置保存到 `config.json`（与 Web 应用同级）
 
 ---
@@ -239,7 +254,12 @@ POST   /api/relations  → { from_event_id, to_event_id, relation }
 ### 4.6 设置
 ```
 GET  /api/settings
-PUT  /api/settings  → { db_path?, user_agent? }
+PUT  /api/settings  → { db_path?, user_agent?, openai_base_url?, openai_api_key?, openai_model?, pipeline_schedule_enabled? }
+```
+
+### 4.7 Pipeline
+```
+POST /api/pipeline/run  → 手动触发一次完整抓取
 ```
 
 ---
