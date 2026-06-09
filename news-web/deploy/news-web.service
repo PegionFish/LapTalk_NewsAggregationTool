@@ -1,0 +1,14 @@
+[Unit]
+Description=News Aggregation Web
+After=network.target
+
+[Service]
+Type=simple
+User=news
+WorkingDirectory=/opt/news-web/backend
+ExecStart=/opt/news-web/venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port 8080
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
