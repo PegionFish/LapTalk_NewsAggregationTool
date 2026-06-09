@@ -1,10 +1,12 @@
 import os, sys, logging
 from pathlib import Path
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from config import config
+from db.migrations import ensure_schema
 
 # ── Logging ──────────────────────────────────────────────
 LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'logs')
@@ -19,7 +21,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="News Aggregation Web")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if config.db_path:
+        ensure_schema(config.db_path)
+    yield
+
+app = FastAPI(title="News Aggregation Web", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
