@@ -52,17 +52,33 @@ CREATE TABLE chain_relations (
 );
 ```
 
+```sql
+-- 查询性能索引
+CREATE INDEX IF NOT EXISTS idx_chain_events_chain_pos ON chain_events(chain_id, position);
+CREATE INDEX IF NOT EXISTS idx_chain_relations_parent_pos ON chain_relations(parent_chain_id, position);
+
+-- 迁移版本追踪（支持 Phase 2/3/4 增量迁移）
+CREATE TABLE IF NOT EXISTS schema_version (
+    version   INTEGER PRIMARY KEY,
+    applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+```
+
 `chain_relations` 实现链拼接。例如父链"RTX 5090 全生命周期"包含子链"禁售风波"（position=0）和"缺ROPS缺陷"（position=1）。应用层遍历 chain_relations 获取子链顺序，再合并子链的 chain_events 得到完整事件序列。数据库层面不存冗余的层级路径。
 
 `chain_events` 的 ON DELETE CASCADE 确保删除链时自动清理关联记录。`chain_relations` 同理。
 
+`chain_events` 的 `UNIQUE(chain_id, event_id)` 约束表示同一事件在同一链中只能出现一次。若需同一事件出现在链的不同位置（如"RTX 5090 缺货"既属于"发布风波"也属于"市场反应"），应通过子链拼接实现——各子链独立持有该事件，再由上级链合并。此约束在 Phase 1 保持，后续根据使用反馈评估是否放宽。
+
 ### 1.2 现有 Schema（Skill 侧，Web 端只读 + 写入 feedback 相关表）
 
 - `articles` — 新闻条目（含 keywords, priority_score, priority_label, human_verified, human_tags）
-- `events` — 聚类事件（含 title, first_seen, last_seen, article_count）
+- `events` — 聚类事件（含 title, first_seen, last_seen, article_count, priority_label）
+  - **新增字段**：`priority_label TEXT DEFAULT 'medium'` — 事件级默认优先级，文章级 priority_label 可单独覆盖
 - `article_events` — 多对多关联
 - `human_feedback` — 人工反馈记录
 - `event_relations` — 事件间关系（before/after/update/spawn/related, created_by=human|auto）
+  - 关系类型语义：`before`/`after` 是时间性前后关系（互补：创建 A before B 自动创建 B after A 的逆关系）；`update` 表示同一事件的新信息；`spawn` 表示此事件导致另一事件（因果衍生）；`related` 表示非时间性、非因果的一般关联
 
 ---
 
@@ -175,6 +191,9 @@ Web 前端 (React + React Flow)
 - 自由拖拽、缩放、平移
 - 新闻块拖入画布后自动按事件聚合（算法层在后端完成）
 - **事件容器**可视化——显示事件标题、优先级、旗下新闻列表
+- **加载已有链**：通过 URL 参数 `?chain=<id>` 加载已保存的逻辑链到画布，恢复节点位置和连线状态
+- 未保存的草稿自动保存到 `localStorage`，页面刷新后可恢复
+- 支持 Undo/Redo（`Ctrl+Z` / `Ctrl+Shift+Z`）
 - 事件容器之间可拖出连线，连线时弹出关系类型选择（before/after/update/spawn/related）
 - AI 自动推荐的关系显示为虚线，点击确认变为实线
 
@@ -219,7 +238,7 @@ GET /api/stats → { articles, events, active_events, human_verified, by_categor
 GET    /api/articles?q=&source=&date_from=&date_to=&priority=&verified=&page=&limit=
 GET    /api/articles/:id
 PATCH  /api/articles/:id  → { priority_label?, human_tags?, human_verified? }
-GET    /api/articles/:id/content  → 代理获取原文（携带配置的 UA）
+GET    /api/articles/:id/content  → 返回原文（优先本地 Pipeline 缓存，fallback 代理获取）
 ```
 
 ### 4.3 事件
@@ -238,9 +257,10 @@ POST   /api/chains  → { title, event_ids[]? }
 GET    /api/chains/:id  → 链详情（含事件树、子链）
 PATCH  /api/chains/:id  → { title?, description? }
 DELETE /api/chains/:id
-POST   /api/chains/:id/splice → { child_chain_ids[] }  # 拼接子链
-POST   /api/chains/:id/split  → { at_event_id }        # 从某事件处拆分
-POST   /api/chains/:id/reorder → { event_ids[] }       # 重排事件顺序
+POST   /api/chains/:id/splice  → { child_chain_ids[] }  # 拼接子链
+POST   /api/chains/:id/split   → { at_event_id }        # 从某事件处拆分
+POST   /api/chains/:id/reorder → { event_ids[] }        # 重排事件顺序
+GET    /api/chains/:id/timeline → 完整时间线（递归展开子链 → 合并排序）  # 前端单次请求渲染完整叙事
 ```
 
 ### 4.5 事件关系
@@ -259,7 +279,8 @@ PUT  /api/settings  → { db_path?, user_agent?, openai_base_url?, openai_api_ke
 
 ### 4.7 Pipeline
 ```
-POST /api/pipeline/run  → 手动触发一次完整抓取
+POST /api/pipeline/run    → 手动触发一次完整抓取
+GET  /api/pipeline/status → { running, last_run, last_status, current_step, steps[] }
 ```
 
 ---
@@ -313,9 +334,27 @@ POST /api/pipeline/run  → 手动触发一次完整抓取
 - 合并事件时，合并后的事件覆盖两个事件的日期范围
 - 删除逻辑链时，其包含的事件和新闻不受影响（CASCADE 只删关联记录）
 
+### 6.5 日志基础设施
+- `main.py` 中通过 `logging.basicConfig` 统一配置日志输出（同时写入文件和控制台）
+- 日志文件路径：`logs/news-web.log`（与 `news-web/` 同级），按天轮转
+- Pipeline 子进程的 stdout/stderr 由 `run_all.py` 捕获并写入主日志流
+
+### 6.6 全局异常处理
+- FastAPI 注册通用 `@app.exception_handler`，未处理异常返回统一格式 `{"error": "internal_error", "message": "..."}`
+- 前端 React 根组件包裹 `<ErrorBoundary>`，捕获渲染异常并显示重试按钮
+
+### 6.7 SQLite 自动备份
+- 每日凌晨 3:00（APScheduler）执行 `VACUUM INTO` 到 `news.db.backup.<YYYYMMDD>`
+- 保留最近 7 天备份，过期自动清理
+
 ---
 
 ## 7. 测试策略
+
+- **后端单元测试**：pytest，mock news_db.py 的数据库操作
+- **API 集成测试**：使用测试 SQLite 数据库，覆盖所有端点（含 split_chain 边界、merge_events 计数正确性、并发写入等边界场景）
+- **前端组件测试**：Vitest + React Testing Library，覆盖核心交互组件（含 ErrorBoundary 恢复、画布拖放）
+- **端到端测试**：Playwright，覆盖核心工作流（搜索 → 拖拽 → 连线 → 保存 → 重新加载）
 
 - **后端单元测试**：pytest，mock news_db.py 的数据库操作
 - **API 集成测试**：使用测试 SQLite 数据库，覆盖所有端点
@@ -330,3 +369,26 @@ POST /api/pipeline/run  → 手动触发一次完整抓取
 2. **Phase 2**：用户认证集成（QNAP NAS LDAP / SSO）
 3. **Phase 3**：多用户操作日志与协作
 4. **Phase 4**：通知推送（事件更新提醒、待审查提醒）
+
+---
+
+## 9. 前端状态管理
+
+### 9.1 画布状态持久化
+
+用户在工作台中拖拽构建的逻辑链在页面刷新或误关闭后会丢失。持久化策略分层：
+
+| 层级 | 触发条件 | 存储位置 | 说明 |
+|------|---------|---------|------|
+| 草稿自动保存 | 画布节点/连线变化后 2s（debounce） | `localStorage` | 页面恢复时自动加载 |
+| 显式保存 | 用户点击"保存"或"创建逻辑链" | 后端 API | 持久化到 DB |
+| 链编辑加载 | URL 参数 `?chain=id` 进入工作台 | 后端 API → 画布 | 加载已有链到画布 |
+
+`localStorage` 草稿使用 key `canvas-draft-<chainId|"new">`，存储 React Flow 的 `{ nodes, edges, viewport }` JSON。
+
+### 9.2 Undo/Redo
+
+逻辑链工作台画布集成 React Flow 生态的 `useUndoRedo` hook：
+- 支持的操作：节点增删/移动、连线增删、节点内文章增删
+- 快捷键：`Ctrl+Z` 撤销 / `Ctrl+Shift+Z` 重做
+- 历史栈上限：50 步（避免内存膨胀）

@@ -17,7 +17,7 @@ news-web/
 ├── backend/
 │   ├── main.py                # FastAPI app factory, CORS, static mount, lifespan
 │   ├── config.py              # Config load/save from config.json
-│   ├── scheduler.py           # APScheduler: daily 10:00 + 17:00 pipeline runs
+│   ├── scheduler.py           # APScheduler: pipeline (10:00/17:00) + backup (03:00)
 │   ├── ai_client.py           # OpenAI-compatible API wrapper
 │   ├── api/
 │   │   ├── __init__.py
@@ -66,8 +66,14 @@ news-web/
 │   ├── package.json
 │   ├── tsconfig.json
 │   └── vite.config.ts
-├── config.json                 # Runtime config: db_path, user_agent, openai_*
-└── tests/
+├── run_prod.sh                  # Production: npm build + pip install + start server
+├── config.json                  # Runtime config: db_path, user_agent, openai_*
+├── deploy/
+│   ├── CHECKLIST.md             # First deployment checklist
+│   ├── news-web.service         # systemd service template (Linux)
+│   └── com.news-aggregation.web.plist  # launchd plist template (macOS)
+├── logs/                        # Runtime log output (gitignored)
+├── tests/
     └── backend/
         ├── conftest.py
         └── test_api.py
@@ -90,6 +96,7 @@ news-web/
 fastapi==0.115.0
 uvicorn[standard]==0.30.0
 httpx==0.27.0
+apscheduler==3.10.4
 pytest==8.3.0
 ```
 
@@ -197,13 +204,27 @@ config = AppConfig()
 - [ ] **Step 4: Write backend/main.py**
 
 ```python
-import os, sys
+import os, sys, logging
 from pathlib import Path
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 
 from config import config
+
+# ── Logging ──────────────────────────────────────────────
+LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'logs')
+os.makedirs(LOG_DIR, exist_ok=True)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(name)s] %(levelname)s: %(message)s',
+    handlers=[
+        logging.FileHandler(os.path.join(LOG_DIR, 'news-web.log'), encoding='utf-8'),
+        logging.StreamHandler(),
+    ],
+)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="News Aggregation Web")
 
@@ -214,6 +235,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ── Global exception handler ─────────────────────────────
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.exception(f"Unhandled exception on {request.method} {request.url.path}")
+    return JSONResponse(
+        status_code=500,
+        content={"error": "internal_error", "message": "An unexpected error occurred"},
+    )
 
 @app.get("/api/health")
 def health():
@@ -303,6 +333,16 @@ CREATE TABLE IF NOT EXISTS chain_relations (
     position        INTEGER NOT NULL,
     UNIQUE(parent_chain_id, child_chain_id)
 );
+
+-- Query performance indexes
+CREATE INDEX IF NOT EXISTS idx_chain_events_chain_pos ON chain_events(chain_id, position);
+CREATE INDEX IF NOT EXISTS idx_chain_relations_parent_pos ON chain_relations(parent_chain_id, position);
+
+-- Schema version tracking for phased migrations
+CREATE TABLE IF NOT EXISTS schema_version (
+    version   INTEGER PRIMARY KEY,
+    applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 def ensure_schema(db_path: str):
@@ -312,6 +352,8 @@ def ensure_schema(db_path: str):
     conn = sqlite3.connect(db_path)
     conn.executescript("PRAGMA journal_mode=WAL;")
     conn.executescript(LOGIC_CHAINS_SQL)
+    # Ensure baseline version is recorded (idempotent: INSERT OR IGNORE)
+    conn.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (1)")
     conn.commit()
     conn.close()
 ```
@@ -686,14 +728,18 @@ def merge_events(event_id: int, body: MergeEvents):
             INSERT OR IGNORE INTO article_events (article_id, event_id)
             SELECT article_id, ? FROM article_events WHERE event_id=?
         """, (body.target_event_id, event_id))
-        # Update target counts and dates
+        # Update target dates and recalculate article_count from actual rows
         conn.execute("""
             UPDATE events SET
                 first_seen = CASE WHEN ? < first_seen THEN ? ELSE first_seen END,
-                last_seen = CASE WHEN ? > last_seen THEN ? ELSE last_seen END,
-                article_count = article_count + ?
+                last_seen = CASE WHEN ? > last_seen THEN ? ELSE last_seen END
             WHERE id=?
-        """, (src[0], src[0], src[1], src[1], src[2], body.target_event_id))
+        """, (src[0], src[0], src[1], src[1], body.target_event_id))
+        # Re-count target articles (INSERT OR IGNORE may have skipped duplicates)
+        tgt_count = conn.execute(
+            "SELECT COUNT(*) FROM article_events WHERE event_id=?", (body.target_event_id,)
+        ).fetchone()[0]
+        conn.execute("UPDATE events SET article_count=? WHERE id=?", (tgt_count, body.target_event_id))
         # Delete source event
         conn.execute("DELETE FROM events WHERE id=?", (event_id,))
         conn.execute("DELETE FROM article_events WHERE event_id=?", (event_id,))
@@ -855,6 +901,53 @@ def get_chain(chain_id: int):
         ]
     }
 
+@router.get("/{chain_id}/timeline")
+def get_chain_timeline(chain_id: int):
+    """Recursively expand sub-chains into a single merged event timeline.
+    Returns a flat list ordered by (sub_chain_position, event_position).
+    Front-end uses this to render the full narrative in one request."""
+    db = get_db()
+    with db._conn() as conn:
+        chain = conn.execute("SELECT id, title FROM logic_chains WHERE id=?", (chain_id,)).fetchone()
+        if not chain:
+            raise HTTPException(404, "chain_not_found")
+
+        def collect_events(cid: int, prefix_pos: tuple = ()):
+            """Recursively collect events from chain and its sub-chains."""
+            events = conn.execute("""
+                SELECT e.id, e.title, e.first_seen, e.last_seen, e.article_count, ce.position, ce.note
+                FROM chain_events ce
+                JOIN events e ON e.id = ce.event_id
+                WHERE ce.chain_id=? ORDER BY ce.position
+            """, (cid,)).fetchall()
+
+            results = []
+            for evt in events:
+                results.append({
+                    'id': evt[0], 'title': evt[1], 'first_seen': evt[2], 'last_seen': evt[3],
+                    'article_count': evt[4], 'position': evt[5], 'note': evt[6],
+                    'sort_key': prefix_pos + (evt[5],), 'chain_id': cid,
+                })
+
+            sub_chains = conn.execute("""
+                SELECT lc.id, lc.title, cr.position
+                FROM chain_relations cr
+                JOIN logic_chains lc ON lc.id = cr.child_chain_id
+                WHERE cr.parent_chain_id=? ORDER BY cr.position
+            """, (cid,)).fetchall()
+
+            for sc in sub_chains:
+                results.extend(collect_events(sc[0], prefix_pos + (sc[2],)))
+            return results
+
+        timeline = collect_events(chain_id)
+        timeline.sort(key=lambda e: e['sort_key'])
+        # Remove internal sort_key
+        for e in timeline:
+            del e['sort_key']
+
+    return {'chain_id': chain_id, 'chain_title': chain[1], 'timeline': timeline, 'total_events': len(timeline)}
+
 class UpdateChain(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
@@ -930,12 +1023,12 @@ def split_chain(chain_id: int, body: SplitChain):
             (chain_id,)
         ).fetchall()
 
-        split_pos = None
-        for eid, evt_id, pos in events:
+        split_index = None
+        for idx, (eid, evt_id, pos) in enumerate(events):
             if evt_id == body.at_event_id:
-                split_pos = pos
+                split_index = idx
                 break
-        if split_pos is None:
+        if split_index is None:
             raise HTTPException(400, "event_not_in_chain")
 
         new_title = body.new_title or f"{chain[0]} (续)"
@@ -945,11 +1038,11 @@ def split_chain(chain_id: int, body: SplitChain):
             (new_title, now, now)
         )
         new_id = cur.lastrowid
-        # Move split events
-        for eid, evt_id, pos in events:
-            if pos >= split_pos:
-                conn.execute("UPDATE chain_events SET chain_id=?, position=position-? WHERE id=?",
-                            (new_id, split_pos, eid))
+        # Move split events — use enumerate index to avoid position-gap collisions
+        for idx, (eid, evt_id, pos) in enumerate(events):
+            if idx >= split_index:
+                conn.execute("UPDATE chain_events SET chain_id=?, position=? WHERE id=?",
+                            (new_id, idx - split_index, eid))
         conn.execute("UPDATE logic_chains SET updated_at=? WHERE id=?", (now, chain_id))
         conn.commit()
     return {'ok': True, 'new_chain_id': new_id}
@@ -1337,6 +1430,8 @@ export const api = {
 
   getChain: (id: number) => fetchJSON<ChainDetail>(`/chains/${id}`),
 
+  getChainTimeline: (id: number) => fetchJSON<{ chain_id: number; chain_title: string; timeline: ChainEvent[]; total_events: number }>(`/chains/${id}/timeline`),
+
   createChain: (data: { title: string; description?: string; event_ids?: number[] }) =>
     fetchJSON<{ id: number; title: string }>('/chains', { method: 'POST', body: JSON.stringify(data) }),
 
@@ -1372,6 +1467,10 @@ export const api = {
 
   updateSettings: (data: Record<string, string>) =>
     fetchJSON<{ db_path: string; user_agent: string }>('/settings', { method: 'PUT', body: JSON.stringify(data) }),
+
+  triggerPipeline: () => fetchJSON<{ status: string }>('/pipeline/run', { method: 'POST' }),
+
+  getPipelineStatus: () => fetchJSON<{ running: boolean; last_run: string | null; last_status: string | null; current_step: string | null; steps: { name: string; status: string; duration_ms: number }[] }>('/pipeline/status'),
 };
 ```
 
@@ -1437,6 +1536,7 @@ export default function NavSidebar() {
 - [ ] **Step 2: Write App.tsx**
 
 ```tsx
+import { Component, type ReactNode } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import NavSidebar from './components/NavSidebar';
 import Dashboard from './pages/Dashboard';
@@ -1445,20 +1545,45 @@ import ArticleSearch from './pages/ArticleSearch';
 import ChainList from './pages/ChainList';
 import Settings from './pages/Settings';
 
+// ── Error Boundary (catches render errors — prevents white screen) ──
+class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: Error | null }> {
+  state = { hasError: false, error: null as Error | null };
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', gap: 16 }}>
+          <h2 style={{ color: 'var(--accent-red)' }}>页面出现异常</h2>
+          <p style={{ color: 'var(--text-secondary)', fontSize: 13 }}>{this.state.error?.message}</p>
+          <button onClick={() => { this.setState({ hasError: false, error: null }); window.location.reload(); }}
+            style={{ background: 'var(--accent)', border: 'none', borderRadius: 6, padding: '10px 24px', color: '#000', fontWeight: 'bold', cursor: 'pointer' }}>
+            重新加载
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function App() {
   return (
-    <div style={{ display: 'flex', height: '100vh' }}>
-      <NavSidebar />
-      <main style={{ flex: 1, overflow: 'auto', padding: 24 }}>
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/workspace" element={<Workspace />} />
-          <Route path="/articles" element={<ArticleSearch />} />
-          <Route path="/chains" element={<ChainList />} />
-          <Route path="/settings" element={<Settings />} />
-        </Routes>
-      </main>
-    </div>
+    <ErrorBoundary>
+      <div style={{ display: 'flex', height: '100vh' }}>
+        <NavSidebar />
+        <main style={{ flex: 1, overflow: 'auto', padding: 24 }}>
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/workspace" element={<Workspace />} />
+            <Route path="/articles" element={<ArticleSearch />} />
+            <Route path="/chains" element={<ChainList />} />
+            <Route path="/settings" element={<Settings />} />
+          </Routes>
+        </main>
+      </div>
+    </ErrorBoundary>
   );
 }
 ```
@@ -1583,9 +1708,19 @@ git commit -m "feat: add dashboard page with stats cards and category distributi
 - [ ] **Step 1: Write ArticleSearch.tsx**
 
 ```tsx
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { api } from '../api/client';
 import type { Article } from '../types';
+
+// ── useDebounce hook ─────────────────────────────────────
+function useDebounce<T>(value: T, delay: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(timer);
+  }, [value, delay]);
+  return debounced;
+}
 
 const INPUT_STYLE: React.CSSProperties = {
   background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 6,
@@ -1600,16 +1735,18 @@ export default function ArticleSearch() {
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<Article | null>(null);
 
+  const debouncedQuery = useDebounce(query, 300);  // 300ms debounce on filter changes
+
   const search = useCallback(async (p = 1) => {
     setLoading(true);
     try {
-      const res = await api.searchArticles({ ...query, page: p, limit: 50 });
+      const res = await api.searchArticles({ ...debouncedQuery, page: p, limit: 50 });
       setArticles(res.articles || []);
       setTotal(res.total);
       setPage(p);
     } catch { setArticles([]); }
     setLoading(false);
-  }, [query]);
+  }, [debouncedQuery]);
 
   useEffect(() => { search(1) }, [search]);
 
@@ -1935,11 +2072,19 @@ const nodeTypes = { eventCard: EventCard };
 
 interface Props {
   articles: Article[];
+  initialNodes?: Node[];
+  initialEdges?: Edge[];
+  chainId?: string | null;
 }
 
-export default function ChainCanvas({ articles }: Props) {
-  const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+let nodeIdCounter = 0;
+const nextNodeId = () => `event-${++nodeIdCounter}`;
+
+const DRAFT_KEY = 'canvas-draft-new';
+
+export default function ChainCanvas({ articles, initialNodes = [], initialEdges = [], chainId }: Props) {
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node>(initialNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initialEdges);
   const [relationDialog, setRelationDialog] = useState<{ from: string; to: string } | null>(null);
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
 
@@ -1986,7 +2131,7 @@ export default function ChainCanvas({ articles }: Props) {
       : { x: Math.random() * 300, y: Math.random() * 300 };
 
     const newNode: Node = {
-      id: `event-${Date.now()}`,
+      id: nextNodeId(),
       type: 'eventCard',
       position,
       data: {
@@ -2022,6 +2167,17 @@ export default function ChainCanvas({ articles }: Props) {
     }, eds));
     setRelationDialog(null);
   }, [relationDialog, setEdges]);
+
+  // ── Auto-save draft to localStorage (debounced 2s) ──
+  const saveTimer = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(() => {
+    if (chainId) return;  // don't auto-save when editing an existing chain
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify({ nodes, edges }));
+    }, 2000);
+    return () => clearTimeout(saveTimer.current);
+  }, [nodes, edges, chainId]);
 
   const handleCreateChain = useCallback(async () => {
     const title = prompt('请输入逻辑链标题:', '新建逻辑链');
@@ -2072,22 +2228,61 @@ export default function ChainCanvas({ articles }: Props) {
 - [ ] **Step 6: Write Workspace.tsx**
 
 ```tsx
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import SearchPanel from '../components/SearchPanel';
 import ChainCanvas from '../components/ChainCanvas';
+import { api } from '../api/client';
 import type { Article } from '../types';
 
+const DRAFT_KEY = 'canvas-draft-new';  // localStorage key for unsaved chain
+
 export default function Workspace() {
+  const [searchParams] = useSearchParams();
+  const chainId = searchParams.get('chain');
   const [canvasArticles, setCanvasArticles] = useState<Article[]>([]);
+  const [initialNodes, setInitialNodes] = useState([]);
+  const [initialEdges, setInitialEdges] = useState([]);
+  const [loading, setLoading] = useState(!!chainId);
+
+  // Load existing chain or recover draft on mount
+  useEffect(() => {
+    if (chainId) {
+      api.getChainTimeline(Number(chainId)).then(data => {
+        // Transform timeline events → React Flow nodes
+        const nodes = data.timeline.map((evt, i) => ({
+          id: `event-${evt.id}`,
+          type: 'eventCard',
+          position: { x: 50 + (i % 3) * 350, y: 50 + Math.floor(i / 3) * 250 },
+          data: { eventId: evt.id, title: evt.title, priority: 'medium', articles: [] },
+        }));
+        setInitialNodes(nodes);
+        setInitialEdges([]);  // Edge reconstruction from relation data in Phase 2
+      }).catch(() => {}).finally(() => setLoading(false));
+    } else {
+      // Recover unsaved draft from localStorage
+      try {
+        const draft = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null');
+        if (draft) {
+          setInitialNodes(draft.nodes || []);
+          setInitialEdges(draft.edges || []);
+        }
+      } catch {}
+    }
+  }, [chainId]);
 
   const handleSearchResults = useCallback((articles: Article[]) => {
-    // Keep articles in state for canvas context; canvas handles drops separately
+    setCanvasArticles(articles);  // Provide articles as fallback for non-drag environments
   }, []);
+
+  if (loading) {
+    return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-secondary)' }}>加载逻辑链...</div>;
+  }
 
   return (
     <div style={{ display: 'flex', height: 'calc(100vh - 48px)', margin: -24 }}>
       <SearchPanel onSearchResults={handleSearchResults} />
-      <ChainCanvas articles={canvasArticles} />
+      <ChainCanvas articles={canvasArticles} initialNodes={initialNodes} initialEdges={initialEdges} chainId={chainId} />
     </div>
   );
 }
@@ -2638,21 +2833,76 @@ PIPELINE_CRON = [
     CronTrigger(hour=17, minute=0),   # 17:00
 ]
 
+# ── Pipeline status tracking ─────────────────────────────
+_pipeline_state = {
+    'running': False,
+    'last_run': None,
+    'last_status': None,
+    'current_step': None,
+    'steps': [],
+}
+
+
+def get_pipeline_status() -> dict:
+    """Return current pipeline status (called by GET /api/pipeline/status)."""
+    return dict(_pipeline_state)
+
 
 async def _run_pipeline_job():
-    """Wrapper that logs the pipeline run."""
+    """Wrapper that logs the pipeline run and updates status."""
+    global _pipeline_state
+    _pipeline_state.update(running=True, current_step='starting', steps=[])
     logger.info("Scheduled pipeline starting...")
     try:
+        def progress_callback(status, message):
+            _pipeline_state['current_step'] = message
+            _pipeline_state['steps'].append({'name': message, 'status': status, 'duration_ms': 0})
+
         success = run_pipeline(
             db_path=config.db_path,
             user_agent=config.user_agent,
+            callback=progress_callback,
         )
+        _pipeline_state['last_status'] = 'success' if success else 'failed'
         if success:
             logger.info("Scheduled pipeline completed successfully")
         else:
             logger.error("Scheduled pipeline failed")
     except Exception as e:
+        _pipeline_state['last_status'] = 'error'
         logger.exception(f"Scheduled pipeline error: {e}")
+    finally:
+        _pipeline_state['running'] = False
+        _pipeline_state['last_run'] = datetime.now().isoformat(timespec='seconds')
+
+
+# ── SQLite backup (daily 03:00, keep 7 days) ─────────────
+async def _backup_db():
+    """VACUUM INTO a date-stamped backup, prune older than 7 days."""
+    if not config.db_path or not os.path.exists(config.db_path):
+        logger.warning("Backup skipped: db_path not configured or file missing")
+        return
+    import glob, time
+    backup_dir = os.path.join(os.path.dirname(config.db_path), 'backups')
+    os.makedirs(backup_dir, exist_ok=True)
+    stamp = datetime.now().strftime('%Y%m%d')
+    backup_path = os.path.join(backup_dir, f'news.db.backup.{stamp}')
+    conn = sqlite3.connect(config.db_path)
+    try:
+        conn.execute("VACUUM INTO ?", (backup_path,))
+        logger.info(f"Database backed up to {backup_path}")
+    except sqlite3.OperationalError as e:
+        logger.warning(f"VACUUM INTO not supported on this SQLite version, using file copy: {e}")
+        import shutil
+        shutil.copy2(config.db_path, backup_path)
+    finally:
+        conn.close()
+    # Prune backups older than 7 days
+    cutoff = time.time() - 7 * 86400
+    for f in glob.glob(os.path.join(backup_dir, 'news.db.backup.*')):
+        if os.path.getmtime(f) < cutoff:
+            os.remove(f)
+            logger.info(f"Pruned old backup: {f}")
 
 
 def start_scheduler():
@@ -2664,8 +2914,10 @@ def start_scheduler():
     if not scheduler.running:
         for trigger in PIPELINE_CRON:
             scheduler.add_job(_run_pipeline_job, trigger)
+        # Daily backup at 03:00
+        scheduler.add_job(_backup_db, CronTrigger(hour=3, minute=0))
         scheduler.start()
-        logger.info("Pipeline scheduler started: daily 10:00 / 17:00")
+        logger.info("Pipeline scheduler started: daily 10:00 / 17:00, backup at 03:00")
 
 
 def stop_scheduler():
@@ -2677,8 +2929,9 @@ def stop_scheduler():
 
 async def trigger_pipeline_manual():
     """Manually trigger a pipeline run (via API)."""
-    await _run_pipeline_job()
-    return {'ok': True}
+    import asyncio
+    asyncio.create_task(_run_pipeline_job())
+    return {'status': 'pipeline_started'}
 ```
 
 - [ ] **Step 3: Update main.py to start/stop scheduler on lifespan**
@@ -2698,18 +2951,22 @@ async def lifespan(app: FastAPI):
     stop_scheduler()                       # Clean shutdown
 ```
 
-Also add a manual trigger endpoint for testing:
+Also add pipeline trigger and status endpoints:
 
 ```python
 # Add after health endpoint
-from scheduler import trigger_pipeline_manual
+from scheduler import trigger_pipeline_manual, get_pipeline_status
 
 @app.post("/api/pipeline/run")
 async def manual_pipeline_run():
     """Manually trigger the news pipeline."""
-    import asyncio
-    asyncio.create_task(trigger_pipeline_manual())
+    await trigger_pipeline_manual()
     return {"status": "pipeline_started"}
+
+@app.get("/api/pipeline/status")
+def pipeline_status():
+    """Get current pipeline run status."""
+    return get_pipeline_status()
 ```
 
 - [ ] **Step 4: Update API client with pipeline endpoint**
@@ -2724,7 +2981,114 @@ triggerPipeline: () => fetchJSON<{ status: string }>('/pipeline/run', { method: 
 
 ```bash
 git add news-web/backend/scheduler.py news-web/backend/main.py news-web/backend/requirements.txt
-git commit -m "feat: add APScheduler for daily pipeline at 10:00 and 17:00"
+git commit -m "feat: add APScheduler for daily pipeline at 10:00, 17:00, backup at 03:00"
+```
+
+---
+
+### Task 19: Production Build + Deployment
+
+**Files:**
+- Modify: `news-web/backend/main.py` (static mount in production)
+- Create: `news-web/deploy/` (deployment artifacts)
+
+- [ ] **Step 1: Add production static mount to main.py**
+
+In production, the frontend build output is served directly by FastAPI (no separate dev server):
+
+```python
+# Add after CORS middleware setup in main.py
+FRONTEND_DIST = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'frontend', 'dist')
+
+@app.on_event("startup")  # runs after lifespan
+async def mount_static():
+    if os.path.isdir(FRONTEND_DIST):
+        app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
+        logger.info(f"Mounted frontend static files from {FRONTEND_DIST}")
+```
+
+- [ ] **Step 2: Create production start script `news-web/run_prod.sh`**
+
+```bash
+#!/bin/bash
+set -e
+cd "$(dirname "$0")/frontend" && npm ci && npm run build
+cd "$(dirname "$0")/backend" && pip install -r requirements.txt
+exec python -m uvicorn main:app --host 0.0.0.0 --port 8080
+```
+
+- [ ] **Step 3: Create systemd service template `news-web/deploy/news-web.service`**
+
+```ini
+[Unit]
+Description=News Aggregation Web
+After=network.target
+
+[Service]
+Type=simple
+User=news
+WorkingDirectory=/opt/news-web/backend
+ExecStart=/opt/news-web/venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port 8080
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+- [ ] **Step 4: Create macOS launchd plist template `news-web/deploy/com.news-aggregation.web.plist`**
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.news-aggregation.web</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/news-web/venv/bin/python</string>
+        <string>-m</string>
+        <string>uvicorn</string>
+        <string>main:app</string>
+        <string>--host</string>
+        <string>0.0.0.0</string>
+        <string>--port</string>
+        <string>8080</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/opt/news-web/backend</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+</dict>
+</plist>
+```
+
+- [ ] **Step 5: Create `news-web/deploy/CHECKLIST.md`**
+
+```markdown
+# First Deployment Checklist
+
+1. [ ] Install Python 3.11+ and Node.js 20+
+2. [ ] Clone repo to /opt/news-web (or user home)
+3. [ ] Create venv: `python -m venv /opt/news-web/venv`
+4. [ ] Copy config.json.example → config.json, fill in db_path and openai_* values
+5. [ ] Ensure SQLite DB at configured db_path exists (or will be created by pipeline)
+6. [ ] Run `chmod +x run_prod.sh && ./run_prod.sh` (or install service file)
+7. [ ] Verify: `curl http://localhost:8080/api/health`
+8. [ ] Open browser → Dashboard should show stats
+9. [ ] Test manual pipeline: curl -X POST http://localhost:8080/api/pipeline/run
+10. [ ] Check backup dir for daily SQLite backups
+```
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add news-web/backend/main.py news-web/run_prod.sh news-web/deploy/
+git commit -m "feat: add production build and deployment artifacts"
 ```
 
 ---
@@ -2733,26 +3097,36 @@ git commit -m "feat: add APScheduler for daily pipeline at 10:00 and 17:00"
 
 | Spec requirement | Implemented in |
 |---|---|
-| 1.1 logic_chains table schema | Task 2 (migrations.py) |
+| 1.1 logic_chains table schema + indexes | Task 2 (migrations.py) |
+| 1.1 schema_version tracking | Task 2 (migrations.py) |
+| 1.2 events.priority_label field | Task 5 (events.py PATCH) |
 | 2.2 Directory structure | Task 1-18 (all files) |
 | 3.1 Sidebar navigation | Task 10 (NavSidebar) |
-| 3.2 Workspace canvas + drag-drop | Task 13 (ChainCanvas, SearchPanel) |
+| 3.2 Workspace canvas + drag-drop + load existing chain | Task 13 (ChainCanvas, SearchPanel, Workspace) |
 | 3.3 Logic chain operations (splice/split/reorder) | Task 6 (chains.py API) |
 | 3.4 Dashboard with stats | Task 11 (Dashboard) |
-| 3.5 Article search with filters | Task 12 (ArticleSearch) |
+| 3.5 Article search with filters + debounce | Task 12 (ArticleSearch) |
 | 3.6 Settings panel (DB + OpenAI + schedule) | Task 14 (Settings) |
 | 4.1 GET /api/stats | Task 3 |
-| 4.2 Article endpoints | Task 4 |
+| 4.2 Article endpoints (incl. content proxy) | Task 4 |
 | 4.3 Event endpoints | Task 5 |
-| 4.4 Chain endpoints | Task 6 |
+| 4.4 Chain endpoints + timeline | Task 6 |
 | 4.5 Relation endpoints | Task 7 |
 | 4.6 Settings endpoints | Task 3 |
-| 5 Scheduler (10:00 / 17:00) | Task 18 |
-| 5 Manual pipeline trigger | Task 18 |
+| 4.7 Pipeline run + status | Task 18 |
+| 5 Scheduler (10:00 / 17:00 + backup 03:00) | Task 18 |
 | 6.1 DB not found handling | Task 3 (get_db() raises 400) |
 | 6.2 WAL mode | Task 2 |
-| 6.4 Event split safety | Task 5 (rejects <1 article) |
+| 6.3 Search debounce | Task 12 (ArticleSearch) |
+| 6.4 Event split / merge safety | Task 5 (rejects <1 article, recount after merge) |
+| 6.5 Logging infrastructure | Task 1 (main.py logging.basicConfig) |
+| 6.6 Global exception handler | Task 1 (main.py @app.exception_handler) |
+| 6.7 SQLite daily backup | Task 18 (scheduler.py _backup_db) |
 | 7 Backend integration tests | Task 15 |
+| 9.1 Canvas state persistence (localStorage) | Task 13 (ChainCanvas auto-save) |
+| 9.2 Undo/Redo (future) | Phase 2 |
+| Error boundary (frontend) | Task 10 (App.tsx ErrorBoundary) |
+| Production build + deployment | Task 19 |
 | OpenAI-compatible config | Task 1 (config.py), Task 3 (settings API), Task 14 (frontend), Task 16 (ai_client) |
 | Pipeline integration | Task 17 (copy scripts + run_all.py) |
 | Scheduler integration | Task 18 |
