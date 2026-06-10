@@ -1,5 +1,4 @@
-import os, sys, logging
-from pathlib import Path
+import os, logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware

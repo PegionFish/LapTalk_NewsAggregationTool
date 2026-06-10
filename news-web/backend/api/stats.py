@@ -1,7 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from config import config
 from db.news_db import NewsDB
-from datetime import datetime, date
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
 

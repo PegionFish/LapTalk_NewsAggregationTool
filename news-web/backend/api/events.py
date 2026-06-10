@@ -28,12 +28,12 @@ def list_events(status: str = "", min_articles: int = Query(1, ge=1), page: int 
         offset = (page - 1) * limit
         count = conn.execute(f"SELECT COUNT(*) FROM events e WHERE {where}", params).fetchone()[0]
         rows = conn.execute(f"""
-            SELECT e.id, e.title, e.first_seen, e.last_seen, e.article_count, e.status
+            SELECT e.id, e.title, e.first_seen, e.last_seen, e.article_count, e.status, e.priority_label
             FROM events e WHERE {where}
             ORDER BY e.last_seen DESC LIMIT ? OFFSET ?
         """, params + [limit, offset]).fetchall()
     return {
-        'events': [{'id': r[0], 'title': r[1], 'first_seen': r[2], 'last_seen': r[3], 'article_count': r[4], 'status': r[5]} for r in rows],
+        'events': [{'id': r[0], 'title': r[1], 'first_seen': r[2], 'last_seen': r[3], 'article_count': r[4], 'status': r[5], 'priority_label': r[6]} for r in rows],
         'total': count, 'page': page, 'limit': limit
     }
 
@@ -65,7 +65,8 @@ def update_event(event_id: int, body: EventUpdate):
         if body.title:
             conn.execute("UPDATE events SET title=? WHERE id=?", (body.title, event_id))
         if body.priority_label:
-            # Apply priority to all articles in this event
+            conn.execute("UPDATE events SET priority_label=? WHERE id=?", (body.priority_label, event_id))
+            # Also propagate to all articles in this event
             article_ids = conn.execute(
                 "SELECT article_id FROM article_events WHERE event_id=?", (event_id,)
             ).fetchall()

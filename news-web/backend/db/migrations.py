@@ -1,5 +1,4 @@
 import sqlite3
-from config import config
 
 LOGIC_CHAINS_SQL = """
 CREATE TABLE IF NOT EXISTS logic_chains (

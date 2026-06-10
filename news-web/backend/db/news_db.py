@@ -204,7 +204,8 @@ class NewsDB:
                     first_seen DATE NOT NULL,
                     last_seen DATE NOT NULL,
                     article_count INTEGER DEFAULT 1,
-                    status TEXT DEFAULT 'active'
+                    status TEXT DEFAULT 'active',
+                    priority_label TEXT DEFAULT 'medium'
                 );
 
                 CREATE TABLE IF NOT EXISTS article_events (
@@ -242,7 +243,7 @@ class NewsDB:
                 CREATE INDEX IF NOT EXISTS idx_evrel_from ON event_relations(from_event_id);
                 CREATE INDEX IF NOT EXISTS idx_evrel_to ON event_relations(to_event_id);
             """)
-            # 迁移：给旧表加列（如已有则忽略）
+            # 迁移：给 articles 表加列（如已有则忽略）
             for col, dtype in [('keywords','TEXT DEFAULT \'[]\''),
                                ('priority_score','REAL DEFAULT 0.0'),
                                ('priority_label','TEXT DEFAULT \'unset\''),
@@ -253,7 +254,12 @@ class NewsDB:
                 try:
                     conn.execute(f"ALTER TABLE articles ADD COLUMN {col} {dtype}")
                 except sqlite3.OperationalError:
-                    pass  # 字段已存在
+                    pass
+            # 迁移：给 events 表加 priority_label
+            try:
+                conn.execute("ALTER TABLE events ADD COLUMN priority_label TEXT DEFAULT 'medium'")
+            except sqlite3.OperationalError:
+                pass
             conn.commit()
 
     # ═══════════════════════════════════════════════════════

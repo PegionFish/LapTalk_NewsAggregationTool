@@ -1,173 +1,132 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
-热榜分析脚本 - 读取最新报告，生成格式化摘要
-由 OpenClaw 在收到 QQ 请求时调用
+AI 分析脚本 — 使用 OpenAI 兼容 API 增强事件分析和关系推荐
+由 run_all.py 编排调用，环境变量 NEWS_DB_PATH 指定数据库路径
 """
-
-import sys
-import os
-import json
-from datetime import datetime, timedelta
-from collections import Counter
+import os, sys, sqlite3, logging
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, SCRIPT_DIR)
+PARENT_DIR = os.path.dirname(SCRIPT_DIR)
+sys.path.insert(0, PARENT_DIR)
 
-def get_latest_report():
-    """获取最新一期报告"""
-    reports_dir = os.path.join(SCRIPT_DIR, 'hot_reports')
-    if not os.path.exists(reports_dir):
-        return None
+logger = logging.getLogger(__name__)
 
-    files = [f for f in os.listdir(reports_dir) if f.startswith('daily_report_') and f.endswith('.json')]
-    if not files:
-        return None
+from config import config
+from ai_client import chat, summarize_events
+from db.news_db import extract_entities, extract_keywords
 
-    files.sort(reverse=True)
-    latest = files[0]
-    with open(os.path.join(reports_dir, latest), 'r', encoding='utf-8') as f:
-        return json.load(f), latest
 
-def get_previous_report():
-    """获取前一天报告"""
-    reports_dir = os.path.join(SCRIPT_DIR, 'hot_reports')
-    if not os.path.exists(reports_dir):
-        return None
+def analyze_events(db_path: str) -> int:
+    """
+    Analyze events using AI:
+    1. Re-summarize event titles for events with ≥2 articles (improve clustering titles)
+    2. Generate cross-event relation suggestions for recent events
+    Returns the number of events improved.
+    """
+    conn = sqlite3.connect(db_path)
+    improved = 0
 
-    today = datetime.now().strftime('%Y-%m-%d')
-    yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-    yesterday_file = os.path.join(reports_dir, f'daily_report_{yesterday}.json')
+    try:
+        # ── 1. Improve event titles ──────────────────────────
+        events = conn.execute("""
+            SELECT e.id, e.title, e.article_count
+            FROM events e
+            WHERE e.status = 'active' AND e.article_count >= 2
+            LIMIT 30
+        """).fetchall()
 
-    if os.path.exists(yesterday_file):
-        with open(yesterday_file, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return None
+        for evt_id, current_title, art_count in events:
+            articles = conn.execute("""
+                SELECT a.title FROM article_events ae
+                JOIN articles a ON a.id = ae.article_id
+                WHERE ae.event_id = ? LIMIT 20
+            """, (evt_id,)).fetchall()
 
-def extract_keywords(data, top_n=8):
-    """提取热词"""
-    all_titles = []
-    for platform, items in data.get('data', {}).items():
-        for item in items:
-            title = item.get('title', '')
-            if title:
-                all_titles.append(title)
+            if len(articles) < 2:
+                continue
 
-    keywords = Counter()
-    for title in all_titles:
-        for i in range(len(title) - 1):
-            for length in [2, 3, 4]:
-                if i + length <= len(title):
-                    word = title[i:i+length]
-                    if any('\u4e00' <= c <= '\u9fff' for c in word):
-                        keywords[word] += 1
+            titles_text = "\n".join(f"- {a[0]}" for a in articles)
+            try:
+                ai_title = summarize_events(titles_text)
+                if ai_title and len(ai_title) > 0 and ai_title != current_title:
+                    conn.execute(
+                        "UPDATE events SET title = ? WHERE id = ?",
+                        (ai_title[:200], evt_id)
+                    )
+                    logger.info(f"  AI renamed event #{evt_id}: {current_title[:40]} → {ai_title[:60]}")
+                    improved += 1
+            except Exception as e:
+                logger.warning(f"  summarize_events failed for #{evt_id}: {e}")
 
-    stop_words = {'的是', '什么', '这个', '那个', '怎么', '如何', '可以', '没有', '一个', '就是', '不是', '大家', '应该', '已经', '为什么'}
-    filtered = [(k, v) for k, v in keywords.most_common(top_n * 2) if k not in stop_words]
-    return filtered[:top_n]
+        # ── 2. Generate event relation suggestions ────────────
+        recent_events = conn.execute("""
+            SELECT e.id, e.title FROM events e
+            WHERE e.status = 'active' AND e.article_count >= 1
+            ORDER BY e.last_seen DESC LIMIT 20
+        """).fetchall()
 
-def generate_summary_text(data):
-    """生成格式化摘要"""
-    platforms_data = data.get('data', {})
-    date_str = data.get('date', '')
+        if len(recent_events) >= 2:
+            event_text = "\n".join(
+                f"[{e[0]}] {e[1]} (first_seen: {row[2] if len(row)>2 else '?'})"
+                for e, row in zip(recent_events, conn.execute("""
+                    SELECT id, title, first_seen FROM events
+                    WHERE status='active' ORDER BY last_seen DESC LIMIT 20
+                """).fetchall())
+            )
 
-    platform_names = {
-        'bilibili': '📺 B站热门',
-        'douyin': '🎵 抖音热搜',
-        'weibo': '🔍 微博热搜',
-        'toutiao': '📰 今日头条'
-    }
+            for i, evt1 in enumerate(recent_events):
+                for j, evt2 in enumerate(recent_events):
+                    if i >= j:
+                        continue
+                    # Check if relation already exists
+                    existing = conn.execute(
+                        "SELECT COUNT(*) FROM event_relations WHERE from_event_id=? AND to_event_id=?",
+                        (evt1[0], evt2[0])
+                    ).fetchone()[0]
+                    if existing > 0:
+                        continue
 
-    lines = [
-        f"🔥 全平台热榜日报",
-        f"📅 {date_str}",
-        "=" * 40
-    ]
+                    try:
+                        prompt = (
+                            f"Event A: {evt1[1]}\n"
+                            f"Event B: {evt2[1]}\n\n"
+                            f"Are these two events related? If yes, reply with the relation type "
+                            f"(before, after, update, spawn, or related) and a one-line explanation. "
+                            f"If not related, reply 'unrelated'."
+                        )
+                        response = chat(prompt, system_prompt=(
+                            "You are a news event analysis assistant. "
+                            "Determine if two events are causally, temporally, or topically related. "
+                            "Output only the relation type or 'unrelated'."
+                        ))
+                        if response and 'unrelated' not in response.lower():
+                            for rel_type in ['before', 'after', 'update', 'spawn', 'related']:
+                                if rel_type in response.lower():
+                                    conn.execute("""
+                                        INSERT OR IGNORE INTO event_relations
+                                            (from_event_id, to_event_id, relation, created_by, created_at)
+                                        VALUES (?, ?, ?, 'auto', datetime('now'))
+                                    """, (evt1[0], evt2[0], rel_type))
+                                    logger.info(f"  AI relation: #{evt1[0]} --{rel_type}--> #{evt2[0]}")
+                                    break
+                    except Exception as e:
+                        logger.warning(f"  AI relation check failed for #{evt1[0]}↔#{evt2[0]}: {e}")
 
-    for platform, name in platform_names.items():
-        items = platforms_data.get(platform, [])
-        if not items:
-            continue
-        lines.append(f"\n{name} Top {len(items)}:")
-        for i, item in enumerate(items[:5], 1):
-            label = f" [{item.get('label', '')}]" if item.get('label') else ""
-            lines.append(f"  #{i} {item.get('title', '')}{label} ({item.get('value_text', '')})")
+        conn.commit()
+    except Exception as e:
+        logger.error(f"AI analysis failed: {e}")
+        conn.rollback()
+    finally:
+        conn.close()
 
-    return '\n'.join(lines)
+    return improved
 
-def generate_full_analysis():
-    """生成完整分析报告"""
-    result = get_latest_report()
-    if not result:
-        return "⚠️ 暂无热榜数据，请先等待定时抓取完成。"
-
-    data, filename = result
-    prev_data = get_previous_report()
-
-    date_str = data.get('date', '')
-    platforms_data = data.get('data', {})
-
-    platform_names = {
-        'bilibili': '📺 B站热门',
-        'douyin': '🎵 抖音热搜',
-        'weibo': '🔍 微博热搜',
-        'toutiao': '📰 今日头条'
-    }
-
-    lines = [
-        f"🔥 全平台热榜日报",
-        f"📅 {date_str}",
-        "=" * 40,
-        ""
-    ]
-
-    # 各平台热榜
-    for platform, name in platform_names.items():
-        items = platforms_data.get(platform, [])
-        if not items:
-            continue
-        lines.append(f"{name} Top {len(items)}:")
-        for i, item in enumerate(items[:10], 1):
-            label = f" [{item.get('label', '')}]" if item.get('label') else ""
-            lines.append(f"  #{i} {item.get('title', '')}{label} ({item.get('value_text', '')})")
-        lines.append("")
-
-    # 热门关键词
-    keywords = extract_keywords(data, 10)
-    if keywords:
-        lines.append("=" * 40)
-        lines.append("🔥 今日热词 TOP10:")
-        kw_str = "  " + "  ".join([f"{k}({v})" for k, v in keywords])
-        lines.append(kw_str)
-        lines.append("")
-
-    # 环比变化（新上榜话题）
-    if prev_data:
-        lines.append("=" * 40)
-        lines.append("🆕 相比昨日新上榜话题:")
-        prev_titles = {}
-        for platform, items in prev_data.get('data', {}).items():
-            prev_titles[platform] = {item.get('title', '') for item in items}
-
-        new_count = 0
-        for platform, items in platforms_data.items():
-            for item in items:
-                title = item.get('title', '')
-                if title and title not in prev_titles.get(platform, set()):
-                    new_count += 1
-                    if new_count <= 10:
-                        lines.append(f"  [{platform_names.get(platform, platform)}] {title}")
-
-        if new_count == 0:
-            lines.append("  （今日热榜话题与昨日基本一致）")
-        else:
-            lines.append(f"\n  共 {new_count} 个新上榜话题")
-        lines.append("")
-
-    lines.append("=" * 40)
-    lines.append(f"📁 数据文件: {filename}")
-
-    return '\n'.join(lines)
 
 if __name__ == '__main__':
-    print(generate_full_analysis())
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s [AI] %(message)s')
+    db = os.environ.get('NEWS_DB_PATH', config.db_path)
+    if not db:
+        print("Error: NEWS_DB_PATH not set and config.db_path is empty")
+        sys.exit(1)
+    n = analyze_events(db)
+    print(f"AI analysis complete — {n} events improved")

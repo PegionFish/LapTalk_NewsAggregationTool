@@ -3,8 +3,7 @@ Pipeline orchestrator — runs the full fetch → cluster → analyze cycle.
 Replaces cron_runner.sh / Hermes/OpenClaw scheduling.
 Call via `run_pipeline(db_path, user_agent)` or `python -m backend.pipeline.run_all`.
 """
-import os, sys, subprocess, json, logging
-from datetime import datetime
+import os, sys, subprocess, logging
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +34,11 @@ def run_pipeline(db_path: str = "", user_agent: str = "", callback=None):
         ('collect_data.py', '去重聚类'),
         ('fetch_content.py', '页面归档'),
     ]
+
+    # Step 4: AI analysis (only if API key is configured)
+    from config import config
+    if config.openai_api_key:
+        steps.append(('analyze.py', 'AI 分析'))
 
     for script, label in steps:
         script_path = os.path.join(PIPELINE_DIR, script)
