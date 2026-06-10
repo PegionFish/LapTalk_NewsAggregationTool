@@ -88,6 +88,11 @@ export const api = {
   rejectRelation: (id: number) =>
     fetchJSON<{ ok: boolean }>(`/relations/${id}`, { method: 'DELETE' }),
 
+  getRelationsBetween: (eventIds: number[]) => {
+    const qs = eventIds.join(',');
+    return fetchJSON<{ relations: { id: number; from_event_id: number; to_event_id: number; relation: string; from_title: string; to_title: string; created_by: string }[] }>(`/relations/between?event_ids=${qs}`);
+  },
+
   createRelation: (from: number, to: number, relation: string) =>
     fetchJSON<{ ok: boolean }>('/relations', { method: 'POST', body: JSON.stringify({ from_event_id: from, to_event_id: to, relation }) }),
 
