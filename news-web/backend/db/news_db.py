@@ -1000,12 +1000,25 @@ class NewsDB:
             by_cat = conn.execute(
                 "SELECT category, COUNT(*) FROM articles GROUP BY category"
             ).fetchall()
+            # 缓存状态统计
+            cache_cached = conn.execute(
+                "SELECT COUNT(*) FROM articles WHERE content_status IN ('fetched','translated')"
+            ).fetchone()[0]
+            cache_pending = conn.execute(
+                "SELECT COUNT(*) FROM articles WHERE content_status='pending'"
+            ).fetchone()[0]
+            cache_failed = conn.execute(
+                "SELECT COUNT(*) FROM articles WHERE content_status='failed'"
+            ).fetchone()[0]
             return {
                 'articles': articles,
                 'events': events,
                 'active_events': active,
                 'human_verified': verified,
                 'by_category': dict(by_cat),
+                'cache_cached': cache_cached,
+                'cache_pending': cache_pending,
+                'cache_failed': cache_failed,
             }
 
     def get_recent_articles(self, limit: int = 20) -> list:

@@ -55,7 +55,8 @@ def list_articles(
         count = conn.execute(f"SELECT COUNT(*) FROM articles a WHERE {where}", params).fetchone()[0]
         rows = conn.execute(f"""
             SELECT a.id, a.title, a.source, a.url, a.published_date, a.fetched_at,
-                   a.priority_score, a.priority_label, a.human_verified, a.keywords, a.human_tags
+                   a.priority_score, a.priority_label, a.human_verified, a.keywords, a.human_tags,
+                   a.content_status, a.content_fetched_at
             FROM articles a WHERE {where}
             ORDER BY a.fetched_at DESC
             LIMIT ? OFFSET ?
@@ -68,6 +69,8 @@ def list_articles(
         'label': r[7], 'verified': r[8],
         'keywords': json.loads(r[9]) if r[9] else [],
         'human_tags': json.loads(r[10]) if r[10] else [],
+        'content_status': r[11] or 'pending',
+        'content_fetched_at': r[12],
     } for r in rows]
 
     return {'articles': articles, 'total': count, 'page': page, 'limit': limit}

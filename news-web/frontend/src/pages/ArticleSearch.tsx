@@ -45,6 +45,17 @@ export default function ArticleSearch() {
     }).catch(() => setDetailHtml(''));
   }, [selected?.id]);
 
+  // 缓存状态 → 图标/颜色/提示
+  const cacheBadge = (status: string): { icon: string; color: string; tooltip: string } => {
+    switch (status) {
+      case 'translated': return { icon: 'fa-check-circle', color: 'var(--accent-tertiary)', tooltip: '翻译已就绪' };
+      case 'fetched': return { icon: 'fa-check-circle', color: 'var(--accent-green)', tooltip: '内容已缓存' };
+      case 'failed': return { icon: 'fa-exclamation-triangle', color: 'var(--accent-red)', tooltip: '下载失败' };
+      case 'file': return { icon: 'fa-file-alt', color: 'var(--accent-blue)', tooltip: 'HTML 磁盘缓存' };
+      default: return { icon: 'fa-hourglass-half', color: 'var(--text-muted)', tooltip: '尚未下载内容' };
+    }
+  };
+
   const totalPages = Math.ceil(total / PER_PAGE);
 
   return (
@@ -81,6 +92,7 @@ export default function ArticleSearch() {
                 <th style={thStyle}>标题</th>
                 <th style={{ ...thStyle, width: 100 }}>来源</th>
                 <th style={{ ...thStyle, width: 70 }}>评分</th>
+                <th style={{ ...thStyle, width: 60 }}>缓存</th>
                 <th style={{ ...thStyle, width: 60 }}>状态</th>
                 <th style={{ ...thStyle, width: 70 }}>日期</th>
               </tr>
@@ -98,6 +110,9 @@ export default function ArticleSearch() {
                   <td style={{ padding: '7px 12px', color: 'var(--text-secondary)', fontSize: 11 }}>{a.source}</td>
                   <td style={{ padding: '7px 12px', color: a.score > 0.7 ? 'var(--accent-tertiary)' : a.score > 0.4 ? 'var(--accent-orange)' : 'var(--text-muted)', fontWeight: 600 }}>
                     {a.score.toFixed(2)}
+                  </td>
+                  <td style={{ padding: '7px 12px', textAlign: 'center', fontSize: 12 }}>
+                    {(() => { const b = cacheBadge(a.content_status); return <i className={`fas ${b.icon}`} style={{ color: b.color }} title={b.tooltip} />; })()}
                   </td>
                   <td style={{ padding: '7px 12px', fontSize: 11 }}><span style={{ color: a.verified ? 'var(--accent-tertiary)' : 'var(--text-muted)' }}>{a.verified ? '已审' : '待审'}</span></td>
                   <td style={{ padding: '7px 12px', color: 'var(--text-muted)', fontSize: 11 }}>{a.fetched?.slice(5, 10)}</td>
@@ -140,6 +155,19 @@ export default function ArticleSearch() {
             <span style={{ color: selected.score > 0.7 ? 'var(--accent-tertiary)' : 'var(--accent-orange)' }}>⭐ {selected.score.toFixed(2)}</span>
             <span style={{ color: selected.verified ? 'var(--accent-tertiary)' : 'var(--text-muted)' }}>{selected.verified ? '✓ 已审核' : '待审核'}</span>
           </div>
+
+          {/* 缓存状态行 */}
+          {(() => { const b = cacheBadge(selected.content_status); return (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: 12 }}>
+              <i className={`fas ${b.icon}`} style={{ color: b.color, fontSize: 14 }} />
+              <span style={{ color: b.color, fontWeight: 500 }}>{b.tooltip}</span>
+              {selected.content_fetched_at && (
+                <span style={{ color: 'var(--text-muted)', marginLeft: 'auto', fontSize: 11 }}>
+                  🕐 {selected.content_fetched_at.slice(0, 10)}
+                </span>
+              )}
+            </div>
+          ); })()}
 
           {selected.keywords?.length > 0 && (
             <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 12 }}>

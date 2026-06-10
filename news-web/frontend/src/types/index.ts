@@ -11,6 +11,8 @@ export interface Article {
   keywords: string[];
   human_tags: string[];
   category?: string;
+  content_status: string;  // 缓存状态: pending | fetched | translated | failed
+  content_fetched_at?: string;  // 内容抓取时间
   event?: { id: number; title: string } | null;
 }
 
@@ -82,6 +84,9 @@ export interface Stats {
   active_events: number;
   human_verified: number;
   by_category: Record<string, number>;
+  cache_cached: number;   // 已缓存 (fetched + translated)
+  cache_pending: number;  // 待下载
+  cache_failed: number;   // 下载失败
 }
 
 export interface PaginatedResponse<T> {
