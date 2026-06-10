@@ -12,8 +12,20 @@ router = APIRouter(prefix="/api/pipeline", tags=["pipeline"])
 logger = logging.getLogger(__name__)
 
 # ── 进度追踪（内存）───────────────────────────────────────
-_translate_state = {"running": False, "total": 0, "done": 0, "failed": 0, "current": ""}
-_analyze_state  = {"running": False, "total": 0, "done": 0, "failed": 0, "current": ""}
+LOG_MAX = 80  # 单次任务最多保留日志条数，防内存膨胀
+
+def _new_state():
+    return {"running": False, "total": 0, "done": 0, "failed": 0, "current": "", "log": []}
+
+def _log(state, msg: str):
+    ts = datetime.now().strftime('%H:%M:%S')
+    state["log"].append(f"[{ts}] {msg}")
+    if len(state["log"]) > LOG_MAX:
+        state["log"] = state["log"][-LOG_MAX:]
+
+# 模块级状态初始化
+_translate_state = _new_state()
+_analyze_state  = _new_state()
 
 
 def _conn():
@@ -26,7 +38,8 @@ def _conn():
 
 def _batch_translate():
     global _translate_state
-    _translate_state = {"running": True, "total": 0, "done": 0, "failed": 0, "current": ""}
+    _translate_state = _new_state()
+    _translate_state["running"] = True
 
     try:
         cache_dir = config.content_cache_path
@@ -50,12 +63,14 @@ def _batch_translate():
             return
 
         _translate_state["total"] = len(rows)
+        _log(_translate_state, f"待翻译 {len(rows)} 篇文章, 缓存目录: {cache_dir}")
 
         from translation_client import translate_html
 
         for idx, (aid, title, local_path) in enumerate(rows, 1):
             html_path = os.path.join(cache_dir, os.path.basename(local_path))
             if not os.path.isfile(html_path):
+                _log(_translate_state, f"#{aid} ⚠️ HTML 文件不存在")
                 _translate_state["failed"] += 1
                 _translate_state["done"] += 1
                 continue
@@ -66,11 +81,13 @@ def _batch_translate():
                 with open(html_path, 'r', encoding='utf-8') as f:
                     html = f.read()
             except Exception:
+                _log(_translate_state, f"#{aid} ❌ 文件读取失败")
                 _translate_state["failed"] += 1
                 _translate_state["done"] += 1
                 continue
 
             if len(html) < 100:
+                _log(_translate_state, f"#{aid} ⚠️ HTML 过短 ({len(html)} 字节)")
                 _translate_state["failed"] += 1
                 _translate_state["done"] += 1
                 continue
@@ -78,16 +95,19 @@ def _batch_translate():
             # 语言检测：仅翻译英文文章
             from utils.text import detect_language
             lang = detect_language(html[:10000])
+            _log(_translate_state, f"#{aid} 语言检测: {lang} | HTML {len(html)//1024}KB")
 
             if lang != 'en':
                 db2 = _conn()
                 db2.execute("UPDATE articles SET content_lang=? WHERE id=?", (lang, aid))
                 db2.commit()
                 db2.close()
+                _log(_translate_state, f"#{aid} ⏭️ 非英文，跳过")
                 _translate_state["done"] += 1
                 continue
 
             try:
+                _log(_translate_state, f"#{aid} 📡 发送翻译请求... (模型: {config.translation_model})")
                 result = translate_html(html)
                 if result and len(result) > 100:
                     db2 = _conn()
@@ -97,12 +117,14 @@ def _batch_translate():
                     )
                     db2.commit()
                     db2.close()
+                    _log(_translate_state, f"#{aid} ✅ 翻译完成 ({len(result)//1024}KB)")
                 else:
+                    _log(_translate_state, f"#{aid} ⚠️ API 返回空结果")
                     _translate_state["failed"] += 1
                     _translate_state["done"] += 1
                     continue
             except Exception as e:
-                logger.warning(f"Translate failed for #{aid}: {e}")
+                _log(_translate_state, f"#{aid} ❌ API 调用失败: {str(e)[:80]}")
                 _translate_state["failed"] += 1
                 _translate_state["done"] += 1
                 continue
@@ -124,11 +146,11 @@ def _batch_translate():
 
 def _batch_analyze():
     global _analyze_state
-    _analyze_state = {"running": True, "total": 0, "done": 0, "failed": 0, "current": ""}
+    _analyze_state = _new_state()
+    _analyze_state["running"] = True
 
     try:
         db = _conn()
-        # 查找有文本内容但未 AI 分析的文章
         rows = db.execute("""
             SELECT id, title, text_content
             FROM articles
@@ -143,11 +165,13 @@ def _batch_analyze():
             return
 
         _analyze_state["total"] = len(rows)
+        _log(_analyze_state, f"待分析 {len(rows)} 篇文章 (模型: {config.openai_model})")
 
         from ai_client import analyze_article as ai_analyze
 
         for idx, (aid, title, text) in enumerate(rows, 1):
             _analyze_state["current"] = f"#{aid} {title[:50]}"
+            _log(_analyze_state, f"#{aid} 📡 发送分析请求... ({len(text)//1024}KB 正文)")
 
             try:
                 analysis = ai_analyze(title, text)
@@ -159,12 +183,14 @@ def _batch_analyze():
                     )
                     db2.commit()
                     db2.close()
+                    _log(_analyze_state, f"#{aid} ✅ 分析完成 ({len(analysis)} 字)")
                 else:
+                    _log(_analyze_state, f"#{aid} ⚠️ AI 返回空结果")
                     _analyze_state["failed"] += 1
                     _analyze_state["done"] += 1
                     continue
             except Exception as e:
-                logger.warning(f"Analyze failed for #{aid}: {e}")
+                _log(_analyze_state, f"#{aid} ❌ API 调用失败: {str(e)[:80]}")
                 _analyze_state["failed"] += 1
                 _analyze_state["done"] += 1
                 continue
@@ -188,7 +214,7 @@ def _batch_analyze():
 # 自动构筑逻辑链
 # ═════════════════════════════════════════════════════════
 
-_chain_state = {"running": False, "total_groups": 0, "chains_created": 0, "current": ""}
+_chain_state = {"running": False, "total_groups": 0, "chains_created": 0, "current": "", "log": []}
 
 
 def _build_logic_chains():
@@ -254,6 +280,8 @@ def _build_logic_chains():
                 groups.append((sorted(cluster), merged))
 
         _chain_state["total_groups"] = len(groups)
+        _log(_chain_state, f"发现 {len(groups)} 个可构筑链的事件组")
+
         if not groups:
             db.close()
             _chain_state["running"] = False
@@ -264,6 +292,7 @@ def _build_logic_chains():
 
         for idx, (event_ids, _) in enumerate(groups, 1):
             _chain_state["current"] = f"正在处理第 {idx}/{len(groups)} 组 ({len(event_ids)} 个事件)"
+            _log(_chain_state, f"第 {idx} 组: {len(event_ids)} 个事件 — 请求 AI 命名...")
 
             # 收集事件标题（极短上下文）
             titles = db.execute(
@@ -306,6 +335,7 @@ def _build_logic_chains():
                 )
 
             _chain_state["chains_created"] += 1
+            _log(_chain_state, f"✅ 创建链: {chain_title} ({len(event_ids)} 个事件)")
             logger.info(f"Auto chain created: {chain_title} ({len(event_ids)} events)")
 
             time.sleep(0.5)  # 链间微延迟
