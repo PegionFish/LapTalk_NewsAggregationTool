@@ -178,6 +178,145 @@ def _batch_analyze():
         logger.error(f"Batch analyze error: {e}")
     finally:
         _analyze_state["running"] = False
+        # 分析完成后自动构筑逻辑链（仅在成功处理 1 篇以上时触发）
+        if _analyze_state["done"] > 0 and _analyze_state["total"] > 0:
+            logger.info("Batch analyze done — auto-building logic chains...")
+            _build_logic_chains()
+
+
+# ═════════════════════════════════════════════════════════
+# 自动构筑逻辑链
+# ═════════════════════════════════════════════════════════
+
+_chain_state = {"running": False, "total_groups": 0, "chains_created": 0, "current": ""}
+
+
+def _build_logic_chains():
+    """基于 AI 摘要中的关键词/产品/公司实体，将事件分组并自动创建逻辑链。
+    每链仅发一次 AI 请求取名，上下文极短（只含事件标题）。"""
+    global _chain_state
+    _chain_state = {"running": True, "total_groups": 0, "chains_created": 0, "current": ""}
+
+    try:
+        db = _conn()
+
+        # 获取所有已分析的事件及其关联文章关键词
+        events = db.execute("""
+            SELECT e.id, e.title, e.article_count
+            FROM events e
+            WHERE e.status = 'active' AND e.article_count >= 1
+            ORDER BY e.article_count DESC
+        """).fetchall()
+
+        if len(events) < 2:
+            db.close()
+            _chain_state["running"] = False
+            return
+
+        # 收集每个事件的关键词集合
+        event_kws = {}  # event_id -> set of keywords
+        import json
+        for evt_id, _, _ in events:
+            rows = db.execute("""
+                SELECT a.keywords FROM articles a
+                JOIN article_events ae ON ae.article_id = a.id
+                WHERE ae.event_id = ?
+            """, (evt_id,)).fetchall()
+            kws = set()
+            for (kj,) in rows:
+                try:
+                    for kw in json.loads(kj or '[]'):
+                        if len(kw) > 1 and kw.lower() not in ('news', 'rss_news', 'hotlist'):
+                            kws.add(kw.lower())
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            if kws:
+                event_kws[evt_id] = kws
+
+        # 基于关键词 Jaccard 相似度聚类
+        grouped = set()  # event ids already assigned
+        groups = []      # list of (event_ids, merged_keywords)
+
+        for evt_id, kws in event_kws.items():
+            if evt_id in grouped:
+                continue
+            cluster = {evt_id}
+            merged = set(kws)
+            # 找重叠 ≥ 1 个关键词的其他事件
+            for other_id, other_kws in event_kws.items():
+                if other_id != evt_id and other_id not in grouped:
+                    if kws & other_kws:
+                        cluster.add(other_id)
+                        merged |= other_kws
+                        grouped.add(other_id)
+            grouped.add(evt_id)
+            if len(cluster) >= 2:
+                groups.append((sorted(cluster), merged))
+
+        _chain_state["total_groups"] = len(groups)
+        if not groups:
+            db.close()
+            _chain_state["running"] = False
+            return
+
+        from ai_client import build_chain_title
+        from datetime import datetime
+
+        for idx, (event_ids, _) in enumerate(groups, 1):
+            _chain_state["current"] = f"正在处理第 {idx}/{len(groups)} 组 ({len(event_ids)} 个事件)"
+
+            # 收集事件标题（极短上下文）
+            titles = db.execute(
+                f"SELECT title FROM events WHERE id IN ({','.join('?'*len(event_ids))})",
+                event_ids
+            ).fetchall()
+            title_block = "\n".join(f"- {t[0][:80]}" for t in titles)
+
+            # 检查事件是否已被分配链
+            already = db.execute(
+                f"SELECT event_id FROM chain_events WHERE event_id IN ({','.join('?'*len(event_ids))})",
+                event_ids
+            ).fetchall()
+            if already:
+                _chain_state["current"] = f"第 {idx}/{len(groups)} 组 — 已有链，跳过"
+                continue
+
+            # AI 命名（一次短调用）
+            chain_title = ""
+            try:
+                chain_title = build_chain_title(title_block)
+            except Exception:
+                chain_title = ""
+
+            if not chain_title:
+                chain_title = db.execute(
+                    f"SELECT title FROM events WHERE id = ?", (event_ids[0],)
+                ).fetchone()[0][:30] + " 等相关事件"
+
+            now = datetime.now().isoformat(timespec='seconds')
+            cur = db.execute(
+                "INSERT INTO logic_chains (title, description, created_at, updated_at, created_by) VALUES (?, ?, ?, ?, 'auto')",
+                (chain_title[:100], f"自动生成 — {len(event_ids)} 个事件", now, now)
+            )
+            chain_id = cur.lastrowid
+            for pos, eid in enumerate(event_ids):
+                db.execute(
+                    "INSERT INTO chain_events (chain_id, event_id, position) VALUES (?, ?, ?)",
+                    (chain_id, eid, pos)
+                )
+
+            _chain_state["chains_created"] += 1
+            logger.info(f"Auto chain created: {chain_title} ({len(event_ids)} events)")
+
+            time.sleep(0.5)  # 链间微延迟
+
+        db.commit()
+        db.close()
+
+    except Exception as e:
+        logger.error(f"Build chains error: {e}")
+    finally:
+        _chain_state["running"] = False
 
 
 # ═════════════════════════════════════════════════════════
@@ -233,3 +372,20 @@ def start_batch_analyze():
 def get_batch_analyze_status():
     """查询批量分析进度。"""
     return dict(_analyze_state)
+
+
+@router.post("/build-chains")
+def start_build_chains():
+    """手动触发逻辑链构筑 — 基于事件关键词分组 + AI 命名。"""
+    global _chain_state
+    if _chain_state.get("running"):
+        return {"ok": False, "message": "链构筑已在运行中", "state": _chain_state}
+
+    threading.Thread(target=_build_logic_chains, daemon=True).start()
+    return {"ok": True, "message": "开始构筑逻辑链"}
+
+
+@router.get("/build-chains/status")
+def get_build_chains_status():
+    """查询逻辑链构筑进度。"""
+    return dict(_chain_state)

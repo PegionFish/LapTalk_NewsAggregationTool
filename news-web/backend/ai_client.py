@@ -37,6 +37,21 @@ def summarize_events(articles_text: str) -> str:
     )
 
 
+def build_chain_title(events_text: str) -> str:
+    """为共享关键词的一组事件生成逻辑链标题。输入仅事件标题列表，极短上下文。"""
+    client = get_client()
+    resp = client.chat.completions.create(
+        model=config.openai_model,
+        messages=[
+            {"role": "system", "content": "你是科技新闻编辑。只输出主题名称，不要任何解释。"},
+            {"role": "user", "content": f"以下是一组相关科技事件，请生成一个概括性主题名称（15 字以内，中文）：\n\n{events_text}"},
+        ],
+        temperature=0.5,
+        max_tokens=50,
+    )
+    return resp.choices[0].message.content or ""
+
+
 def analyze_article(title: str, text: str) -> str:
     """对单篇科技新闻文章生成中文分析摘要。
 
@@ -45,19 +60,19 @@ def analyze_article(title: str, text: str) -> str:
     • 技术背景（如有）
     • 行业影响（如有）
     """
-    # 截取前 4000 字符，平衡上下文和成本
-    snippet = text[:4000]
+    # 截取前 2000 字符，控制上下文长度
+    snippet = text[:2000]
     return chat(
-        f"请用中文分析以下科技新闻文章，输出简洁的结构化摘要（200 字以内）：\n\n"
-        f"【标题】{title}\n\n"
-        f"【正文】{snippet}\n\n"
+        f"请用中文分析以下科技新闻，输出结构化摘要（150 字以内）：\n\n"
+        f"标题：{title}\n"
+        f"正文：{snippet}\n\n"
         f"输出格式：\n"
-        f"📌 要点：\n"
-        f"🔬 背景：\n"
-        f"📊 影响：\n",
+        f"📌要点：\n"
+        f"🔬背景：\n"
+        f"📊影响：\n",
         system_prompt=(
-            "你是资深科技新闻分析师。用中文输出，简洁准确。"
-            "保留技术名词、产品名、公司名的英文原文。"
-            "如果文章信息不足以支撑某部分，标注「暂无」即可。"
+            "你是科技新闻分析师。用中文输出，简洁准确。"
+            "技术名词、产品名、公司名保留英文原文。"
+            "信息不足标注「暂无」。"
         ),
     )

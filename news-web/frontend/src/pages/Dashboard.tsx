@@ -4,6 +4,9 @@ import type { Stats } from '../types';
 import DashboardCards from '../components/DashboardCards';
 
 type BatchState = { running: boolean; total: number; done: number; failed: number; current: string };
+type ChainState = { running: boolean; total_groups: number; chains_created: number; current: string };
+
+const emptyChain: ChainState = { running: false, total_groups: 0, chains_created: 0, current: '' };
 
 export default function Dashboard() {
   const [stats, setStats] = useState<Stats | null>(null);
@@ -14,9 +17,12 @@ export default function Dashboard() {
   const [transState, setTransState] = useState<BatchState>(emptyBatch);
   const [analyzing, setAnalyzing] = useState(false);
   const [analyState, setAnalyState] = useState<BatchState>(emptyBatch);
+  const [chaining, setChaining] = useState(false);
+  const [chainState, setChainState] = useState<ChainState>(emptyChain);
 
   const transTimer = useRef<ReturnType<typeof setInterval>>();
   const analyTimer = useRef<ReturnType<typeof setInterval>>();
+  const chainTimer = useRef<ReturnType<typeof setInterval>>();
 
   const pollTranslate = useCallback(() => {
     api.getBatchTranslateStatus().then(s => {
@@ -30,6 +36,13 @@ export default function Dashboard() {
       setAnalyState(s as BatchState);
       if (!s.running) { setAnalyzing(false); clearInterval(analyTimer.current); }
     }).catch(() => setAnalyzing(false));
+  }, []);
+
+  const pollChains = useCallback(() => {
+    api.getBuildChainsStatus().then(s => {
+      setChainState(s as ChainState);
+      if (!s.running) { setChaining(false); clearInterval(chainTimer.current); }
+    }).catch(() => setChaining(false));
   }, []);
 
   useEffect(() => {
@@ -48,7 +61,12 @@ export default function Dashboard() {
       if (st.running) { setAnalyzing(true); analyTimer.current = setInterval(pollAnalyze, 2000); }
       else setAnalyState(st as BatchState);
     }).catch(() => {});
-    return () => { clearInterval(transTimer.current); clearInterval(analyTimer.current); };
+    api.getBuildChainsStatus().then((s: unknown) => {
+      const st = s as ChainState;
+      if (st.running) { setChaining(true); chainTimer.current = setInterval(pollChains, 2000); }
+      else setChainState(st as ChainState);
+    }).catch(() => {});
+    return () => { clearInterval(transTimer.current); clearInterval(analyTimer.current); clearInterval(chainTimer.current); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleTranslate = async () => {
@@ -69,6 +87,15 @@ export default function Dashboard() {
     } catch { setAnalyzing(false); }
   };
 
+  const handleBuildChains = async () => {
+    setChaining(true);
+    try {
+      await api.startBuildChains();
+      pollChains();
+      chainTimer.current = setInterval(pollChains, 2000);
+    } catch { setChaining(false); }
+  };
+
   const progressPct = (done: number, total: number) =>
     total > 0 ? Math.round((done / total) * 100) : 0;
 
@@ -79,7 +106,7 @@ export default function Dashboard() {
 
       {/* ── 批量 AI 处理 ── */}
       {stats && (
-        <div style={{ marginTop: 24, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 16 }}>
+        <div style={{ marginTop: 24, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16 }}>
 
           {/* 批量翻译 */}
           <div style={card}>
@@ -138,6 +165,42 @@ export default function Dashboard() {
                   <div style={progressText}>{analyState.done}/{analyState.total} · {analyState.failed > 0 ? `${analyState.failed} 失败 ` : ''}{progressPct(analyState.done, analyzeState.total)}%</div>
                   <div style={track}><div style={{ ...bar, width: `${progressPct(analyState.done, analyState.total)}%`, background: 'var(--accent)' }} /></div>
                   {analyState.current && <div style={{ fontSize: 10, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{analyState.current}</div>}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* 自动构筑逻辑链 */}
+          <div style={card}>
+            <div style={cardHeader}>
+              <i className="fas fa-diagram-project" style={{ color: 'var(--accent-purple)', fontSize: 18 }} />
+              <div>
+                <div style={{ fontWeight: 600, fontSize: 14 }}>自动构筑逻辑链</div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>基于已分析事件的关键词自动分组，AI 命名后创建逻辑链</div>
+              </div>
+            </div>
+            <div style={{ ...cardBody, justifyContent: 'space-between' }}>
+              <button onClick={handleBuildChains} disabled={chaining}
+                style={{
+                  ...actionBtn,
+                  background: chaining ? 'var(--bg-card)' : 'var(--accent-purple)',
+                  color: chaining ? 'var(--text-muted)' : '#fff',
+                  cursor: chaining ? 'default' : 'pointer',
+                }}>
+                {chaining
+                  ? <><i className="fas fa-spinner fa-spin" /> 构筑中</>
+                  : <><i className="fas fa-play" /> 自动构筑</>}
+              </button>
+              {chainState.total_groups > 0 && (
+                <div style={{ flex: 1, marginLeft: 12 }}>
+                  <div style={progressText}>{chainState.chains_created}/{chainState.total_groups} 组 · {Math.round(chainState.total_groups > 0 ? (chainState.chains_created / chainState.total_groups) * 100 : 0)}%</div>
+                  <div style={track}><div style={{ ...bar, width: `${chainState.total_groups > 0 ? (chainState.chains_created / chainState.total_groups) * 100 : 0}%`, background: 'var(--accent-purple)' }} /></div>
+                  {chainState.current && <div style={{ fontSize: 10, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{chainState.current}</div>}
+                </div>
+              )}
+              {chainState.chains_created > 0 && !chaining && (
+                <div style={{ fontSize: 11, color: 'var(--accent-tertiary)', marginLeft: 12 }}>
+                  <i className="fas fa-check-circle" /> 完成 {chainState.chains_created} 个链
                 </div>
               )}
             </div>

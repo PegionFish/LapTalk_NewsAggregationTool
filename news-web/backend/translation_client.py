@@ -31,7 +31,7 @@ def translate_html(html: str) -> str:
     """
     if not config.translation_api_key:
         return ""
-    html = html[:50000]
+    html = html[:25000]
     try:
         client = get_client()
         resp = client.chat.completions.create(
