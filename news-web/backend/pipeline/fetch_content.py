@@ -30,6 +30,16 @@ TIMEOUT = 15
 BLOCKED = ['expreview.com', 'solidot.org', 'weibo.com', 'douyin.com']
 
 
+def sanitize_html(html: str) -> str:
+    """切除脚本和追踪标签——下载时就清理，缓存即干净。"""
+    html = re.sub(r'<script[\s\S]*?</script>', '', html, flags=re.IGNORECASE)
+    html = re.sub(r'<noscript[\s\S]*?</noscript>', '', html, flags=re.IGNORECASE)
+    html = re.sub(r'\s+on\w+\s*=\s*"[^"]*"', '', html, flags=re.IGNORECASE)
+    html = re.sub(r"\s+on\w+\s*=\s*'[^']*'", '', html, flags=re.IGNORECASE)
+    html = re.sub(r'<iframe[\s\S]*?</iframe>', '', html, flags=re.IGNORECASE)
+    return html
+
+
 def can_fetch(url: str) -> bool:
     return bool(url and url.startswith('http') and not any(d in url for d in BLOCKED))
 
@@ -165,7 +175,7 @@ def archive_pages(db_path: str, limit: int = 0, source: str = None, recent: int 
                          (f'[ERR:{res["error"]}]', aid))
             err += 1
         elif res['html']:
-            html = res['html']
+            html = sanitize_html(res['html'])
             # 下载页面图片
             imgs = 0
             try:

@@ -198,9 +198,26 @@ def _inject_base(html: str, base_url: str) -> str:
     return tag + html
 
 
+def _sanitize_html(html: str) -> str:
+    """切除脚本和追踪标签，保留纯内容。"""
+    import re
+    # 1. 移除所有 <script>...</script>（含内联和外部）
+    html = re.sub(r'<script[\s\S]*?</script>', '', html, flags=re.IGNORECASE)
+    # 2. 移除 <noscript>...</noscript>
+    html = re.sub(r'<noscript[\s\S]*?</noscript>', '', html, flags=re.IGNORECASE)
+    # 3. 移除 inline event handlers (onload/onclick/onerror 等)
+    html = re.sub(r'\s+on\w+\s*=\s*"[^"]*"', '', html, flags=re.IGNORECASE)
+    html = re.sub(r"\s+on\w+\s*=\s*'[^']*'", '', html, flags=re.IGNORECASE)
+    # 4. 移除 <iframe> 标签（防止嵌套追踪）
+    html = re.sub(r'<iframe[\s\S]*?</iframe>', '', html, flags=re.IGNORECASE)
+    # 5. 移除常见的追踪 pixel/beacon
+    html = re.sub(r'<img[^>]+(?:pixel|tracking|beacon|analytics)[^>]*>', '', html, flags=re.IGNORECASE)
+    return html
+
+
 @router.get("/{article_id}/html")
 async def serve_article_html(article_id: int):
-    """返回文章 HTML — 优先本地缓存，注入 <base> + CSP 禁止第三方脚本。"""
+    """返回文章 HTML — 优先本地缓存，已切除脚本/追踪标签。"""
     from fastapi.responses import HTMLResponse
     db = get_db()
     with db._conn() as conn:
@@ -212,7 +229,7 @@ async def serve_article_html(article_id: int):
 
     url, local_path = row
 
-    # 1. 本地 HTML 缓存
+    # 1. 本地 HTML 缓存 — 切除脚本后返回纯阅读内容
     if local_path and not local_path.startswith('[ERR:'):
         import os
         cache_dir = config.content_cache_path
@@ -222,18 +239,17 @@ async def serve_article_html(article_id: int):
                 html = f.read()
             if url:
                 html = _inject_base(html, url)
-            # CSP: 禁止所有脚本 — 纯阅读模式，广告/追踪/分析全部阻断
-            headers = {'Content-Security-Policy': "script-src 'none'; img-src * data:; style-src * 'unsafe-inline'; font-src *; connect-src 'none'"}
-            return HTMLResponse(content=html, media_type="text/html", headers=headers)
+            html = _sanitize_html(html)
+            return HTMLResponse(content=html, media_type="text/html")
 
-    # 2. 回退代理 — 同样注入 CSP
+    # 2. 回退代理获取 — 同样切除脚本
     if not url:
         raise HTTPException(404, "no_url")
     async with httpx.AsyncClient() as client:
         try:
             resp = await client.get(url, headers={'User-Agent': config.user_agent},
                                     follow_redirects=True, timeout=15)
-            headers = {'Content-Security-Policy': "script-src 'none'; img-src * data:; style-src * 'unsafe-inline'; font-src *; connect-src 'none'"}
-            return HTMLResponse(content=resp.text, media_type="text/html", headers=headers)
+            html = _sanitize_html(resp.text)
+            return HTMLResponse(content=html, media_type="text/html")
         except Exception as e:
             raise HTTPException(502, f"fetch_failed: {str(e)[:80]}")
