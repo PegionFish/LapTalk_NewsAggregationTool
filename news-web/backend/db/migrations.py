@@ -50,6 +50,10 @@ def ensure_schema(db_path: str):
     conn.commit()
     conn.close()
 
-    # Users table migration (separate for idempotency)
+    # Users table migration
     from auth.models import ensure_users_table
     ensure_users_table(db_path)
+
+    # Audit log migration
+    from db.audit import ensure_audit_table
+    ensure_audit_table(db_path)
