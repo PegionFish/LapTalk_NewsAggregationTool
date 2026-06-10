@@ -48,6 +48,8 @@ export default function Workspace() {
             eventId: evt.id,
             title: evt.title,
             priority: 'medium',
+            first_seen: evt.first_seen,
+            last_seen: evt.last_seen,
             articles: eventDetails[i]?.articles || [],
           },
         }));

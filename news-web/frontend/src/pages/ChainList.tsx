@@ -39,7 +39,10 @@ export default function ChainList() {
                 {chain.description && <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>{chain.description}</div>}
                 <div style={{ display: 'flex', gap: 12, fontSize: 11, color: 'var(--text-secondary)' }}>
                   <span>{chain.event_count} 个事件</span>
-                  <span>创建于 {chain.created_at?.slice(0, 10)}</span>
+                  <span>创建于 {chain.created_at?.slice(0, 16).replace('T', ' ')}</span>
+                  {chain.updated_at && chain.updated_at !== chain.created_at && (
+                    <span>更新于 {chain.updated_at?.slice(0, 16).replace('T', ' ')}</span>
+                  )}
                   <span>{chain.created_by === 'auto' ? 'AI 生成' : '人工创建'}</span>
                 </div>
               </div>

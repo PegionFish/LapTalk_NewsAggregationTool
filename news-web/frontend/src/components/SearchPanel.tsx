@@ -25,7 +25,7 @@ export default function SearchPanel({ onSearchResults, onArticleSelect }: Props)
   const search = useCallback(async () => {
     setLoading(true);
     try {
-      const params: Record<string, string | number> = { limit: 30, date_from: dateFrom };
+      const params: Record<string, string | number> = { limit: 100, date_from: dateFrom };
       if (query) params.q = query;
       const res = await api.searchArticles(params);
       setArticles(res.articles || []);

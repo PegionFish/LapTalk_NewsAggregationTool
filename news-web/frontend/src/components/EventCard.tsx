@@ -8,6 +8,8 @@ interface EventNodeData {
   eventId: number;
   title: string;
   priority: string;
+  first_seen?: string;
+  last_seen?: string;
   articles: Article[];
 }
 
@@ -25,9 +27,15 @@ function EventCard({ data }: { data: EventNodeData }) {
     }}>
       <Handle type="target" position={Position.Left} style={{ background: priorityColor, width: 8, height: 8 }} />
       <div style={{ fontWeight: 'bold', fontSize: 13, marginBottom: 2, color: priorityColor }}>📦 {data.title}</div>
-      <div style={{ fontSize: 10, color: 'var(--text-secondary)', marginBottom: 8 }}>
+      <div style={{ fontSize: 10, color: 'var(--text-secondary)', marginBottom: 4 }}>
         {data.articles.length} 篇文章 · {data.priority === 'high' ? '高' : data.priority === 'medium' ? '中' : '低'}优先级
       </div>
+      {data.first_seen && (
+        <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 6 }}>
+          🕐 {data.first_seen.slice(0, 16).replace('T', ' ')}
+          {data.last_seen && data.last_seen !== data.first_seen ? ` → ${data.last_seen.slice(0, 16).replace('T', ' ')}` : ''}
+        </div>
+      )}
       <div style={{ borderTop: '1px solid var(--border)', paddingTop: 6 }}>
         {data.articles.slice(0, 5).map((a: Article) => (
           <div key={a.id}
