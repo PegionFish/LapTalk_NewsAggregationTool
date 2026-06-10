@@ -24,7 +24,7 @@ def update_settings(body: SettingsUpdate):
         config.user_agent = body.user_agent
     if body.openai_base_url is not None:
         config.openai_base_url = body.openai_base_url
-    if body.openai_api_key is not None:
+    if body.openai_api_key is not None and body.openai_api_key != '***':
         config.openai_api_key = body.openai_api_key
     if body.openai_model is not None:
         config.openai_model = body.openai_model

@@ -91,7 +91,7 @@ export const api = {
   createRelation: (from: number, to: number, relation: string) =>
     fetchJSON<{ ok: boolean }>('/relations', { method: 'POST', body: JSON.stringify({ from_event_id: from, to_event_id: to, relation }) }),
 
-  getSettings: () => fetchJSON<{ db_path: string; user_agent: string; openai_base_url?: string; openai_model?: string; pipeline_schedule_enabled?: boolean }>('/settings'),
+  getSettings: () => fetchJSON<{ db_path: string; user_agent: string; openai_base_url?: string; openai_api_key?: string; openai_model?: string; pipeline_schedule_enabled?: boolean }>('/settings'),
 
   updateSettings: (data: Record<string, string | boolean>) =>
     fetchJSON<{ db_path: string; user_agent: string }>('/settings', { method: 'PUT', body: JSON.stringify(data) }),

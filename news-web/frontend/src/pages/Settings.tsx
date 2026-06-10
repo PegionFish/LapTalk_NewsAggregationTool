@@ -16,6 +16,7 @@ export default function Settings() {
       setDbPath(s.db_path || '');
       setUserAgent(s.user_agent || '');
       setOpenaiBaseUrl(s.openai_base_url || 'https://api.openai.com/v1');
+      setOpenaiApiKey(s.openai_api_key || ''); // masked as '***' if set, else ''
       setOpenaiModel(s.openai_model || 'gpt-4o-mini');
       setPipelineEnabled(s.pipeline_schedule_enabled !== false);
     }).catch(() => {});
