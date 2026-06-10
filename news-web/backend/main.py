@@ -73,6 +73,7 @@ from api.articles import router as articles_router
 from api.events import router as events_router
 from api.chains import router as chains_router
 from api.relations import router as relations_router
+from api.auth import router as auth_router
 
 app.include_router(settings_router)
 app.include_router(stats_router)
@@ -80,6 +81,7 @@ app.include_router(articles_router)
 app.include_router(events_router)
 app.include_router(chains_router)
 app.include_router(relations_router)
+app.include_router(auth_router)
 
 # ── Production static mount (must be last) ───────────────
 FRONTEND_DIST = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'frontend', 'dist')

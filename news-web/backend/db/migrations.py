@@ -49,3 +49,7 @@ def ensure_schema(db_path: str):
     conn.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (1)")
     conn.commit()
     conn.close()
+
+    # Users table migration (separate for idempotency)
+    from auth.models import ensure_users_table
+    ensure_users_table(db_path)
