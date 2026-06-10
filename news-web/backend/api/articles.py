@@ -187,3 +187,39 @@ async def get_article_content(article_id: int):
             }
         except Exception as e:
             raise HTTPException(502, f"fetch_failed: {str(e)[:80]}")
+
+
+@router.get("/{article_id}/html")
+async def serve_article_html(article_id: int):
+    """返回文章原始 HTML — 优先本地缓存，回退代理获取。
+    供 iframe 嵌入使用，响应 Content-Type 为 text/html。"""
+    from fastapi.responses import HTMLResponse
+    db = get_db()
+    with db._conn() as conn:
+        row = conn.execute(
+            "SELECT url, local_path FROM articles WHERE id=?", (article_id,)
+        ).fetchone()
+    if not row:
+        raise HTTPException(404, "article_not_found")
+
+    url, local_path = row
+
+    # 1. 本地 HTML 缓存
+    if local_path and not local_path.startswith('[ERR:'):
+        import os
+        cache_dir = config.content_cache_path
+        full_path = os.path.join(cache_dir, os.path.basename(local_path))
+        if os.path.isfile(full_path):
+            with open(full_path, 'r', encoding='utf-8') as f:
+                return HTMLResponse(content=f.read(), media_type="text/html")
+
+    # 2. 回退代理获取
+    if not url:
+        raise HTTPException(404, "no_url")
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.get(url, headers={'User-Agent': config.user_agent},
+                                    follow_redirects=True, timeout=15)
+            return HTMLResponse(content=resp.text, media_type="text/html")
+        except Exception as e:
+            raise HTTPException(502, f"fetch_failed: {str(e)[:80]}")

@@ -21,8 +21,8 @@ export default function ArticlePane({ article, onClose }: Props) {
 
   if (!article) return null;
 
-  // 优先本地缓存，否则代理端点
-  const contentUrl = `/api/articles/${article.id}/content`;
+  // 走本地缓存的 HTML 代理端点，回退直连外网
+  const htmlUrl = article.url ? `/api/articles/${article.id}/html` : '';
 
   return (
     <div style={overlayStyle}>
@@ -35,17 +35,19 @@ export default function ArticlePane({ article, onClose }: Props) {
             {article.title.slice(0, 80)}
           </span>
           <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{article.source}</span>
-          <a href={article.url} target="_blank" rel="noopener noreferrer"
-            style={{ color: 'var(--accent)', fontSize: 13, padding: 4 }}
-            title="在新标签页打开原文">
-            <i className="fas fa-external-link-alt" />
-          </a>
+          {article.url && (
+            <a href={article.url} target="_blank" rel="noopener noreferrer"
+              style={{ color: 'var(--accent)', fontSize: 13, padding: 4 }}
+              title="在新标签页打开原文">
+              <i className="fas fa-external-link-alt" />
+            </a>
+          )}
           <button onClick={onClose} style={closeBtn} title="关闭 (Esc)">
             <i className="fas fa-times" />
           </button>
         </div>
 
-        {/* iframe — 直接渲染真实网页 */}
+        {/* iframe — 优先本地缓存 HTML，回退代理获取 */}
         <div style={{ flex: 1, position: 'relative', background: '#fff' }}>
           {!loaded && (
             <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-primary)', zIndex: 1 }}>
@@ -53,14 +55,16 @@ export default function ArticlePane({ article, onClose }: Props) {
               <span style={{ color: 'var(--text-secondary)', fontSize: 13 }}>加载中...</span>
             </div>
           )}
-          <iframe
-            ref={iframeRef}
-            src={article.url}
-            onLoad={() => setLoaded(true)}
-            style={{ width: '100%', height: '100%', border: 'none' }}
-            sandbox="allow-scripts allow-same-origin allow-popups"
-            title={article.title}
-          />
+          {htmlUrl && (
+            <iframe
+              ref={iframeRef}
+              src={htmlUrl}
+              onLoad={() => setLoaded(true)}
+              style={{ width: '100%', height: '100%', border: 'none' }}
+              sandbox="allow-scripts allow-same-origin allow-popups"
+              title={article.title}
+            />
+          )}
         </div>
       </div>
     </div>

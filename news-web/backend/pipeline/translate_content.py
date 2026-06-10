@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-AI 翻译管道步骤 — 将英文文章翻译为中文。
+AI 翻译管道步骤 — 将英文文章的 HTML 页面翻译为中文。
 由 run_all.py 编排调用，环境变量 NEWS_DB_PATH 指定数据库路径。
 也可独立运行：python translate_content.py [--limit N] [--recent D]
 
+- 直接传原始 HTML 给 DeepSeek，LLM 自行区分标签和文本
+- 翻译后的 HTML 存入 translated_content 列
 - 篇间 5 秒延迟防止 API 超限
-- 翻译失败记 content_status='failed'，不阻塞后续文章
 - 后台静默执行，不影响页面归档和 AI 分析流程
 """
 import os, sys, time, sqlite3, logging
@@ -16,7 +17,7 @@ PARENT_DIR = os.path.dirname(SCRIPT_DIR)
 sys.path.insert(0, PARENT_DIR)
 
 from config import config
-from translation_client import translate_to_chinese
+from translation_client import translate_html
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ TRANSLATE_DELAY = 5  # 篇间延迟秒数
 
 
 def translate_articles(db_path: str, limit: int = 0, recent: int = 0) -> dict:
-    """翻译所有待处理的英文文章。
+    """翻译所有待处理的英文文章 HTML。
 
     Returns:
         {'translated': int, 'failed': int, 'skipped': int}
@@ -35,15 +36,20 @@ def translate_articles(db_path: str, limit: int = 0, recent: int = 0) -> dict:
 
     conn = sqlite3.connect(db_path)
 
-    # 查询待翻译文章：已获取文本 + 英文 + 未翻译
-    where = ["content_status='fetched'", "content_lang='en'", "(translated_content IS NULL OR translated_content='')"]
-    params = []
+    # 查询已下载 HTML 的英文文章，且尚未翻译
+    where = [
+        "content_lang='en'",
+        "local_path != ''",
+        "local_path NOT LIKE '[ERR:%'",
+        "(translated_content IS NULL OR translated_content = '')",
+    ]
+    params: list = []
     if recent:
         cutoff = (datetime.now() - timedelta(days=recent)).isoformat()
         where.append("fetched_at >= ?")
         params.append(cutoff)
 
-    sql = f"SELECT id, title, text_content FROM articles WHERE {' AND '.join(where)} ORDER BY id DESC"
+    sql = f"SELECT id, title, local_path FROM articles WHERE {' AND '.join(where)} ORDER BY id DESC"
     if limit:
         sql += " LIMIT ?"
         params.append(limit)
@@ -56,16 +62,33 @@ def translate_articles(db_path: str, limit: int = 0, recent: int = 0) -> dict:
         print("✅ 所有英文文章已翻译")
         return {'translated': 0, 'failed': 0, 'skipped': 0}
 
-    print(f"🌐 待翻译 {total} 篇英文文章")
+    print(f"🌐 待翻译 {total} 篇英文文章 (HTML → 中文)")
 
+    cache_dir = config.content_cache_path
     translated = failed = 0
-    for idx, (aid, title, text) in enumerate(rows, 1):
-        if not text:
+
+    for idx, (aid, title, local_path) in enumerate(rows, 1):
+        # 读取磁盘 HTML 文件
+        html_path = os.path.join(cache_dir, os.path.basename(local_path))
+        if not os.path.isfile(html_path):
+            print(f"  [{idx}/{total}] #{aid} {title[:45]:45s} ⚠️ HTML 文件不存在")
             continue
-        print(f"  [{idx}/{total}] #{aid} {title[:50]:50s}", end=" ", flush=True)
+
         try:
-            result = translate_to_chinese(text)
-            if result:
+            with open(html_path, 'r', encoding='utf-8') as f:
+                html = f.read()
+        except Exception:
+            print(f"  [{idx}/{total}] #{aid} {title[:45]:45s} ⚠️ 读取失败")
+            continue
+
+        if len(html) < 100:
+            continue
+
+        print(f"  [{idx}/{total}] #{aid} {title[:45]:45s} [{len(html)//1024}KB]", end=" ", flush=True)
+
+        try:
+            result = translate_html(html)
+            if result and len(result) > 100:
                 conn2 = sqlite3.connect(db_path)
                 conn2.execute("""
                     UPDATE articles SET
@@ -74,7 +97,7 @@ def translate_articles(db_path: str, limit: int = 0, recent: int = 0) -> dict:
                 """, (result, datetime.now().isoformat(timespec='seconds'), aid))
                 conn2.commit()
                 conn2.close()
-                print("✅")
+                print(f"✅ [{len(result)//1024}KB]")
                 translated += 1
             else:
                 print("⚠️ 空结果")
@@ -86,7 +109,6 @@ def translate_articles(db_path: str, limit: int = 0, recent: int = 0) -> dict:
             print(f"❌ {str(e)[:60]}")
             failed += 1
 
-        # 篇间延迟
         if idx < total:
             time.sleep(TRANSLATE_DELAY)
 
@@ -98,7 +120,7 @@ if __name__ == '__main__':
     import argparse
     logging.basicConfig(level=logging.INFO, format='%(asctime)s [translate] %(message)s')
 
-    p = argparse.ArgumentParser(description='翻译英文文章为中文')
+    p = argparse.ArgumentParser(description='翻译英文文章 HTML 为中文')
     p.add_argument('--limit', type=int, default=0, help='限制翻译篇数')
     p.add_argument('--recent', type=int, default=0, help='只翻译最近 N 天的文章')
     p.add_argument('--db', default=os.environ.get('NEWS_DB_PATH', config.db_path),
