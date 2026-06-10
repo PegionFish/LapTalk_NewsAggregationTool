@@ -51,16 +51,14 @@ export default function ArticlePane({ article, onClose }: Props) {
               <span style={{ color: 'var(--text-secondary)', fontSize: 13 }}>加载中...</span>
             </div>
           )}
-          {article.url && (
-            <iframe
-              ref={iframeRef}
-              src={article.url}
-              onLoad={() => setLoaded(true)}
-              style={{ width: '100%', height: '100%', border: 'none' }}
-              sandbox="allow-scripts allow-same-origin allow-popups"
-              title={article.title}
-            />
-          )}
+          <iframe
+            ref={iframeRef}
+            src={`/api/articles/${article.id}/html`}
+            onLoad={() => setLoaded(true)}
+            style={{ width: '100%', height: '100%', border: 'none' }}
+            sandbox="allow-scripts allow-same-origin allow-popups"
+            title={article.title}
+          />
         </div>
       </div>
     </div>

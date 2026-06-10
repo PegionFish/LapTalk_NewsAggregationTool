@@ -189,10 +189,18 @@ async def get_article_content(article_id: int):
             raise HTTPException(502, f"fetch_failed: {str(e)[:80]}")
 
 
+def _inject_base(html: str, base_url: str) -> str:
+    """在 <head> 中注入 <base href> 标签，使相对路径资源回源站加载。"""
+    import re
+    tag = f'<base href="{base_url}">'
+    if re.search(r'<head[^>]*>', html, re.IGNORECASE):
+        return re.sub(r'(<head[^>]*>)', rf'\1{tag}', html, count=1, flags=re.IGNORECASE)
+    return tag + html
+
+
 @router.get("/{article_id}/html")
 async def serve_article_html(article_id: int):
-    """返回文章原始 HTML — 优先本地缓存，回退代理获取。
-    供 iframe 嵌入使用，响应 Content-Type 为 text/html。"""
+    """返回文章 HTML — 优先本地缓存，注入 <base> 使资源回源站。"""
     from fastapi.responses import HTMLResponse
     db = get_db()
     with db._conn() as conn:
@@ -204,14 +212,17 @@ async def serve_article_html(article_id: int):
 
     url, local_path = row
 
-    # 1. 本地 HTML 缓存
+    # 1. 本地 HTML 缓存 — 注入 <base> 让 CSS/图片回源站加载
     if local_path and not local_path.startswith('[ERR:'):
         import os
         cache_dir = config.content_cache_path
         full_path = os.path.join(cache_dir, os.path.basename(local_path))
         if os.path.isfile(full_path):
             with open(full_path, 'r', encoding='utf-8') as f:
-                return HTMLResponse(content=f.read(), media_type="text/html")
+                html = f.read()
+            if url:
+                html = _inject_base(html, url)
+            return HTMLResponse(content=html, media_type="text/html")
 
     # 2. 回退代理获取
     if not url:
