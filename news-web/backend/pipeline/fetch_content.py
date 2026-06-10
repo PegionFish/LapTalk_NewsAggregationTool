@@ -15,9 +15,9 @@ DB 中 articles.local_path 指向文件路径。
 
 import os, sys, re, time, sqlite3, urllib.request, urllib.error
 from datetime import datetime, timedelta
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin, urlunparse
+from html.parser import HTMLParser
 
-# 动态计算路径以导入 config 和 utils（独立脚本运行 + 管道子进程均可）
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PARENT_DIR = os.path.dirname(SCRIPT_DIR)
 sys.path.insert(0, PARENT_DIR)
@@ -46,7 +46,6 @@ def download_page(url: str) -> dict:
         })
         with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
             raw = resp.read()
-            # detect encoding
             ct = resp.headers.get('Content-Type', '')
             cs = 'utf-8'
             if 'charset=' in ct:
@@ -60,6 +59,53 @@ def download_page(url: str) -> dict:
         return {'html': '', 'error': f'HTTP {e.code}'}
     except Exception as e:
         return {'html': '', 'error': str(e)[:80]}
+
+
+def extract_img_srcs(html: str, base_url: str) -> list:
+    """从 HTML 中提取所有 <img> 的 src，解析为绝对 URL 并去重。"""
+    urls = set()
+    for m in re.finditer(r'<img[^>]+src=["\']([^"\']+)["\']', html, re.IGNORECASE):
+        src = m.group(1)
+        if src.startswith('data:'):
+            continue  # 跳过 data: URI (base64 内联)
+        abs_url = urljoin(base_url, src)
+        # 去除 query string 和 fragment 用于去重判断
+        clean = urlunparse(urlparse(abs_url)._replace(query='', fragment=''))
+        urls.add(clean)
+    return list(urls)
+
+
+def download_images(img_urls: list, img_dir: str, page_url: str) -> int:
+    """下载图片到本地目录，返回成功下载数。"""
+    os.makedirs(img_dir, exist_ok=True)
+    downloaded = 0
+    for i, img_url in enumerate(img_urls):
+        if not can_fetch(img_url):
+            continue
+        try:
+            ext = os.path.splitext(urlparse(img_url).path)[1]
+            if not ext or len(ext) > 5:
+                ext = '.jpg'
+            file_name = f'{i:03d}{ext}'
+            file_path = os.path.join(img_dir, file_name)
+            if os.path.exists(file_path):
+                downloaded += 1
+                continue
+            req = urllib.request.Request(img_url, headers={
+                'User-Agent': config.user_agent,
+                'Accept': 'image/webp,image/apng,image/*,*/*',
+                'Referer': page_url,
+            })
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                raw = resp.read()
+            if len(raw) < 100:
+                continue
+            with open(file_path, 'wb') as f:
+                f.write(raw)
+            downloaded += 1
+        except Exception:
+            continue
+    return downloaded
 
 
 def archive_pages(db_path: str, limit: int = 0, source: str = None, recent: int = 0):
@@ -119,16 +165,26 @@ def archive_pages(db_path: str, limit: int = 0, source: str = None, recent: int 
                          (f'[ERR:{res["error"]}]', aid))
             err += 1
         elif res['html']:
+            html = res['html']
+            # 下载页面图片
+            imgs = 0
+            try:
+                img_urls = extract_img_srcs(html, url)
+                if img_urls:
+                    article_img_dir = os.path.join(content_dir, str(aid), 'images')
+                    imgs = download_images(img_urls, article_img_dir, url)
+            except Exception:
+                pass
+
             # 保存 HTML 到磁盘
             file_path = os.path.join(content_dir, f'{aid}.html')
             with open(file_path, 'w', encoding='utf-8') as f:
-                f.write(res['html'])
-            size = len(res['html'].encode('utf-8'))
+                f.write(html)
+            size = len(html.encode('utf-8'))
             # 提取纯文本 + 语言检测
-            text = extract_text_from_html(res['html'])
+            text = extract_text_from_html(html)
             lang = detect_language(text)
             now = datetime.now().isoformat(timespec='seconds')
-            # 存储相对路径，同时写入文本列
             rel_path = f'{os.path.basename(content_dir)}/{aid}.html'
             conn2.execute("""
                 UPDATE articles SET
@@ -136,7 +192,8 @@ def archive_pages(db_path: str, limit: int = 0, source: str = None, recent: int 
                     text_content=?, content_lang=?, content_status='fetched'
                 WHERE id=?
             """, (rel_path, now, text, lang, aid))
-            print(f"✅ {size//1024}KB [{lang}]", end="")
+            img_info = f' 🖼{imgs}张' if imgs > 0 else ''
+            print(f"✅ {size//1024}KB [{lang}]{img_info}", end="")
             # 内联翻译：英文文章且翻译功能已启用时立即翻译
             translated = False
             if lang == 'en' and config.translation_enabled and config.translation_api_key:

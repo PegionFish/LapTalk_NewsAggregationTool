@@ -5,9 +5,10 @@ import AISettings from './settings/AISettings';
 import TranslationSettings from './settings/TranslationSettings';
 import CacheSettings from './settings/CacheSettings';
 import AdminSettings from './settings/AdminSettings';
+import LogSettings from './settings/LogSettings';
 import './settings/settings.css';
 
-type Section = 'general' | 'ai' | 'translation' | 'cache' | 'admin';
+type Section = 'general' | 'ai' | 'translation' | 'cache' | 'admin' | 'logs';
 
 interface SectionDef {
   key: Section;
@@ -22,6 +23,7 @@ const SECTIONS: SectionDef[] = [
   { key: 'translation', icon: 'fa-language',     label: 'AI 翻译',    group: 'AI 服务' },
   { key: 'cache',       icon: 'fa-archive',      label: '内容缓存',   group: '系统' },
   { key: 'admin',       icon: 'fa-users-cog',    label: '用户管理',   group: '管理' },
+  { key: 'logs',        icon: 'fa-terminal',     label: '操作日志',   group: '管理' },
 ];
 
 export default function Settings() {
@@ -147,6 +149,8 @@ export default function Settings() {
         return <CacheSettings cachePath={cachePath} setCachePath={setCachePath} />;
       case 'admin':
         return <AdminSettings />;
+      case 'logs':
+        return <LogSettings />;
     }
   };
 

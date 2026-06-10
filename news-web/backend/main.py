@@ -4,6 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
+from fastapi import HTTPException
 
 from config import config
 from db.migrations import ensure_schema
@@ -76,6 +77,7 @@ from api.relations import router as relations_router
 from api.auth import router as auth_router
 from api.audit import router as audit_router
 from api.notifications import router as notifications_router
+from api.logs import router as logs_router
 
 app.include_router(settings_router)
 app.include_router(stats_router)
@@ -86,6 +88,7 @@ app.include_router(relations_router)
 app.include_router(auth_router)
 app.include_router(audit_router)
 app.include_router(notifications_router)
+app.include_router(logs_router)
 
 # ── SPA fallback + static mount (must be last) ──────────
 from fastapi.responses import FileResponse
@@ -93,8 +96,8 @@ FRONTEND_DIST = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__f
 if os.path.isdir(FRONTEND_DIST):
     @app.get("/{full_path:path}")
     async def spa_fallback(full_path: str):
-        """SPA fallback — 仅处理非 API 路径，/api/ 交给对应的路由处理。"""
-        if full_path.startswith("api/"):
+        """SPA fallback — 非 API 路径且无静态文件时返回 index.html。"""
+        if full_path.startswith("api/") or full_path.startswith("openapi.json"):
             raise HTTPException(status_code=404, detail="Not Found")
         file_path = os.path.join(FRONTEND_DIST, full_path)
         if os.path.isfile(file_path):
