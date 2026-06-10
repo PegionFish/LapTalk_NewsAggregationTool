@@ -119,3 +119,82 @@ def local_login(request: Request):
 def me(user: dict = Depends(get_current_user)):
     """Return the current authenticated user."""
     return {'user': user}
+
+
+# ── 管理员用户管理 ──────────────────────────────────────
+
+def _require_admin(user: dict):
+    """管理员权限校验，非 admin 角色拒绝访问。"""
+    if user.get('role') != 'admin':
+        raise HTTPException(403, "admin_required")
+
+
+@router.get("/users")
+def list_users(admin: dict = Depends(get_current_user)):
+    """列出所有用户（管理员专用）。"""
+    _require_admin(admin)
+    if not config.db_path:
+        raise HTTPException(503, "database_not_configured")
+    conn = sqlite3.connect(config.db_path)
+    rows = conn.execute(
+        "SELECT id, username, display_name, role, created_at, last_login FROM users ORDER BY id"
+    ).fetchall()
+    conn.close()
+    return {
+        'users': [
+            {'id': r[0], 'username': r[1], 'display_name': r[2], 'role': r[3],
+             'created_at': r[4], 'last_login': r[5]}
+            for r in rows
+        ]
+    }
+
+
+class UserUpdate(BaseModel):
+    role: str | None = None          # 'admin' | 'user' | 'viewer'
+    display_name: str | None = None
+    password: str | None = None      # 可选重置密码
+
+
+@router.patch("/users/{user_id}")
+def update_user(user_id: int, body: UserUpdate, admin: dict = Depends(get_current_user)):
+    """修改用户角色/名称/密码（管理员专用）。"""
+    _require_admin(admin)
+    if not config.db_path:
+        raise HTTPException(503, "database_not_configured")
+    conn = sqlite3.connect(config.db_path)
+    existing = conn.execute("SELECT id FROM users WHERE id=?", (user_id,)).fetchone()
+    if not existing:
+        conn.close()
+        raise HTTPException(404, "user_not_found")
+
+    if body.role is not None:
+        if body.role not in ('admin', 'user', 'viewer'):
+            conn.close()
+            raise HTTPException(400, "invalid_role")
+        conn.execute("UPDATE users SET role=? WHERE id=?", (body.role, user_id))
+    if body.display_name is not None:
+        conn.execute("UPDATE users SET display_name=? WHERE id=?", (body.display_name, user_id))
+    if body.password is not None:
+        if len(body.password) < 6:
+            conn.close()
+            raise HTTPException(400, "password_too_short")
+        conn.execute("UPDATE users SET password_hash=? WHERE id=?",
+                     (hash_password(body.password), user_id))
+    conn.commit()
+    conn.close()
+    return {'ok': True}
+
+
+@router.delete("/users/{user_id}")
+def delete_user(user_id: int, admin: dict = Depends(get_current_user)):
+    """删除用户（管理员专用）。不能删除自己。"""
+    _require_admin(admin)
+    if int(admin.get('sub', 0)) == user_id:
+        raise HTTPException(400, "cannot_delete_self")
+    if not config.db_path:
+        raise HTTPException(503, "database_not_configured")
+    conn = sqlite3.connect(config.db_path)
+    conn.execute("DELETE FROM users WHERE id=?", (user_id,))
+    conn.commit()
+    conn.close()
+    return {'ok': True}

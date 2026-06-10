@@ -1,5 +1,11 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api/client';
+import { getAuthHeaders } from '../contexts/AuthContext';
+
+interface UserInfo {
+  id: number; username: string; display_name: string; role: string;
+  created_at: string; last_login: string | null;
+}
 
 export default function Settings() {
   const [dbPath, setDbPath] = useState('');
@@ -19,6 +25,9 @@ export default function Settings() {
   const [translationModel, setTranslationModel] = useState('');
   // 缓存路径
   const [cachePath, setCachePath] = useState('');
+  // 管理员用户管理
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [users, setUsers] = useState<UserInfo[]>([]);
 
   useEffect(() => {
     api.getSettings().then(s => {
@@ -35,7 +44,31 @@ export default function Settings() {
       setCachePath(s.content_cache_path || '');
     }).catch(() => {});
     api.getPipelineStatus().then(s => setPipelineStatus(s)).catch(() => {});
+    // 管理员校验
+    fetch('/api/auth/me', { headers: getAuthHeaders() })
+      .then(r => r.json()).then(d => {
+        if (d.user?.role === 'admin') { setIsAdmin(true); loadUsers(); }
+      }).catch(() => {});
   }, []);
+
+  const loadUsers = () => {
+    fetch('/api/auth/users', { headers: getAuthHeaders() })
+      .then(r => r.json()).then(d => setUsers(d.users || [])).catch(() => {});
+  };
+
+  const handleRoleChange = async (userId: number, role: string) => {
+    await fetch(`/api/auth/users/${userId}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+      body: JSON.stringify({ role }),
+    });
+    loadUsers();
+  };
+
+  const handleDeleteUser = async (userId: number) => {
+    if (!confirm('确认删除该用户？')) return;
+    await fetch(`/api/auth/users/${userId}`, { method: 'DELETE', headers: getAuthHeaders() });
+    loadUsers();
+  };
 
   // 轮询管道运行状态
   const pollPipelineStatus = async () => {
@@ -193,6 +226,53 @@ export default function Settings() {
           🌐 User-Agent
           <input value={userAgent} onChange={e => setUserAgent(e.target.value)} style={inputStyle} />
         </label>
+
+        {isAdmin && (
+          <>
+            <h3 style={{ fontSize: 14, marginTop: 20, marginBottom: 8, color: 'var(--accent)' }}>👥 用户管理</h3>
+            <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 8 }}>管理员可查看、修改角色、删除用户</div>
+            <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                  <th style={{ textAlign: 'left', padding: '6px 8px', color: 'var(--text-secondary)' }}>用户名</th>
+                  <th style={{ textAlign: 'left', padding: '6px 8px', color: 'var(--text-secondary)' }}>显示名</th>
+                  <th style={{ textAlign: 'left', padding: '6px 8px', color: 'var(--text-secondary)' }}>角色</th>
+                  <th style={{ textAlign: 'left', padding: '6px 8px', color: 'var(--text-secondary)' }}>创建时间</th>
+                  <th style={{ textAlign: 'left', padding: '6px 8px', color: 'var(--text-secondary)' }}>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {users.map(u => (
+                  <tr key={u.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                    <td style={{ padding: '6px 8px' }}>{u.username}</td>
+                    <td style={{ padding: '6px 8px' }}>{u.display_name || '-'}</td>
+                    <td style={{ padding: '6px 8px' }}>
+                      <select value={u.role} onChange={e => handleRoleChange(u.id, e.target.value)}
+                        style={{
+                          background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 4,
+                          padding: '2px 6px', color: 'var(--text-primary)', fontSize: 11,
+                        }}>
+                        <option value="admin">admin</option>
+                        <option value="user">user</option>
+                        <option value="viewer">viewer</option>
+                      </select>
+                    </td>
+                    <td style={{ padding: '6px 8px', color: 'var(--text-secondary)' }}>{u.created_at?.slice(0, 10)}</td>
+                    <td style={{ padding: '6px 8px' }}>
+                      <button onClick={() => handleDeleteUser(u.id)}
+                        style={{
+                          background: 'rgba(229,115,115,0.15)', border: 'none', borderRadius: 4,
+                          padding: '2px 8px', color: 'var(--accent-red)', fontSize: 11, cursor: 'pointer',
+                        }}>
+                        删除
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
 
         <button onClick={handleSave} disabled={saving}
           style={{ marginTop: 20, background: 'var(--accent)', border: 'none', borderRadius: 6, padding: '10px 24px', color: '#000', fontWeight: 'bold', fontSize: 14, cursor: 'pointer' }}>

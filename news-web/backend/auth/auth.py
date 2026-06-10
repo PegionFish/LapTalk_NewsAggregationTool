@@ -22,7 +22,7 @@ def verify_password(password: str, hashed: str) -> bool:
 def create_token(user_id: int, username: str, role: str) -> str:
     """Generate a JWT token for the user."""
     payload = {
-        'sub': user_id,
+        'sub': str(user_id),              # PyJWT 2.13+ 要求 sub 为字符串
         'username': username,
         'role': role,
         'iat': datetime.utcnow(),
@@ -71,7 +71,7 @@ def get_current_user(request: Request) -> dict:
     if not payload:
         raise HTTPException(401, "invalid_or_expired_token")
 
-    user = get_user_by_id(config.db_path, payload['sub'])
+    user = get_user_by_id(config.db_path, int(payload['sub']))
     if not user:
         raise HTTPException(401, "user_not_found")
 
