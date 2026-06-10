@@ -136,7 +136,25 @@ def archive_pages(db_path: str, limit: int = 0, source: str = None, recent: int 
                     text_content=?, content_lang=?, content_status='fetched'
                 WHERE id=?
             """, (rel_path, now, text, lang, aid))
-            print(f"✅ {size//1024}KB [{lang}]")
+            print(f"✅ {size//1024}KB [{lang}]", end="")
+            # 内联翻译：英文文章且翻译功能已启用时立即翻译
+            translated = False
+            if lang == 'en' and config.translation_enabled and config.translation_api_key:
+                try:
+                    from translation_client import translate_to_chinese
+                    translation = translate_to_chinese(text)
+                    if translation:
+                        conn2.execute("""
+                            UPDATE articles SET
+                                translated_content=?, content_status='translated', translated_at=?
+                            WHERE id=?
+                        """, (translation, datetime.now().isoformat(timespec='seconds'), aid))
+                        translated = True
+                except Exception as e:
+                    print(f" [译❌]", end="")
+            if translated:
+                print(" [译✅]", end="")
+            print()
             ok += 1
         else:
             print("⚠️ 空")

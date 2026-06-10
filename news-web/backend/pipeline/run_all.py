@@ -35,8 +35,12 @@ def run_pipeline(db_path: str = "", user_agent: str = "", callback=None):
         ('fetch_content.py', '页面归档'),
     ]
 
-    # Step 4: AI analysis (only if API key is configured)
+    # Step 3.5: AI 翻译 (only if translation enabled + API key)
     from config import config
+    if config.translation_enabled and config.translation_api_key:
+        steps.append(('translate_content.py', 'AI 翻译'))
+
+    # Step 4: AI analysis (only if API key is configured)
     if config.openai_api_key:
         steps.append(('analyze.py', 'AI 分析'))
 
