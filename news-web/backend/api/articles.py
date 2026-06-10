@@ -130,13 +130,13 @@ async def get_article_content(article_id: int):
     db = get_db()
     with db._conn() as conn:
         row = conn.execute(
-            "SELECT url, local_path, text_content, translated_content, content_lang, content_status "
+            "SELECT url, local_path, text_content, translated_content, content_lang, content_status, ai_summary "
             "FROM articles WHERE id=?", (article_id,)
         ).fetchone()
     if not row:
         raise HTTPException(404, "article_not_found")
 
-    url, local_path, text_content, translated_content, content_lang, content_status = row
+    url, local_path, text_content, translated_content, content_lang, content_status, ai_summary = row
 
     # 1. DB 文本缓存已存在 → 直接返回
     if text_content:
@@ -147,6 +147,7 @@ async def get_article_content(article_id: int):
             "lang": content_lang,
             "status": content_status,
             "source": "local",
+            "ai_summary": ai_summary or "",
         }
 
     # 2. 磁盘 HTML 文件存在 → 实时提取
@@ -263,3 +264,36 @@ async def serve_article_html(article_id: int):
             return HTMLResponse(content=html, media_type="text/html")
         except Exception as e:
             raise HTTPException(502, f"fetch_failed: {str(e)[:80]}")
+
+
+@router.post("/{article_id}/analyze")
+def analyze_article(article_id: int):
+    """对文章内容进行 AI 分析并缓存摘要。如已有缓存直接返回。"""
+    db = get_db()
+    with db._conn() as conn:
+        row = conn.execute(
+            "SELECT id, title, text_content, ai_summary FROM articles WHERE id=?",
+            (article_id,)
+        ).fetchone()
+    if not row:
+        raise HTTPException(404, "article_not_found")
+
+    aid, title, content, cached = row
+
+    if cached:
+        return {"ok": True, "cached": True, "analysis": cached}
+
+    if not content:
+        raise HTTPException(400, "no_text_content")
+
+    from ai_client import analyze_article as ai_analyze
+    try:
+        analysis = ai_analyze(title, content)
+    except Exception as e:
+        raise HTTPException(502, f"ai_failed: {str(e)[:120]}")
+
+    with db._conn() as conn:
+        conn.execute("UPDATE articles SET ai_summary=? WHERE id=?", (analysis, article_id))
+        conn.commit()
+
+    return {"ok": True, "cached": False, "analysis": analysis}

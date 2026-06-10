@@ -33,8 +33,11 @@ export const api = {
   getArticleContent: async (id: number) => {
     const res = await fetch(`${BASE}/articles/${id}/content`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json() as Promise<{ url: string; content: string; translation: string; lang: string; status: string; source: string }>;
+    return res.json() as Promise<{ url: string; content: string; translation: string; lang: string; status: string; source: string; ai_summary?: string }>;
   },
+
+  analyzeArticle: (id: number) =>
+    fetchJSON<{ ok: boolean; cached: boolean; analysis: string }>(`/articles/${id}/analyze`, { method: 'POST' }),
 
   listEvents: (params: Record<string, string | number> = {}) => {
     const qs = new URLSearchParams();

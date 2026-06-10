@@ -15,7 +15,8 @@ export default function ArticleSearch() {
   const [verified, setVerified] = useState('');
   const [selected, setSelected] = useState<Article | null>(null);
   const [loading, setLoading] = useState(false);
-  const [detailHtml, setDetailHtml] = useState('');
+  const [aiAnalysis, setAiAnalysis] = useState('');
+  const [analyzing, setAnalyzing] = useState(false);
 
   const fetchArticles = useCallback(async () => {
     setLoading(true);
@@ -34,16 +35,29 @@ export default function ArticleSearch() {
 
   useEffect(() => { fetchArticles(); }, [fetchArticles]);
 
-  // 选中文章时获取内容
+  // 选中文章时获取 AI 摘要
   useEffect(() => {
-    if (!selected) { setDetailHtml(''); return; }
+    if (!selected) { setAiAnalysis(''); return; }
+    setAiAnalysis('');
     api.getArticleContent(selected.id).then(c => {
-      if (c?.content) {
-        const display = c.translation || c.content;
-        setDetailHtml(display.substring(0, 5000));
+      if (c?.ai_summary) {
+        setAiAnalysis(c.ai_summary);
       }
-    }).catch(() => setDetailHtml(''));
+    }).catch(() => {});
   }, [selected?.id]);
+
+  // 触发 AI 分析
+  const handleAnalyze = async () => {
+    if (!selected || analyzing) return;
+    setAnalyzing(true);
+    try {
+      const r = await api.analyzeArticle(selected.id);
+      setAiAnalysis(r.analysis);
+    } catch (e) {
+      setAiAnalysis(`❌ 分析失败: ${(e as Error).message}`);
+    }
+    setAnalyzing(false);
+  };
 
   // 缓存状态 → 图标/颜色/提示
   const cacheBadge = (status: string): { icon: string; color: string; tooltip: string } => {
@@ -197,10 +211,39 @@ export default function ArticleSearch() {
 
           <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '16px 0' }} />
 
-          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>📄 内容预览</div>
-          <div style={{ fontSize: 12, lineHeight: 1.8, color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', flex: 1, overflow: 'auto' }}>
-            {detailHtml || '内容暂不可用。该文章可能尚未完成内容抓取。'}
+          {/* AI 分析摘要 */}
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>
+            <i className="fas fa-brain" style={{ marginRight: 4, color: 'var(--accent)' }} />AI 分析解读
           </div>
+          {aiAnalysis ? (
+            <div style={{
+              fontSize: 12, lineHeight: 1.8, color: 'var(--text-secondary)', whiteSpace: 'pre-wrap',
+              flex: 1, overflow: 'auto', background: 'var(--bg-card)', borderRadius: 8, padding: 12,
+              border: '1px solid var(--border)',
+            }}>
+              {aiAnalysis}
+            </div>
+          ) : (
+            <div style={{ flex: 1 }}>
+              {analyzing ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 16, color: 'var(--text-muted)', fontSize: 12 }}>
+                  <i className="fas fa-spinner fa-spin" style={{ color: 'var(--accent)' }} />
+                  AI 正在分析文章内容...
+                </div>
+              ) : (
+                <button onClick={handleAnalyze} style={{
+                  display: 'flex', alignItems: 'center', gap: 8, padding: '10px 18px',
+                  background: 'var(--accent)', border: 'none', borderRadius: 8, color: '#000',
+                  fontWeight: 600, fontSize: 13, cursor: 'pointer',
+                }}>
+                  <i className="fas fa-brain" /> 生成 AI 分析
+                </button>
+              )}
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', padding: '12px 0', lineHeight: 1.6 }}>
+                点击按钮由 AI 自动提炼文章要点、技术背景与行业影响。
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

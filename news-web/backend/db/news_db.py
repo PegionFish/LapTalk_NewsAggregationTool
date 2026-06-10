@@ -256,7 +256,9 @@ class NewsDB:
                                ('translated_content','TEXT DEFAULT \'\''),
                                ('content_lang','TEXT DEFAULT \'\''),
                                ('content_status','TEXT DEFAULT \'pending\''),
-                               ('translated_at','TEXT')]:
+                               ('translated_at','TEXT'),
+                               # AI 摘要缓存
+                               ('ai_summary','TEXT DEFAULT \'\'')]:
                 try:
                     conn.execute(f"ALTER TABLE articles ADD COLUMN {col} {dtype}")
                 except sqlite3.OperationalError:
