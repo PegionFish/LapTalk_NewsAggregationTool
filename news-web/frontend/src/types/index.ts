@@ -13,6 +13,8 @@ export interface Article {
   category?: string;
   content_status: string;  // 缓存状态: pending | fetched | translated | failed
   content_fetched_at?: string;  // 内容抓取时间
+  ai_analyzed?: boolean;  // AI 是否已完成内容分析
+  human_processed?: boolean;  // 是否已人工处理（保护评分/关键词不被AI覆写）
   event?: { id: number; title: string } | null;
 }
 

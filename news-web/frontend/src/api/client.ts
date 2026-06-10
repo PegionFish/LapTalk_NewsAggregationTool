@@ -33,7 +33,7 @@ export const api = {
   getArticleContent: async (id: number) => {
     const res = await fetch(`${BASE}/articles/${id}/content`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json() as Promise<{ url: string; content: string; translation: string; lang: string; status: string; source: string; ai_summary?: string }>;
+    return res.json() as Promise<{ url: string; content: string; translation: string; lang: string; status: string; source: string; ai_summary?: string; ai_analyzed?: boolean; human_processed?: boolean }>;
   },
 
   analyzeArticle: (id: number) =>

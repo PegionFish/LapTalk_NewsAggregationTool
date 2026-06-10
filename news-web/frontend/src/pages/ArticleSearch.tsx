@@ -17,6 +17,7 @@ export default function ArticleSearch() {
   const [loading, setLoading] = useState(false);
   const [aiAnalysis, setAiAnalysis] = useState('');
   const [analyzing, setAnalyzing] = useState(false);
+  const [analysisMeta, setAnalysisMeta] = useState<{ ai_analyzed?: boolean; human_processed?: boolean; translated?: boolean }>({});
 
   const fetchArticles = useCallback(async () => {
     setLoading(true);
@@ -35,29 +36,29 @@ export default function ArticleSearch() {
 
   useEffect(() => { fetchArticles(); }, [fetchArticles]);
 
-  // 选中文章时获取 AI 摘要
+  // 选中文章 → 自动触发 AI 分析（后端有缓存，已分析直接返回）
   useEffect(() => {
-    if (!selected) { setAiAnalysis(''); return; }
+    if (!selected) { setAiAnalysis(''); setAnalysisMeta({}); return; }
     setAiAnalysis('');
+    setAnalyzing(true);
+    setAnalysisMeta({});
+    // 先查 content 端点获取已有摘要和标注状态
     api.getArticleContent(selected.id).then(c => {
+      setAnalysisMeta({
+        ai_analyzed: c?.ai_analyzed,
+        human_processed: c?.human_processed,
+        translated: selected.content_status === 'translated',
+      });
       if (c?.ai_summary) {
         setAiAnalysis(c.ai_summary);
+        setAnalyzing(false);
       }
     }).catch(() => {});
+    // 调用分析端点（后端有缓存则立即返回，无缓存则异步生成）
+    api.analyzeArticle(selected.id).then(r => {
+      if (r.ok && r.analysis) setAiAnalysis(r.analysis);
+    }).catch(() => {}).finally(() => setAnalyzing(false));
   }, [selected?.id]);
-
-  // 触发 AI 分析
-  const handleAnalyze = async () => {
-    if (!selected || analyzing) return;
-    setAnalyzing(true);
-    try {
-      const r = await api.analyzeArticle(selected.id);
-      setAiAnalysis(r.analysis);
-    } catch (e) {
-      setAiAnalysis(`❌ 分析失败: ${(e as Error).message}`);
-    }
-    setAnalyzing(false);
-  };
 
   // 缓存状态 → 图标/颜色/提示
   const cacheBadge = (status: string): { icon: string; color: string; tooltip: string } => {
@@ -211,11 +212,37 @@ export default function ArticleSearch() {
 
           <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '16px 0' }} />
 
+          {/* 标注状态徽章 */}
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+            {analysisMeta.ai_analyzed ? (
+              <span style={badgeDone}><i className="fas fa-brain" /> 已分析</span>
+            ) : analyzing ? (
+              <span style={badgePending}><i className="fas fa-spinner fa-spin" /> 分析中</span>
+            ) : (
+              <span style={badgeNone}><i className="fas fa-brain" /> 未分析</span>
+            )}
+            {analysisMeta.translated ? (
+              <span style={badgeDone}><i className="fas fa-language" /> 已翻译</span>
+            ) : (
+              <span style={badgeNone}><i className="fas fa-language" /> 未翻译</span>
+            )}
+            {analysisMeta.human_processed ? (
+              <span style={badgeHuman}><i className="fas fa-user-check" /> 人工已处理</span>
+            ) : (
+              <span style={badgeNone}><i className="fas fa-user-edit" /> 待审核</span>
+            )}
+          </div>
+
           {/* AI 分析摘要 */}
           <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>
-            <i className="fas fa-brain" style={{ marginRight: 4, color: 'var(--accent)' }} />AI 分析解读
+            <i className="fas fa-robot" style={{ marginRight: 4, color: 'var(--accent)' }} />AI 分析解读
           </div>
-          {aiAnalysis ? (
+          {analyzing && !aiAnalysis ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 16, color: 'var(--text-muted)', fontSize: 12, background: 'var(--bg-card)', borderRadius: 8 }}>
+              <i className="fas fa-spinner fa-spin" style={{ color: 'var(--accent)' }} />
+              正在分析文章内容...
+            </div>
+          ) : aiAnalysis ? (
             <div style={{
               fontSize: 12, lineHeight: 1.8, color: 'var(--text-secondary)', whiteSpace: 'pre-wrap',
               flex: 1, overflow: 'auto', background: 'var(--bg-card)', borderRadius: 8, padding: 12,
@@ -224,24 +251,8 @@ export default function ArticleSearch() {
               {aiAnalysis}
             </div>
           ) : (
-            <div style={{ flex: 1 }}>
-              {analyzing ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 16, color: 'var(--text-muted)', fontSize: 12 }}>
-                  <i className="fas fa-spinner fa-spin" style={{ color: 'var(--accent)' }} />
-                  AI 正在分析文章内容...
-                </div>
-              ) : (
-                <button onClick={handleAnalyze} style={{
-                  display: 'flex', alignItems: 'center', gap: 8, padding: '10px 18px',
-                  background: 'var(--accent)', border: 'none', borderRadius: 8, color: '#000',
-                  fontWeight: 600, fontSize: 13, cursor: 'pointer',
-                }}>
-                  <i className="fas fa-brain" /> 生成 AI 分析
-                </button>
-              )}
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', padding: '12px 0', lineHeight: 1.6 }}>
-                点击按钮由 AI 自动提炼文章要点、技术背景与行业影响。
-              </div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', padding: 8, background: 'var(--bg-card)', borderRadius: 8 }}>
+              该文章暂无法分析（可能尚未完成内容提取）。
             </div>
           )}
         </div>
@@ -272,6 +283,12 @@ const kwStyle: React.CSSProperties = {
   background: 'rgba(0,212,255,0.08)', padding: '2px 8px', borderRadius: 10, fontSize: 10,
   color: 'var(--text-secondary)', border: '1px solid var(--border)',
 };
+const badgeStyle: React.CSSProperties = { fontSize: 10, padding: '2px 8px', borderRadius: 10, fontWeight: 500, display: 'inline-flex', alignItems: 'center', gap: 4 };
+const badgeDone: React.CSSProperties   = { ...badgeStyle, background: 'rgba(129,199,132,0.12)', color: '#81c784', border: '1px solid rgba(129,199,132,0.25)' };
+const badgeNone: React.CSSProperties   = { ...badgeStyle, background: 'transparent', color: 'var(--text-muted)', border: '1px solid var(--border)' };
+const badgePending: React.CSSProperties = { ...badgeStyle, background: 'rgba(255,183,77,0.12)', color: '#ffb74d', border: '1px solid rgba(255,183,77,0.25)' };
+const badgeHuman: React.CSSProperties   = { ...badgeStyle, background: 'rgba(0,212,255,0.1)', color: 'var(--accent)', border: '1px solid rgba(0,212,255,0.25)' };
+
 const actionBtnStyle: React.CSSProperties = {
   background: 'var(--accent)', border: 'none', borderRadius: 6, padding: '7px 16px',
   color: '#000', fontWeight: 600, fontSize: 12, cursor: 'pointer',

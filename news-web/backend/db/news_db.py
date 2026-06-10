@@ -257,8 +257,10 @@ class NewsDB:
                                ('content_lang','TEXT DEFAULT \'\''),
                                ('content_status','TEXT DEFAULT \'pending\''),
                                ('translated_at','TEXT'),
-                               # AI 摘要缓存
-                               ('ai_summary','TEXT DEFAULT \'\'')]:
+                               # AI 摘要缓存 + 标注状态
+                               ('ai_summary','TEXT DEFAULT \'\''),
+                               ('ai_analyzed','INTEGER DEFAULT 0'),
+                               ('human_processed','INTEGER DEFAULT 0')]:
                 try:
                     conn.execute(f"ALTER TABLE articles ADD COLUMN {col} {dtype}")
                 except sqlite3.OperationalError:
@@ -316,15 +318,21 @@ class NewsDB:
     # ═══════════════════════════════════════════════════════
 
     def extract_keywords_for(self, article_id: int) -> list:
-        """为指定文章提取关键词并更新 DB"""
+        """为指定文章提取关键词并更新 DB。人工已处理则跳过覆写。"""
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT title, source, category FROM articles WHERE id=?",
+                "SELECT title, source, category, human_processed, keywords FROM articles WHERE id=?",
                 (article_id,)
             ).fetchone()
             if not row:
                 return []
-            title, source, category = row
+            title, source, category, hp, existing_kws = row
+            # 人工已处理 → 保留人工标注，不覆写
+            if hp:
+                try:
+                    return json.loads(existing_kws) if existing_kws else []
+                except (json.JSONDecodeError, TypeError):
+                    return []
         kws = extract_keywords(title, source, category)
         with self._conn() as conn:
             conn.execute("UPDATE articles SET keywords=? WHERE id=?",
@@ -347,15 +355,15 @@ class NewsDB:
         try:
             row = conn.execute("""
                 SELECT a.title, a.source, a.fetched_at, a.priority_label,
-                       a.human_verified, a.category
+                       a.human_verified, a.category, a.human_processed
                 FROM articles a WHERE a.id=?
             """, (article_id,)).fetchone()
             if not row:
                 return 0.0
-            title, source, fetched_at, label, verified, category = row
+            title, source, fetched_at, label, verified, category, hp = row
 
-            # 人工锁定 — 跳过自动计算
-            if label != 'unset' and label in ('high', 'medium', 'low'):
+            # 人工已处理 — 保留人工评分/标签，跳过自动计算
+            if hp or (label != 'unset' and label in ('high', 'medium', 'low')):
                 label_scores = {'high': 0.9, 'medium': 0.6, 'low': 0.3}
                 score = label_scores.get(label, 0.5)
                 conn.execute("UPDATE articles SET priority_score=? WHERE id=?",
