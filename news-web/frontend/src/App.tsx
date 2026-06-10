@@ -1,5 +1,5 @@
-import { Component, type ReactNode } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Component, type ReactNode, useEffect } from 'react';
+import { Routes, Route, Navigate, useParams, useSearchParams } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import NavSidebar from './components/NavSidebar';
 import Dashboard from './pages/Dashboard';
@@ -9,6 +9,20 @@ import ChainList from './pages/ChainList';
 import Settings from './pages/Settings';
 import Login from './pages/Login';
 import ArticleReader from './pages/ArticleReader';
+
+// ── Workspace 路由适配器 — 将 /chains/:chainId 转为 Workspace 可识别的 search params ──
+function WorkspaceRoute() {
+  const { chainId } = useParams<{ chainId: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  useEffect(() => {
+    if (chainId && chainId !== 'new' && !searchParams.get('chain')) {
+      setSearchParams({ chain: chainId }, { replace: true });
+    }
+  }, [chainId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return <Workspace key={chainId || 'new'} />;
+}
 
 // ── Error Boundary ────────────────────────────────────────
 class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: Error | null }> {
@@ -51,10 +65,14 @@ function AuthedApp() {
       <main style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         <Routes>
           <Route path="/" element={<Dashboard />} />
+          {/* 逻辑链 — /chains 列表, /chains/new 新建工作台, /chains/:id 编辑 */}
+          <Route path="/chains" element={<ChainList />} />
+          <Route path="/chains/new" element={<WorkspaceRoute />} />
+          <Route path="/chains/:chainId" element={<WorkspaceRoute />} />
+          {/* 旧路由兼容 */}
           <Route path="/workspace" element={<Workspace />} />
           <Route path="/articles/:id" element={<ArticleReader />} />
           <Route path="/articles" element={<ArticleSearch />} />
-          <Route path="/chains" element={<ChainList />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

@@ -22,7 +22,7 @@ export default function ChainList() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <h2 style={{ margin: 0 }}>📋 逻辑链列表</h2>
-        <button onClick={() => navigate('/workspace')}
+        <button onClick={() => navigate('/chains/new')}
           style={{ background: 'var(--accent)', border: 'none', borderRadius: 6, padding: '8px 16px', color: '#000', fontWeight: 'bold', fontSize: 13, cursor: 'pointer' }}>
           ＋ 新建
         </button>
@@ -47,7 +47,7 @@ export default function ChainList() {
                 </div>
               </div>
               <div style={{ display: 'flex', gap: 6 }}>
-                <button onClick={() => navigate(`/workspace?chain=${chain.id}`)}
+                <button onClick={() => navigate(`/chains/${chain.id}`)}
                   style={{ background: 'var(--bg-card)', border: 'none', borderRadius: 4, padding: '6px 12px', color: 'var(--accent)', fontSize: 11, cursor: 'pointer' }}>编辑</button>
                 <button onClick={() => handleDelete(chain.id, chain.title)}
                   style={{ background: 'var(--bg-card)', border: 'none', borderRadius: 4, padding: '6px 12px', color: 'var(--accent-red)', fontSize: 11, cursor: 'pointer' }}>删除</button>
