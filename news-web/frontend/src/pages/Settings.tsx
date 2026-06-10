@@ -1,34 +1,58 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api/client';
-import { getAuthHeaders } from '../contexts/AuthContext';
+import GeneralSettings from './settings/GeneralSettings';
+import AISettings from './settings/AISettings';
+import TranslationSettings from './settings/TranslationSettings';
+import CacheSettings from './settings/CacheSettings';
+import AdminSettings from './settings/AdminSettings';
+import './settings/settings.css';
 
-interface UserInfo {
-  id: number; username: string; display_name: string; role: string;
-  created_at: string; last_login: string | null;
+type Section = 'general' | 'ai' | 'translation' | 'cache' | 'admin';
+
+interface SectionDef {
+  key: Section;
+  icon: string;
+  label: string;
+  group: string;
 }
 
+const SECTIONS: SectionDef[] = [
+  { key: 'general',     icon: 'fa-sliders-h',    label: '通用设置',   group: '系统' },
+  { key: 'ai',          icon: 'fa-brain',        label: 'AI 分析',    group: 'AI 服务' },
+  { key: 'translation', icon: 'fa-language',     label: 'AI 翻译',    group: 'AI 服务' },
+  { key: 'cache',       icon: 'fa-archive',      label: '内容缓存',   group: '系统' },
+  { key: 'admin',       icon: 'fa-users-cog',    label: '用户管理',   group: '管理' },
+];
+
 export default function Settings() {
+  const [activeSection, setActiveSection] = useState<Section>('general');
+
+  // 通用设置
   const [dbPath, setDbPath] = useState('');
   const [userAgent, setUserAgent] = useState('');
+  const [pipelineEnabled, setPipelineEnabled] = useState(true);
+  const [pipelineRunning, setPipelineRunning] = useState(false);
+  const [pipelineStatus, setPipelineStatus] = useState<{ last_run?: string | null; last_status?: string | null }>({});
+
+  // AI 分析
   const [openaiBaseUrl, setOpenaiBaseUrl] = useState('');
   const [openaiApiKey, setOpenaiApiKey] = useState('');
   const [openaiModel, setOpenaiModel] = useState('');
-  const [pipelineEnabled, setPipelineEnabled] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState('');
-  const [pipelineRunning, setPipelineRunning] = useState(false);
-  const [pipelineStatus, setPipelineStatus] = useState<{ last_run?: string | null; last_status?: string | null; current_step?: string | null }>({});
-  // 翻译 API
+
+  // 翻译
   const [translationEnabled, setTranslationEnabled] = useState(false);
   const [translationBaseUrl, setTranslationBaseUrl] = useState('');
   const [translationApiKey, setTranslationApiKey] = useState('');
   const [translationModel, setTranslationModel] = useState('');
-  // 缓存路径
-  const [cachePath, setCachePath] = useState('');
-  // 管理员用户管理
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [users, setUsers] = useState<UserInfo[]>([]);
 
+  // 缓存
+  const [cachePath, setCachePath] = useState('');
+
+  // 保存
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState('');
+
+  // 加载配置
   useEffect(() => {
     api.getSettings().then(s => {
       setDbPath(s.db_path || '');
@@ -44,68 +68,9 @@ export default function Settings() {
       setCachePath(s.content_cache_path || '');
     }).catch(() => {});
     api.getPipelineStatus().then(s => setPipelineStatus(s)).catch(() => {});
-    // 管理员校验
-    fetch('/api/auth/me', { headers: getAuthHeaders() })
-      .then(r => r.json()).then(d => {
-        if (d.user?.role === 'admin') { setIsAdmin(true); loadUsers(); }
-      }).catch(() => {});
   }, []);
 
-  const loadUsers = () => {
-    fetch('/api/auth/users', { headers: getAuthHeaders() })
-      .then(r => r.json()).then(d => setUsers(d.users || [])).catch(() => {});
-  };
-
-  const handleRoleChange = async (userId: number, role: string) => {
-    await fetch(`/api/auth/users/${userId}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify({ role }),
-    });
-    loadUsers();
-  };
-
-  const handleDeleteUser = async (userId: number) => {
-    if (!confirm('确认删除该用户？')) return;
-    await fetch(`/api/auth/users/${userId}`, { method: 'DELETE', headers: getAuthHeaders() });
-    loadUsers();
-  };
-
-  // 轮询管道运行状态
-  const pollPipelineStatus = async () => {
-    for (let i = 0; i < 60; i++) {
-      const s = await api.getPipelineStatus();
-      setPipelineStatus(s);
-      if (!s.running) { setPipelineRunning(false); return; }
-      await new Promise(r => setTimeout(r, 2000));
-    }
-    setPipelineRunning(false);
-  };
-
-  const handleTriggerPipeline = async () => {
-    if (pipelineRunning) return;
-    setPipelineRunning(true);
-    setMessage('');
-    try {
-      await api.triggerPipeline();
-      setMessage('抓取管道已启动，正在运行...');
-      pollPipelineStatus();
-    } catch (e) {
-      setMessage('启动失败: ' + (e as Error).message);
-      setPipelineRunning(false);
-    }
-  };
-
-  useEffect(() => {
-    api.getSettings().then(s => {
-      setDbPath(s.db_path || '');
-      setUserAgent(s.user_agent || '');
-      setOpenaiBaseUrl(s.openai_base_url || 'https://api.openai.com/v1');
-      setOpenaiApiKey(s.openai_api_key || ''); // masked as '***' if set, else ''
-      setOpenaiModel(s.openai_model || 'gpt-4o-mini');
-      setPipelineEnabled(s.pipeline_schedule_enabled !== false);
-    }).catch(() => {});
-  }, []);
-
+  // 保存
   const handleSave = async () => {
     setSaving(true);
     setMessage('');
@@ -123,164 +88,116 @@ export default function Settings() {
         translation_model: translationModel,
         content_cache_path: cachePath,
       });
-      setMessage('已保存');
+      setMessage('配置已保存');
     } catch (e) {
       setMessage('保存失败: ' + (e as Error).message);
     }
     setSaving(false);
   };
 
-  const inputStyle: React.CSSProperties = {
-    width: '100%', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 6,
-    padding: '8px 12px', color: 'var(--text-primary)', fontSize: 13, outline: 'none', marginTop: 4,
+  // 管道触发
+  const pollPipelineStatus = async () => {
+    for (let i = 0; i < 60; i++) {
+      const s = await api.getPipelineStatus();
+      setPipelineStatus(s);
+      if (!s.running) { setPipelineRunning(false); return; }
+      await new Promise(r => setTimeout(r, 2000));
+    }
+    setPipelineRunning(false);
   };
-  const labelStyle: React.CSSProperties = { fontSize: 13, color: 'var(--text-secondary)', marginTop: 16, display: 'block' };
+
+  const handleTriggerPipeline = async () => {
+    if (pipelineRunning) return;
+    setPipelineRunning(true);
+    setMessage('');
+    try {
+      await api.triggerPipeline();
+      pollPipelineStatus();
+    } catch (e) {
+      setMessage('启动失败: ' + (e as Error).message);
+      setPipelineRunning(false);
+    }
+  };
+
+  // 渲染当前活动面板
+  const renderSection = () => {
+    switch (activeSection) {
+      case 'general':
+        return <GeneralSettings
+          dbPath={dbPath} setDbPath={setDbPath}
+          userAgent={userAgent} setUserAgent={setUserAgent}
+          pipelineEnabled={pipelineEnabled} setPipelineEnabled={setPipelineEnabled}
+          pipelineRunning={pipelineRunning} pipelineStatus={pipelineStatus}
+          onTriggerPipeline={handleTriggerPipeline}
+        />;
+      case 'ai':
+        return <AISettings
+          baseUrl={openaiBaseUrl} setBaseUrl={setOpenaiBaseUrl}
+          apiKey={openaiApiKey} setApiKey={setOpenaiApiKey}
+          model={openaiModel} setModel={setOpenaiModel}
+        />;
+      case 'translation':
+        return <TranslationSettings
+          enabled={translationEnabled} setEnabled={setTranslationEnabled}
+          baseUrl={translationBaseUrl} setBaseUrl={setTranslationBaseUrl}
+          apiKey={translationApiKey} setApiKey={setTranslationApiKey}
+          model={translationModel} setModel={setTranslationModel}
+        />;
+      case 'cache':
+        return <CacheSettings cachePath={cachePath} setCachePath={setCachePath} />;
+      case 'admin':
+        return <AdminSettings />;
+    }
+  };
+
+  // 获取当前节标题
+  const currentSection = SECTIONS.find(s => s.key === activeSection)!;
 
   return (
-    <div style={{ maxWidth: 600 }}>
-      <h2 style={{ marginBottom: 20 }}>⚙ 设置</h2>
-
-      <div style={{ background: 'var(--bg-secondary)', borderRadius: 10, padding: 20 }}>
-        <h3 style={{ fontSize: 14, marginBottom: 8, color: 'var(--accent)' }}>数据库</h3>
-        <label style={labelStyle}>
-          📁 数据库路径
-          <input value={dbPath} onChange={e => setDbPath(e.target.value)} placeholder="/path/to/news.db" style={inputStyle} />
-        </label>
-        <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>支持本地路径或 NAS 共享挂载点</div>
-
-        <h3 style={{ fontSize: 14, marginTop: 20, marginBottom: 8, color: 'var(--accent)' }}>AI 配置（OpenAI 兼容）</h3>
-        <label style={labelStyle}>
-          🔗 API 地址
-          <input value={openaiBaseUrl} onChange={e => setOpenaiBaseUrl(e.target.value)} style={inputStyle} />
-        </label>
-        <label style={labelStyle}>
-          🔑 API Key
-          <input value={openaiApiKey} onChange={e => setOpenaiApiKey(e.target.value)} type="password" style={inputStyle} />
-        </label>
-        <label style={labelStyle}>
-          🤖 模型
-          <input value={openaiModel} onChange={e => setOpenaiModel(e.target.value)} style={inputStyle} />
-        </label>
-        <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>支持 OpenAI、DeepSeek、Ollama 等兼容端点</div>
-
-        <h3 style={{ fontSize: 14, marginTop: 20, marginBottom: 8, color: 'var(--accent)' }}>抓取调度</h3>
-        <label style={{ ...labelStyle, flexDirection: 'row', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <input type="checkbox" checked={pipelineEnabled} onChange={e => setPipelineEnabled(e.target.checked)}
-            style={{ width: 16, height: 16 }} />
-          <span>启用定时抓取（每天 10:00 / 17:00）</span>
-        </label>
-
-        <div style={{ marginTop: 12 }}>
-          <button onClick={handleTriggerPipeline} disabled={pipelineRunning}
-            style={{
-              background: pipelineRunning ? 'var(--bg-card)' : 'var(--accent-green)',
-              border: 'none', borderRadius: 6, padding: '8px 20px', color: pipelineRunning ? 'var(--text-secondary)' : '#000',
-              fontWeight: 'bold', fontSize: 13, cursor: pipelineRunning ? 'not-allowed' : 'pointer',
-            }}>
-            {pipelineRunning ? '⏳ 抓取中...' : '🔄 手动抓取'}
-          </button>
-          {pipelineStatus.last_run && (
-            <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-secondary)' }}>
-              上次运行: {pipelineStatus.last_run?.slice(0, 19).replace('T', ' ')}
-              {pipelineStatus.last_status && (
-                <span style={{
-                  marginLeft: 8,
-                  color: pipelineStatus.last_status === 'success' ? 'var(--accent-green)' : pipelineStatus.last_status === 'failed' ? 'var(--accent-red)' : 'var(--accent-orange)'
-                }}>
-                  {pipelineStatus.last_status === 'success' ? '✅ 成功' : pipelineStatus.last_status === 'failed' ? '❌ 失败' : '⏳ 运行中'}
-                </span>
-              )}
+    <div className="settings-layout">
+      {/* 左侧导航 */}
+      <aside className="settings-sidebar">
+        <div className="sidebar-menu">
+          {['系统', 'AI 服务', '管理'].map(group => (
+            <div key={group} className="sidebar-section">
+              <div className="sidebar-section-title"><i className="fas fa-circle" /> {group}</div>
+              {SECTIONS.filter(s => s.group === group).map(s => (
+                <div key={s.key}
+                  className={`sidebar-item${activeSection === s.key ? ' active' : ''}`}
+                  onClick={() => setActiveSection(s.key)}>
+                  <i className={`fas ${s.icon}`} />
+                  <span>{s.label}</span>
+                </div>
+              ))}
             </div>
-          )}
+          ))}
+        </div>
+      </aside>
+
+      {/* 右侧内容 */}
+      <section className="settings-content">
+        <div className="settings-section-header">
+          <h2><i className={`fas ${currentSection.icon}`} /> {currentSection.label}</h2>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+            {SECTIONS.findIndex(s => s.key === activeSection) + 1} / {SECTIONS.length}
+          </div>
         </div>
 
-        <h3 style={{ fontSize: 14, marginTop: 20, marginBottom: 8, color: 'var(--accent)' }}>翻译 API（硅基流动 DeepSeek V3.2）</h3>
-        <label style={{ ...labelStyle, flexDirection: 'row', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <input type="checkbox" checked={translationEnabled} onChange={e => setTranslationEnabled(e.target.checked)}
-            style={{ width: 16, height: 16 }} />
-          <span>启用 AI 翻译（英文文章自动译中文）</span>
-        </label>
-        <label style={labelStyle}>
-          🔗 API 地址
-          <input value={translationBaseUrl} onChange={e => setTranslationBaseUrl(e.target.value)} style={inputStyle} />
-        </label>
-        <label style={labelStyle}>
-          🔑 API Key
-          <input value={translationApiKey} onChange={e => setTranslationApiKey(e.target.value)} type="password" style={inputStyle} />
-        </label>
-        <label style={labelStyle}>
-          🤖 模型
-          <input value={translationModel} onChange={e => setTranslationModel(e.target.value)} style={inputStyle} />
-        </label>
-        <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>默认指向硅基流动，约 ¥1/百万 token</div>
+        {renderSection()}
 
-        <h3 style={{ fontSize: 14, marginTop: 20, marginBottom: 8, color: 'var(--accent)' }}>缓存</h3>
-        <label style={labelStyle}>
-          📁 内容缓存目录
-          <input value={cachePath} onChange={e => setCachePath(e.target.value)} placeholder="留空则为数据库同级的 content/ 目录" style={inputStyle} />
-        </label>
-        <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>下载的文章 HTML 和提取的文本存放于此</div>
-
-        <h3 style={{ fontSize: 14, marginTop: 20, marginBottom: 8, color: 'var(--accent)' }}>网络</h3>
-        <label style={labelStyle}>
-          🌐 User-Agent
-          <input value={userAgent} onChange={e => setUserAgent(e.target.value)} style={inputStyle} />
-        </label>
-
-        {isAdmin && (
-          <>
-            <h3 style={{ fontSize: 14, marginTop: 20, marginBottom: 8, color: 'var(--accent)' }}>👥 用户管理</h3>
-            <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 8 }}>管理员可查看、修改角色、删除用户</div>
-            <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                  <th style={{ textAlign: 'left', padding: '6px 8px', color: 'var(--text-secondary)' }}>用户名</th>
-                  <th style={{ textAlign: 'left', padding: '6px 8px', color: 'var(--text-secondary)' }}>显示名</th>
-                  <th style={{ textAlign: 'left', padding: '6px 8px', color: 'var(--text-secondary)' }}>角色</th>
-                  <th style={{ textAlign: 'left', padding: '6px 8px', color: 'var(--text-secondary)' }}>创建时间</th>
-                  <th style={{ textAlign: 'left', padding: '6px 8px', color: 'var(--text-secondary)' }}>操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                {users.map(u => (
-                  <tr key={u.id} style={{ borderBottom: '1px solid var(--border)' }}>
-                    <td style={{ padding: '6px 8px' }}>{u.username}</td>
-                    <td style={{ padding: '6px 8px' }}>{u.display_name || '-'}</td>
-                    <td style={{ padding: '6px 8px' }}>
-                      <select value={u.role} onChange={e => handleRoleChange(u.id, e.target.value)}
-                        style={{
-                          background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 4,
-                          padding: '2px 6px', color: 'var(--text-primary)', fontSize: 11,
-                        }}>
-                        <option value="admin">admin</option>
-                        <option value="user">user</option>
-                        <option value="viewer">viewer</option>
-                      </select>
-                    </td>
-                    <td style={{ padding: '6px 8px', color: 'var(--text-secondary)' }}>{u.created_at?.slice(0, 10)}</td>
-                    <td style={{ padding: '6px 8px' }}>
-                      <button onClick={() => handleDeleteUser(u.id)}
-                        style={{
-                          background: 'rgba(229,115,115,0.15)', border: 'none', borderRadius: 4,
-                          padding: '2px 8px', color: 'var(--accent-red)', fontSize: 11, cursor: 'pointer',
-                        }}>
-                        删除
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </>
-        )}
-
-        <button onClick={handleSave} disabled={saving}
-          style={{ marginTop: 20, background: 'var(--accent)', border: 'none', borderRadius: 6, padding: '10px 24px', color: '#000', fontWeight: 'bold', fontSize: 14, cursor: 'pointer' }}>
+        {/* 保存按钮 */}
+        <button className="btn-save" onClick={handleSave} disabled={saving}>
+          <i className={`fas fa-${saving ? 'spinner fa-spin' : 'save'}`} />
           {saving ? '保存中...' : '保存设置'}
         </button>
 
-        {message && <div style={{ marginTop: 12, fontSize: 13, color: 'var(--accent-green)' }}>{message}</div>}
-      </div>
+        {message && (
+          <div className={`save-message ${message.includes('失败') ? 'error' : 'success'}`}>
+            <i className={`fas fa-${message.includes('失败') ? 'exclamation-circle' : 'check-circle'}`} />
+            {message}
+          </div>
+        )}
+      </section>
     </div>
   );
 }
