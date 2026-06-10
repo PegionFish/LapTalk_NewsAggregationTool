@@ -216,8 +216,9 @@ def _sanitize_html(html: str) -> str:
     # 5. 移除常见的追踪 pixel/beacon
     html = re.sub(r'<img[^>]+(?:pixel|tracking|beacon|analytics)[^>]*>', '', html, flags=re.IGNORECASE)
     # 6. 移除非样式表的 <link> 标签（manifest、icon、preconnect 等会触发 CORS 告警）
+    # 负向先行断言用 [^>]* 限定在同一个 <link> 标签内检查
     _LINK_CORS = re.compile(
-        r'<link\b(?![\s\S]*?\brel\s*=\s*["\']stylesheet\b)[^>]*/?\s*>',
+        r'<link\b(?![^>]*\brel\s*=\s*["\']stylesheet\b)[^>]*/?\s*>',
         re.IGNORECASE,
     )
     html = _LINK_CORS.sub('', html)
