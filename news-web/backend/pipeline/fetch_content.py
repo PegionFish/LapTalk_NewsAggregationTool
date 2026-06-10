@@ -17,7 +17,14 @@ import os, sys, re, time, sqlite3, urllib.request, urllib.error
 from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
-UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'
+# 动态计算路径以导入 config 和 utils（独立脚本运行 + 管道子进程均可）
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PARENT_DIR = os.path.dirname(SCRIPT_DIR)
+sys.path.insert(0, PARENT_DIR)
+
+from config import config
+from utils.text import extract_text_from_html, detect_language
+
 DELAY = 0.5
 TIMEOUT = 15
 BLOCKED = ['expreview.com', 'solidot.org', 'weibo.com', 'douyin.com']
@@ -33,7 +40,7 @@ def download_page(url: str) -> dict:
         return {'html': '', 'error': 'Blocked'}
     try:
         req = urllib.request.Request(url, headers={
-            'User-Agent': UA,
+            'User-Agent': config.user_agent,
             'Accept': 'text/html,application/xhtml+xml',
             'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
         })
@@ -65,7 +72,7 @@ def archive_pages(db_path: str, limit: int = 0, source: str = None, recent: int 
         conn.execute("ALTER TABLE articles ADD COLUMN local_path TEXT DEFAULT ''")
         conn.commit()
 
-    content_dir = os.path.join(os.path.dirname(os.path.abspath(db_path)), 'content')
+    content_dir = config.content_cache_path
     os.makedirs(content_dir, exist_ok=True)
 
     # ── 查询未存档文章 ──
@@ -112,16 +119,24 @@ def archive_pages(db_path: str, limit: int = 0, source: str = None, recent: int 
                          (f'[ERR:{res["error"]}]', aid))
             err += 1
         elif res['html']:
-            # save HTML to file
+            # 保存 HTML 到磁盘
             file_path = os.path.join(content_dir, f'{aid}.html')
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(res['html'])
             size = len(res['html'].encode('utf-8'))
-            # store RELATIVE path in DB
-            rel_path = f'content/{aid}.html'
-            conn2.execute("UPDATE articles SET local_path=?, content_fetched_at=? WHERE id=?",
-                         (rel_path, datetime.now().isoformat(timespec='seconds'), aid))
-            print(f"✅ {size//1024}KB")
+            # 提取纯文本 + 语言检测
+            text = extract_text_from_html(res['html'])
+            lang = detect_language(text)
+            now = datetime.now().isoformat(timespec='seconds')
+            # 存储相对路径，同时写入文本列
+            rel_path = f'{os.path.basename(content_dir)}/{aid}.html'
+            conn2.execute("""
+                UPDATE articles SET
+                    local_path=?, content_fetched_at=?,
+                    text_content=?, content_lang=?, content_status='fetched'
+                WHERE id=?
+            """, (rel_path, now, text, lang, aid))
+            print(f"✅ {size//1024}KB [{lang}]")
             ok += 1
         else:
             print("⚠️ 空")
