@@ -10,6 +10,7 @@ def get_client() -> OpenAI:
     return OpenAI(
         base_url=config.openai_base_url,
         api_key=config.openai_api_key or 'sk-placeholder',
+        timeout=30.0,  # 30 秒超时，防止请求挂起
     )
 
 

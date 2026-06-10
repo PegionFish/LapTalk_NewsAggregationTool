@@ -15,6 +15,7 @@ def get_client() -> OpenAI:
     return OpenAI(
         base_url=config.translation_base_url,
         api_key=config.translation_api_key or 'sk-placeholder',
+        timeout=120.0,  # 翻译需要更长时间
     )
 
 
@@ -86,7 +87,7 @@ def translate_to_chinese(text: str) -> str:
                 {"role": "user", "content": text},
             ],
             temperature=0.05,
-            max_tokens=8192,
+            max_tokens=2048,
             top_p=0.95,
         )
         return resp.choices[0].message.content or ""

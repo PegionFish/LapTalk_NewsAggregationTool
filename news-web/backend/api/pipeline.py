@@ -63,9 +63,10 @@ def _batch_translate():
             return
 
         _translate_state["total"] = len(rows)
-        _log(_translate_state, f"待翻译 {len(rows)} 篇文章, 缓存目录: {cache_dir}")
+        _log(_translate_state, f"待处理 {len(rows)} 篇 — 先提取文本再翻译")
 
-        from translation_client import translate_html
+        from utils.text import extract_text_from_html, detect_language
+        from translation_client import translate_to_chinese
 
         for idx, (aid, title, local_path) in enumerate(rows, 1):
             html_path = os.path.join(cache_dir, os.path.basename(local_path))
@@ -92,32 +93,41 @@ def _batch_translate():
                 _translate_state["done"] += 1
                 continue
 
-            # 语言检测：仅翻译英文文章
-            from utils.text import detect_language
-            lang = detect_language(html[:10000])
-            _log(_translate_state, f"#{aid} 语言检测: {lang} | HTML {len(html)//1024}KB")
-
-            if lang != 'en':
-                db2 = _conn()
-                db2.execute("UPDATE articles SET content_lang=? WHERE id=?", (lang, aid))
-                db2.commit()
-                db2.close()
-                _log(_translate_state, f"#{aid} ⏭️ 非英文，跳过")
+            # 从 HTML 提取纯文本
+            text = extract_text_from_html(html, max_length=6000)
+            if len(text) < 50:
+                _log(_translate_state, f"#{aid} ⚠️ 提取文本过短 ({len(text)} 字)")
+                _translate_state["failed"] += 1
                 _translate_state["done"] += 1
                 continue
 
+            # 语言检测
+            lang = detect_language(text)
+            _log(_translate_state, f"#{aid} 语言: {lang} | HTML {len(html)//1024}KB → 文本 {len(text)} 字")
+
+            if lang != 'en':
+                db2 = _conn()
+                db2.execute("UPDATE articles SET text_content=?, content_lang=? WHERE id=?",
+                           (text, lang, aid))
+                db2.commit()
+                db2.close()
+                _log(_translate_state, f"#{aid} ⏭️ 非英文，仅提取文本")
+                _translate_state["done"] += 1
+                continue
+
+            # 翻译文本（而非 HTML）— 截取前 3000 字符控制延迟
             try:
-                _log(_translate_state, f"#{aid} 📡 发送翻译请求... (模型: {config.translation_model})")
-                result = translate_html(html)
-                if result and len(result) > 100:
+                _log(_translate_state, f"#{aid} 📡 翻译中... ({len(text)} 字, 模型: {config.translation_model})")
+                translation = translate_to_chinese(text[:3000])
+                if translation and len(translation) > 20:
                     db2 = _conn()
                     db2.execute(
-                        "UPDATE articles SET translated_content=?, content_status='translated', content_lang='en', translated_at=? WHERE id=?",
-                        (result, datetime.now().isoformat(timespec='seconds'), aid)
+                        "UPDATE articles SET text_content=?, translated_content=?, content_status='translated', content_lang='en', translated_at=? WHERE id=?",
+                        (text, translation, datetime.now().isoformat(timespec='seconds'), aid)
                     )
                     db2.commit()
                     db2.close()
-                    _log(_translate_state, f"#{aid} ✅ 翻译完成 ({len(result)//1024}KB)")
+                    _log(_translate_state, f"#{aid} ✅ 翻译完成 ({len(translation)} 字)")
                 else:
                     _log(_translate_state, f"#{aid} ⚠️ API 返回空结果")
                     _translate_state["failed"] += 1
@@ -132,7 +142,7 @@ def _batch_translate():
             _translate_state["done"] += 1
 
             if idx < len(rows):
-                time.sleep(5)  # 篇间延迟防超限
+                time.sleep(3)  # 篇间延迟（文本翻译更快，减至 3 秒）
 
     except Exception as e:
         logger.error(f"Batch translate error: {e}")
