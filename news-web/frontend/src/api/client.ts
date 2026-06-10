@@ -104,4 +104,23 @@ export const api = {
   triggerPipeline: () => fetchJSON<{ status: string }>('/pipeline/run', { method: 'POST' }),
 
   getPipelineStatus: () => fetchJSON<{ running: boolean; last_run: string | null; last_status: string | null; current_step: string | null; steps: { name: string; status: string; duration_ms: number }[] }>('/pipeline/status'),
+
+  getNotifications: (params: { limit?: number; unread_only?: boolean } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.limit) qs.set('limit', String(params.limit));
+    if (params.unread_only) qs.set('unread_only', 'true');
+    return fetchJSON<{ notifications: { id: number; type: string; title: string; body: string; entity_type: string; entity_id: number; read: boolean; created_at: string }[]; unread_count: number }>(`/notifications?${qs}`);
+  },
+
+  markNotifRead: (id: number) =>
+    fetchJSON<{ ok: boolean }>(`/notifications/${id}/read`, { method: 'POST' }),
+
+  markAllNotifsRead: () =>
+    fetchJSON<{ ok: boolean }>('/notifications/read-all', { method: 'POST' }),
+
+  getNotifPrefs: () =>
+    fetchJSON<{ email: string; digest_enabled: boolean; review_reminders: boolean; event_updates: boolean }>('/notifications/prefs'),
+
+  updateNotifPrefs: (data: Record<string, string | boolean>) =>
+    fetchJSON<{ ok: boolean }>('/notifications/prefs', { method: 'PUT', body: JSON.stringify(data) }),
 };
