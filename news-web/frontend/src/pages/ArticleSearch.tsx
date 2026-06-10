@@ -1,113 +1,177 @@
 import { useEffect, useState, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import type { Article } from '../types';
 
-// ── useDebounce hook ─────────────────────────────────────
-function useDebounce<T>(value: T, delay: number): T {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const timer = setTimeout(() => setDebounced(value), delay);
-    return () => clearTimeout(timer);
-  }, [value, delay]);
-  return debounced;
-}
-
-const INPUT_STYLE: React.CSSProperties = {
-  background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 6,
-  padding: '8px 12px', color: 'var(--text-primary)', fontSize: 13, outline: 'none',
-};
+const PER_PAGE = 50;
 
 export default function ArticleSearch() {
+  const navigate = useNavigate();
   const [articles, setArticles] = useState<Article[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
-  const [query, setQuery] = useState({ q: '', source: '', date_from: '', date_to: '', priority: '', verified: '' });
-  const [loading, setLoading] = useState(false);
+  const [search, setSearch] = useState('');
+  const [priority, setPriority] = useState('');
+  const [verified, setVerified] = useState('');
   const [selected, setSelected] = useState<Article | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [detailHtml, setDetailHtml] = useState('');
 
-  const debouncedQuery = useDebounce(query, 300);  // 300ms debounce on filter changes
-
-  const search = useCallback(async (p = 1) => {
+  const fetchArticles = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await api.searchArticles({ ...debouncedQuery, page: p, limit: 50 });
+      const params: Record<string, string | number> = { page, limit: PER_PAGE };
+      if (search) params.q = search;
+      if (priority) params.priority = priority;
+      if (verified === 'yes') params.verified = 'yes';
+      else if (verified === 'no') params.verified = 'no';
+      const res = await api.searchArticles(params);
       setArticles(res.articles || []);
-      setTotal(res.total);
-      setPage(p);
+      setTotal(res.total || 0);
     } catch { setArticles([]); }
     setLoading(false);
-  }, [debouncedQuery]);
+  }, [page, search, priority, verified]);
 
-  useEffect(() => { search(1) }, [search]);
+  useEffect(() => { fetchArticles(); }, [fetchArticles]);
+
+  // 选中文章时获取内容
+  useEffect(() => {
+    if (!selected) { setDetailHtml(''); return; }
+    api.getArticleContent(selected.id).then(c => {
+      if (c?.content) {
+        const display = c.translation || c.content;
+        setDetailHtml(display.substring(0, 5000));
+      }
+    }).catch(() => setDetailHtml(''));
+  }, [selected?.id]);
+
+  const totalPages = Math.ceil(total / PER_PAGE);
 
   return (
-    <div>
-      <h2 style={{ marginBottom: 16 }}>📄 文章检索</h2>
-
-      {/* Filters */}
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
-        <input placeholder="关键词" value={query.q} onChange={e => setQuery(q => ({ ...q, q: e.target.value }))} style={{ ...INPUT_STYLE, flex: 1, minWidth: 200 }} />
-        <input placeholder="来源" value={query.source} onChange={e => setQuery(q => ({ ...q, source: e.target.value }))} style={{ ...INPUT_STYLE, width: 120 }} />
-        <input type="date" value={query.date_from} onChange={e => setQuery(q => ({ ...q, date_from: e.target.value }))} style={INPUT_STYLE} />
-        <input type="date" value={query.date_to} onChange={e => setQuery(q => ({ ...q, date_to: e.target.value }))} style={INPUT_STYLE} />
-        <select value={query.priority} onChange={e => setQuery(q => ({ ...q, priority: e.target.value }))} style={INPUT_STYLE}>
-          <option value="">全部优先级</option>
-          <option value="high">高</option><option value="medium">中</option><option value="low">低</option>
-        </select>
-        <select value={query.verified} onChange={e => setQuery(q => ({ ...q, verified: e.target.value }))} style={INPUT_STYLE}>
-          <option value="">全部状态</option>
-          <option value="no">待审核</option><option value="yes">已审核</option>
-        </select>
-        <button onClick={() => search(1)} style={{ background: 'var(--accent)', border: 'none', borderRadius: 6, padding: '8px 16px', color: '#000', fontWeight: 'bold', cursor: 'pointer' }}>搜索</button>
-      </div>
-
-      {/* Table */}
-      <div style={{ background: 'var(--bg-secondary)', borderRadius: 10, overflow: 'hidden' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 100px 80px 70px 70px', gap: 8, padding: '10px 16px', fontSize: 12, color: 'var(--text-secondary)', borderBottom: '1px solid var(--border)', fontWeight: 'bold' }}>
-          <span>标题</span><span>来源</span><span>评分</span><span>状态</span><span>日期</span>
+    <div style={{ display: 'flex', height: 'calc(100vh - 48px)', margin: -24, gap: 0 }}>
+      {/* 中：文章列表 */}
+      <div style={{ flex: 1, overflow: 'auto', padding: 24 }}>
+        {/* 工具栏 */}
+        <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+          <input
+            placeholder="搜索标题或关键词..."
+            value={search}
+            onChange={e => { setSearch(e.target.value); setPage(1); }}
+            style={inputStyle}
+          />
+          <select value={priority} onChange={e => { setPriority(e.target.value); setPage(1); }} style={selectStyle}>
+            <option value="">全部优先级</option>
+            <option value="high">高</option>
+            <option value="medium">中</option>
+            <option value="low">低</option>
+          </select>
+          <select value={verified} onChange={e => { setVerified(e.target.value); setPage(1); }} style={selectStyle}>
+            <option value="">全部状态</option>
+            <option value="yes">已审核</option>
+            <option value="no">待审核</option>
+          </select>
+          {loading && <i className="fas fa-spinner fa-spin" style={{ color: 'var(--accent)', fontSize: 13 }} />}
         </div>
-        {articles.map(a => (
-          <div key={a.id}
-            onClick={() => setSelected(a)}
-            style={{ display: 'grid', gridTemplateColumns: '1fr 100px 80px 70px 70px', gap: 8, padding: '10px 16px', fontSize: 13, cursor: 'pointer', borderBottom: '1px solid var(--border)', background: selected?.id === a.id ? 'rgba(79,195,247,0.1)' : 'transparent' }}>
-            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.title}</span>
-            <span style={{ color: 'var(--accent)' }}>{a.source}</span>
-            <span style={{ color: a.score > 0.7 ? 'var(--accent-green)' : a.score > 0.4 ? 'var(--accent-orange)' : 'var(--text-secondary)' }}>{a.score.toFixed(2)}</span>
-            <span style={{ color: a.verified ? 'var(--accent-green)' : 'var(--accent-orange)' }}>{a.verified ? '已审' : '待审'}</span>
-            <span style={{ color: 'var(--text-secondary)', fontSize: 12 }}>{a.fetched?.slice(5, 10)}</span>
+
+        {/* 表格 */}
+        <div style={{ background: 'var(--bg-secondary)', borderRadius: 10, border: '1px solid var(--border)', overflow: 'hidden' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid var(--border)', background: 'rgba(0,0,0,0.1)' }}>
+                <th style={thStyle}>标题</th>
+                <th style={{ ...thStyle, width: 100 }}>来源</th>
+                <th style={{ ...thStyle, width: 70 }}>评分</th>
+                <th style={{ ...thStyle, width: 60 }}>状态</th>
+                <th style={{ ...thStyle, width: 70 }}>日期</th>
+              </tr>
+            </thead>
+            <tbody>
+              {articles.map(a => (
+                <tr key={a.id}
+                  onClick={() => setSelected(a)}
+                  style={{
+                    cursor: 'pointer', borderBottom: '1px solid var(--border)',
+                    background: selected?.id === a.id ? 'rgba(0,212,255,0.06)' : 'transparent',
+                    transition: 'var(--transition-fast)',
+                  }}>
+                  <td style={{ padding: '7px 12px', fontWeight: selected?.id === a.id ? 600 : 400, maxWidth: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.title}</td>
+                  <td style={{ padding: '7px 12px', color: 'var(--text-secondary)', fontSize: 11 }}>{a.source}</td>
+                  <td style={{ padding: '7px 12px', color: a.score > 0.7 ? 'var(--accent-tertiary)' : a.score > 0.4 ? 'var(--accent-orange)' : 'var(--text-muted)', fontWeight: 600 }}>
+                    {a.score.toFixed(2)}
+                  </td>
+                  <td style={{ padding: '7px 12px', fontSize: 11 }}><span style={{ color: a.verified ? 'var(--accent-tertiary)' : 'var(--text-muted)' }}>{a.verified ? '已审' : '待审'}</span></td>
+                  <td style={{ padding: '7px 12px', color: 'var(--text-muted)', fontSize: 11 }}>{a.fetched?.slice(5, 10)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* 分页 */}
+        {totalPages > 1 && (
+          <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginTop: 16 }}>
+            <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} style={pageBtnStyle}>
+              <i className="fas fa-chevron-left" /> 上一页
+            </button>
+            <span style={{ fontSize: 12, color: 'var(--text-secondary)', padding: '6px 12px' }}>
+              {page} / {totalPages} · 共 {total} 条
+            </span>
+            <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page >= totalPages} style={pageBtnStyle}>
+              下一页 <i className="fas fa-chevron-right" />
+            </button>
           </div>
-        ))}
-        {!articles.length && <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-secondary)' }}>{loading ? '搜索中...' : '无结果'}</div>}
+        )}
       </div>
 
-      {total > 50 && (
-        <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginTop: 16 }}>
-          <button disabled={page <= 1} onClick={() => search(page - 1)} style={paginationBtn}>上一页</button>
-          <span style={{ padding: '6px 12px', fontSize: 13, color: 'var(--text-secondary)' }}>{page} / {Math.ceil(total / 50)}</span>
-          <button disabled={page >= Math.ceil(total / 50)} onClick={() => search(page + 1)} style={paginationBtn}>下一页</button>
-        </div>
-      )}
-
-      {/* Detail Panel */}
+      {/* 右：详情面板 */}
       {selected && (
-        <div style={{ marginTop: 16, background: 'var(--bg-secondary)', borderRadius: 10, padding: 20 }}>
-          <h3 style={{ fontSize: 15, marginBottom: 8 }}>{selected.title}</h3>
-          <div style={{ display: 'flex', gap: 16, fontSize: 13, color: 'var(--text-secondary)', marginBottom: 8 }}>
-            <span>来源: {selected.source}</span>
-            <span>评分: {selected.score.toFixed(2)}</span>
-            <span>状态: {selected.verified ? '已审核' : '待审核'}</span>
+        <div style={{ width: 380, minWidth: 380, background: 'var(--bg-secondary)', borderLeft: '1px solid var(--border)',
+          overflow: 'auto', padding: 20, display: 'flex', flexDirection: 'column' }}>
+          <button onClick={() => setSelected(null)}
+            style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 13, alignSelf: 'flex-end', padding: 4 }}>
+            <i className="fas fa-times" />
+          </button>
+
+          <h3 style={{ fontSize: 15, marginTop: 0, lineHeight: 1.4 }}>{selected.title}</h3>
+
+          <div style={{ display: 'flex', gap: 12, marginTop: 12, flexWrap: 'wrap', fontSize: 12 }}>
+            <span style={{ color: 'var(--text-secondary)' }}>📰 {selected.source}</span>
+            <span style={{ color: 'var(--text-secondary)' }}>📅 {selected.fetched?.slice(0, 10)}</span>
+            <span style={{ color: selected.score > 0.7 ? 'var(--accent-tertiary)' : 'var(--accent-orange)' }}>⭐ {selected.score.toFixed(2)}</span>
+            <span style={{ color: selected.verified ? 'var(--accent-tertiary)' : 'var(--text-muted)' }}>{selected.verified ? '✓ 已审核' : '待审核'}</span>
           </div>
+
           {selected.keywords?.length > 0 && (
-            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 8 }}>
-              {selected.keywords.map(k => <span key={k} style={{ background: 'var(--bg-card)', padding: '2px 8px', borderRadius: 4, fontSize: 11 }}>{k}</span>)}
+            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 12 }}>
+              {selected.keywords.map(k => (
+                <span key={k} style={kwStyle}>{k}</span>
+              ))}
             </div>
           )}
-          <div style={{ display: 'flex', gap: 8 }}>
-            <a href={`/articles/${selected.id}`} style={{ background: 'var(--accent)', padding: '6px 14px', borderRadius: 6, fontSize: 12, color: '#000', textDecoration: 'none' }}>阅读全文</a>
-            <a href={selected.url} target="_blank" rel="noopener noreferrer" style={{ background: 'var(--bg-card)', padding: '6px 14px', borderRadius: 6, fontSize: 12, color: 'var(--accent)', textDecoration: 'none' }}>打开原文</a>
-            {selected.event && (
-              <a href={`/workspace?event=${selected.event.id}`} style={{ background: 'var(--bg-card)', padding: '6px 14px', borderRadius: 6, fontSize: 12, color: 'var(--accent)', textDecoration: 'none' }}>查看所属事件 →</a>
-            )}
+
+          <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+            <button onClick={() => navigate(`/articles/${selected.id}`)} style={actionBtnStyle}>
+              <i className="fas fa-book-open" /> 阅读全文
+            </button>
+            <a href={selected.url} target="_blank" rel="noopener noreferrer" style={{ ...actionBtnStyle, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-secondary)', textDecoration: 'none' }}>
+              <i className="fas fa-external-link-alt" /> 原文
+            </a>
+          </div>
+
+          {selected.event && (
+            <a href={`/workspace?event=${selected.event.id}`} style={{
+              marginTop: 10, display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12,
+              color: 'var(--accent)', textDecoration: 'none',
+            }}>
+              <i className="fas fa-diagram-project" /> 查看所属事件: {selected.event.title}
+            </a>
+          )}
+
+          <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '16px 0' }} />
+
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>📄 内容预览</div>
+          <div style={{ fontSize: 12, lineHeight: 1.8, color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', flex: 1, overflow: 'auto' }}>
+            {detailHtml || '内容暂不可用。该文章可能尚未完成内容抓取。'}
           </div>
         </div>
       )}
@@ -115,7 +179,30 @@ export default function ArticleSearch() {
   );
 }
 
-const paginationBtn: React.CSSProperties = {
-  background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 6,
-  padding: '6px 14px', color: 'var(--text-primary)', fontSize: 13, cursor: 'pointer',
+const inputStyle: React.CSSProperties = {
+  background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 6,
+  padding: '7px 12px', color: 'var(--text-primary)', fontSize: 13, outline: 'none',
+  flex: 1, minWidth: 200,
+};
+const selectStyle: React.CSSProperties = {
+  background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 6,
+  padding: '6px 10px', color: 'var(--text-primary)', fontSize: 12, outline: 'none', cursor: 'pointer',
+};
+const thStyle: React.CSSProperties = {
+  textAlign: 'left', padding: '9px 12px', fontWeight: 600, fontSize: 11, color: 'var(--text-muted)',
+  textTransform: 'uppercase', letterSpacing: 0.5,
+};
+const pageBtnStyle: React.CSSProperties = {
+  background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 6,
+  padding: '6px 14px', color: 'var(--text-primary)', fontSize: 12, cursor: 'pointer',
+  display: 'flex', alignItems: 'center', gap: 6,
+};
+const kwStyle: React.CSSProperties = {
+  background: 'rgba(0,212,255,0.08)', padding: '2px 8px', borderRadius: 10, fontSize: 10,
+  color: 'var(--text-secondary)', border: '1px solid var(--border)',
+};
+const actionBtnStyle: React.CSSProperties = {
+  background: 'var(--accent)', border: 'none', borderRadius: 6, padding: '7px 16px',
+  color: '#000', fontWeight: 600, fontSize: 12, cursor: 'pointer',
+  display: 'flex', alignItems: 'center', gap: 6,
 };

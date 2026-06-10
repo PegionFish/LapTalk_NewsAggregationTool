@@ -2,11 +2,11 @@ import { NavLink } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 
 const NAV_ITEMS = [
-  { path: '/', label: '仪表盘', icon: '📊' },
-  { path: '/workspace', label: '逻辑链工作台', icon: '🖱' },
-  { path: '/articles', label: '文章检索', icon: '📄' },
-  { path: '/chains', label: '逻辑链列表', icon: '📋' },
-  { path: '/settings', label: '设置', icon: '⚙' },
+  { path: '/', label: '仪表盘', icon: 'fa-chart-pie' },
+  { path: '/workspace', label: '逻辑链工作台', icon: 'fa-diagram-project' },
+  { path: '/articles', label: '文章检索', icon: 'fa-newspaper' },
+  { path: '/chains', label: '逻辑链列表', icon: 'fa-list-check' },
+  { path: '/settings', label: '设置', icon: 'fa-sliders' },
 ];
 
 export default function NavSidebar() {
@@ -14,44 +14,68 @@ export default function NavSidebar() {
 
   return (
     <nav style={{
-      width: 200, height: '100vh', background: 'var(--bg-secondary)',
-      borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', padding: '12px 0'
+      width: 200, minWidth: 200, height: '100vh', background: 'var(--bg-secondary)',
+      borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', padding: '12px 0',
+      overflow: 'hidden',
     }}>
-      <div style={{ padding: '12px 16px', fontSize: 16, fontWeight: 'bold', color: 'var(--accent)', marginBottom: 8 }}>
+      {/* 品牌 */}
+      <div style={{
+        padding: '12px 16px', fontSize: 15, fontWeight: 700, color: 'var(--accent)',
+        marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8,
+      }}>
+        <i className="fas fa-newspaper" style={{ fontSize: 16, background: 'var(--gradient-primary)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }} />
         新闻知识聚合
       </div>
 
-      {/* User info */}
-      <div style={{ padding: '8px 16px', fontSize: 11, color: 'var(--text-secondary)', borderBottom: '1px solid var(--border)', marginBottom: 4 }}>
-        {user?.display_name || user?.username}
-        <span style={{ float: 'right', color: 'var(--accent)' }}>{user?.role === 'admin' ? '👑' : '👤'}</span>
+      {/* 用户信息 */}
+      <div style={{
+        padding: '8px 16px', fontSize: 12, color: 'var(--text-secondary)',
+        borderBottom: '1px solid var(--border)', marginBottom: 4,
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+      }}>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <i className="fas fa-circle" style={{ fontSize: 6, color: 'var(--accent-tertiary)', marginRight: 6, verticalAlign: 'middle' }} />
+          {user?.display_name || user?.username}
+        </span>
+        <span style={{
+          color: 'var(--accent)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase',
+          background: 'rgba(0,212,255,0.1)', padding: '1px 6px', borderRadius: 3,
+        }}>
+          {user?.role || 'user'}
+        </span>
       </div>
 
+      {/* 导航项 */}
       {NAV_ITEMS.map(item => (
         <NavLink
           key={item.path}
           to={item.path}
           end={item.path === '/'}
           style={({ isActive }) => ({
-            display: 'flex', alignItems: 'center', gap: 8, padding: '10px 16px',
-            fontSize: 14, color: isActive ? 'var(--accent)' : 'var(--text-secondary)',
-            background: isActive ? 'rgba(79,195,247,0.1)' : 'transparent',
-            borderLeft: isActive ? '3px solid var(--accent)' : '3px solid transparent',
-            textDecoration: 'none',
+            display: 'flex', alignItems: 'center', gap: 10, padding: '9px 16px', margin: '2px 8px',
+            fontSize: 13, color: isActive ? 'var(--accent)' : 'var(--text-secondary)',
+            background: isActive ? 'rgba(0,212,255,0.08)' : 'transparent',
+            borderLeft: isActive ? '2px solid var(--accent)' : '2px solid transparent',
+            borderRadius: '0 4px 4px 0',
+            textDecoration: 'none', transition: 'var(--transition-fast)',
+            fontWeight: isActive ? 600 : 400,
           })}
         >
-          <span>{item.icon}</span>
+          <i className={`fas ${item.icon}`} style={{ width: 18, textAlign: 'center', fontSize: 13 }} />
           <span>{item.label}</span>
         </NavLink>
       ))}
 
-      {/* Logout */}
+      {/* 登出 */}
       <div style={{ marginTop: 'auto', padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
         <button onClick={logout} style={{
-          background: 'var(--bg-card)', border: 'none', borderRadius: 4, padding: '6px 12px',
-          color: 'var(--text-secondary)', fontSize: 12, cursor: 'pointer', width: '100%', textAlign: 'left',
+          width: '100%', background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border)',
+          borderRadius: 6, padding: '7px 12px', color: 'var(--text-secondary)', fontSize: 12,
+          cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8,
+          transition: 'var(--transition-fast)',
         }}>
-          🚪 退出登录
+          <i className="fas fa-sign-out-alt" style={{ fontSize: 12 }} />
+          退出登录
         </button>
       </div>
     </nav>
