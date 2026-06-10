@@ -356,10 +356,13 @@ def parse_rss_regex(xml_text: str) -> list:
             title_match = re.search(r'<title>(.*?)</title>', block, re.DOTALL)
         title = re.sub(r'<[^>]+>', '', title_match.group(1)).strip() if title_match else ''
 
-        # 提取 link
+        # 提取 link（兼容三种格式：<link>url</link> / <link href="url"/> / <link rel="..." href="url"/>）
         link_match = re.search(r'<link>(.*?)</link>', block, re.DOTALL)
         if not link_match or not link_match.group(1).strip():
             link_match = re.search(r'<link[^>]*>(.*?)</link>', block, re.DOTALL)
+        if not link_match or not link_match.group(1).strip():
+            # Atom feed: <link href="URL"/> 或 <link rel="alternate" href="URL"/>
+            link_match = re.search(r'<link[^>]+href="([^"]+)"', block, re.DOTALL | re.IGNORECASE)
         link = re.sub(r'<[^>]+>', '', link_match.group(1)).strip() if link_match else ''
 
         # 提取 pub_date

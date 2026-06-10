@@ -202,6 +202,9 @@ def main():
                     merged = dict(cluster[0])
                     merged['sources'] = [c['source'] for c in cluster]
                     merged['urls'] = [c['url'] for c in cluster if c.get('url')]
+                    # 确保 merged['url'] 取第一个有效 URL，避免聚类合并后 url 为空
+                    valid_urls = [u for u in merged['urls'] if u]
+                    merged['url'] = valid_urls[0] if valid_urls else merged.get('url', '')
                     merged['title'] = min([c['title'] for c in cluster], key=lambda x: len(x))
                     clustered.append(merged)
                 else:
