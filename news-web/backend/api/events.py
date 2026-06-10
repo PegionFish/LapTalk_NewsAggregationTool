@@ -37,10 +37,22 @@ def list_events(status: str = "", min_articles: int = Query(1, ge=1), page: int 
         'total': count, 'page': page, 'limit': limit
     }
 
+def _normalize_article(a: dict) -> dict:
+    """Normalize article field names from news_db to match frontend Article type."""
+    if 'date' in a and 'fetched' not in a:
+        a['fetched'] = a.pop('date')
+    if 'published' not in a:
+        a['published'] = a.get('date', a.get('fetched', ''))
+    return a
+
 @router.get("/{event_id}")
 def get_event(event_id: int):
     db = get_db()
-    return db.get_event_timeline(event_id)
+    data = db.get_event_timeline(event_id)
+    # Normalize article fields to match frontend Article interface
+    if 'articles' in data:
+        data['articles'] = [_normalize_article(a) for a in data['articles']]
+    return data
 
 class EventUpdate(BaseModel):
     title: Optional[str] = None
