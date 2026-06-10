@@ -1,6 +1,8 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from config import config
+from ai_client import chat
+from translation_client import translate_to_chinese
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -53,3 +55,32 @@ def update_settings(body: SettingsUpdate):
     if body.content_cache_path is not None:
         config.content_cache_path = body.content_cache_path
     return config.to_dict()
+
+
+# ══════════════════════════════════════════════════════════════
+# API 连通性测试
+# ══════════════════════════════════════════════════════════════
+
+@router.post("/test-ai")
+def test_ai():
+    """发送简短请求验证 AI 分析 API 是否可用。"""
+    if not config.openai_api_key:
+        return {'ok': False, 'error': 'API Key 未配置'}
+    try:
+        result = chat("Hello! Reply with just 'OK'.", system_prompt="You only reply 'OK'.")
+        return {'ok': True, 'response': result[:200], 'model': config.openai_model}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)[:200]}
+
+
+@router.post("/test-translation")
+def test_translation_api():
+    """发送简短翻译请求验证翻译 API 是否可用。"""
+    if not config.translation_api_key:
+        return {'ok': False, 'error': '翻译 API Key 未配置'}
+    try:
+        test_text = "The quick brown fox jumps over the lazy dog."
+        result = translate_to_chinese(test_text)
+        return {'ok': True, 'original': test_text, 'translation': result[:300], 'model': config.translation_model}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)[:200]}

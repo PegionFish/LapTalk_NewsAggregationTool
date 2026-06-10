@@ -131,4 +131,9 @@ export const api = {
 
   updateNotifPrefs: (data: Record<string, string | boolean>) =>
     fetchJSON<{ ok: boolean }>('/notifications/prefs', { method: 'PUT', body: JSON.stringify(data) }),
+
+  // AI API 连通性测试
+  testAi: () => fetchJSON<{ ok: boolean; response?: string; error?: string; model?: string }>('/settings/test-ai', { method: 'POST' }),
+
+  testTranslation: () => fetchJSON<{ ok: boolean; original?: string; translation?: string; error?: string; model?: string }>('/settings/test-translation', { method: 'POST' }),
 };
