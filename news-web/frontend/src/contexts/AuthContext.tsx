@@ -27,7 +27,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Restore session from localStorage on mount
+  // 本机访问免密登录 — localhost 自动获取 local_admin 令牌
   useEffect(() => {
     const savedToken = localStorage.getItem(TOKEN_KEY);
     const savedUser = localStorage.getItem(USER_KEY);
@@ -35,12 +35,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         setToken(savedToken);
         setUser(JSON.parse(savedUser));
+        setLoading(false);
+        return;
       } catch {
         localStorage.removeItem(TOKEN_KEY);
         localStorage.removeItem(USER_KEY);
       }
     }
-    setLoading(false);
+
+    // 无缓存令牌时，localhost 自动免密登录
+    const host = window.location.hostname;
+    if (host === 'localhost' || host === '127.0.0.1') {
+      fetch('/api/auth/local')
+        .then(res => res.ok ? res.json() : null)
+        .then(data => {
+          if (data?.token) {
+            setToken(data.token);
+            setUser(data.user);
+            localStorage.setItem(TOKEN_KEY, data.token);
+            localStorage.setItem(USER_KEY, JSON.stringify(data.user));
+          }
+        })
+        .catch(() => {})
+        .finally(() => setLoading(false));
+    } else {
+      setLoading(false);
+    }
   }, []);
 
   const login = useCallback(async (username: string, password: string) => {

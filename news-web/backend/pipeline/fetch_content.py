@@ -137,8 +137,9 @@ def archive_pages(db_path: str, limit: int = 0, source: str = None, recent: int 
 if __name__ == '__main__':
     import argparse
     p = argparse.ArgumentParser()
-    p.add_argument('--db', default=os.path.expanduser(
+    default_db = os.environ.get('NEWS_DB_PATH', os.path.expanduser(
         '~/claw_skill_news_aggregation/hot_reports/news.db'))
+    p.add_argument('--db', default=default_db)
     p.add_argument('--limit', type=int, default=0)
     p.add_argument('--source')
     p.add_argument('--recent', type=int, default=0)

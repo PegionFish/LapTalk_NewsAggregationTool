@@ -31,7 +31,11 @@ class AppConfig:
 
     @property
     def db_path(self) -> str:
-        return self._data.get('db_path', '')
+        val = self._data.get('db_path', '')
+        if val:
+            return val
+        # 自动推导默认路径：backend/data/news.db（仓库模板 db_path 留空时回退）
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'news.db')
 
     @db_path.setter
     def db_path(self, val: str):

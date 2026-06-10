@@ -11,6 +11,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPORTS_DIR = os.path.join(SCRIPT_DIR, 'hot_reports')
 
 sys.path.insert(0, SCRIPT_DIR)
+sys.path.insert(0, os.path.join(os.path.dirname(SCRIPT_DIR), 'db'))  # 从 db/ 目录导入 news_db
 from news_db import NewsDB
 
 # ─── 排除关键词 ──────────────────────────────────────────
@@ -227,7 +228,8 @@ def main():
 
     # ── 5. 写入数据库 + 事件关联 ──
     try:
-        db = NewsDB()
+        db_path = os.environ.get('NEWS_DB_PATH', os.path.join(os.path.dirname(SCRIPT_DIR), 'data', 'news.db'))
+        db = NewsDB(db_path)
         total = 0
         for cat in ('platform_hotlists', 'rss_news', 'bilibili_videos'):
             n = db.save_articles(cat, sources[cat])

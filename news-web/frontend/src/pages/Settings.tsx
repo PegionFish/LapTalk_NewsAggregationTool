@@ -10,6 +10,46 @@ export default function Settings() {
   const [pipelineEnabled, setPipelineEnabled] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
+  const [pipelineRunning, setPipelineRunning] = useState(false);
+  const [pipelineStatus, setPipelineStatus] = useState<{ last_run?: string | null; last_status?: string | null; current_step?: string | null }>({});
+
+  useEffect(() => {
+    api.getSettings().then(s => {
+      setDbPath(s.db_path || '');
+      setUserAgent(s.user_agent || '');
+      setOpenaiBaseUrl(s.openai_base_url || 'https://api.openai.com/v1');
+      setOpenaiApiKey(s.openai_api_key || '');
+      setOpenaiModel(s.openai_model || 'gpt-4o-mini');
+      setPipelineEnabled(s.pipeline_schedule_enabled !== false);
+    }).catch(() => {});
+    // 获取当前管道状态
+    api.getPipelineStatus().then(s => setPipelineStatus(s)).catch(() => {});
+  }, []);
+
+  // 轮询管道运行状态
+  const pollPipelineStatus = async () => {
+    for (let i = 0; i < 60; i++) {
+      const s = await api.getPipelineStatus();
+      setPipelineStatus(s);
+      if (!s.running) { setPipelineRunning(false); return; }
+      await new Promise(r => setTimeout(r, 2000));
+    }
+    setPipelineRunning(false);
+  };
+
+  const handleTriggerPipeline = async () => {
+    if (pipelineRunning) return;
+    setPipelineRunning(true);
+    setMessage('');
+    try {
+      await api.triggerPipeline();
+      setMessage('抓取管道已启动，正在运行...');
+      pollPipelineStatus();
+    } catch (e) {
+      setMessage('启动失败: ' + (e as Error).message);
+      setPipelineRunning(false);
+    }
+  };
 
   useEffect(() => {
     api.getSettings().then(s => {
@@ -80,6 +120,30 @@ export default function Settings() {
             style={{ width: 16, height: 16 }} />
           <span>启用定时抓取（每天 10:00 / 17:00）</span>
         </label>
+
+        <div style={{ marginTop: 12 }}>
+          <button onClick={handleTriggerPipeline} disabled={pipelineRunning}
+            style={{
+              background: pipelineRunning ? 'var(--bg-card)' : 'var(--accent-green)',
+              border: 'none', borderRadius: 6, padding: '8px 20px', color: pipelineRunning ? 'var(--text-secondary)' : '#000',
+              fontWeight: 'bold', fontSize: 13, cursor: pipelineRunning ? 'not-allowed' : 'pointer',
+            }}>
+            {pipelineRunning ? '⏳ 抓取中...' : '🔄 手动抓取'}
+          </button>
+          {pipelineStatus.last_run && (
+            <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-secondary)' }}>
+              上次运行: {pipelineStatus.last_run?.slice(0, 19).replace('T', ' ')}
+              {pipelineStatus.last_status && (
+                <span style={{
+                  marginLeft: 8,
+                  color: pipelineStatus.last_status === 'success' ? 'var(--accent-green)' : pipelineStatus.last_status === 'failed' ? 'var(--accent-red)' : 'var(--accent-orange)'
+                }}>
+                  {pipelineStatus.last_status === 'success' ? '✅ 成功' : pipelineStatus.last_status === 'failed' ? '❌ 失败' : '⏳ 运行中'}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
 
         <h3 style={{ fontSize: 14, marginTop: 20, marginBottom: 8, color: 'var(--accent)' }}>网络</h3>
         <label style={labelStyle}>

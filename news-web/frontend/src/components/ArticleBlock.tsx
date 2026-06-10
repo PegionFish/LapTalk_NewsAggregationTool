@@ -1,19 +1,31 @@
+import { useCallback } from 'react';
 import type { Article } from '../types';
 
 interface Props {
   article: Article;
+  onSelect?: (article: Article) => void;
 }
 
-export default function ArticleBlock({ article }: Props) {
+export default function ArticleBlock({ article, onSelect }: Props) {
+  const handleClick = useCallback(() => {
+    if (onSelect) {
+      onSelect(article);
+    } else if (article.url) {
+      window.open(article.url, '_blank', 'noopener');
+    }
+  }, [article, onSelect]);
+
   return (
     <div
       draggable
+      onClick={handleClick}
+      title="点击打开原文"
       onDragStart={(e) => {
         e.dataTransfer.setData('application/json', JSON.stringify({ type: 'article', article }));
       }}
       style={{
         background: 'var(--bg-card)', padding: '6px 10px', borderRadius: 6, fontSize: 12,
-        cursor: 'grab', borderLeft: '3px solid var(--accent)',
+        cursor: 'pointer', borderLeft: '3px solid var(--accent)',
         marginBottom: 4,
       }}
     >

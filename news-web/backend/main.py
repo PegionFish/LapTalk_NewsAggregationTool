@@ -87,12 +87,24 @@ app.include_router(auth_router)
 app.include_router(audit_router)
 app.include_router(notifications_router)
 
-# ── Production static mount (must be last) ───────────────
+# ── SPA fallback + static mount (must be last) ──────────
+from fastapi.responses import FileResponse
 FRONTEND_DIST = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'frontend', 'dist')
 if os.path.isdir(FRONTEND_DIST):
-    app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
-    logger.info(f"Mounted frontend static files from {FRONTEND_DIST}")
+    @app.get("/{full_path:path}")
+    async def spa_fallback(full_path: str):
+        """SPA fallback — 仅处理非 API 路径，/api/ 交给对应的路由处理。"""
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not Found")
+        file_path = os.path.join(FRONTEND_DIST, full_path)
+        if os.path.isfile(file_path):
+            return FileResponse(file_path)
+        return FileResponse(os.path.join(FRONTEND_DIST, "index.html"))
+
+    logger.info(f"Mounted frontend static files from {FRONTEND_DIST} (SPA fallback)")
+else:
+    logger.warning(f"Frontend dist not found at {FRONTEND_DIST} — run 'npm run build'")
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8081, reload=True)

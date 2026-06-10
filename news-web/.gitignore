@@ -1,0 +1,48 @@
+# SQLite 数据库 & WAL 文件
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# 新闻抓取输出 & 热榜缓存
+backend/data/
+backend/pipeline/hot_reports/
+backend/pipeline/data/
+hot_reports/
+
+# 日志
+logs/
+*.log
+
+# 页面内容归档
+archived_pages/
+content_archive/
+
+# 截图 & 调试驱动脚本
+frontend/screenshots/
+frontend/driver*.mjs
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.eggs/
+*.egg-info/
+
+# Node
+node_modules/
+frontend/dist/
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# 环境变量
+.env
+.env.local
+.env.*.local

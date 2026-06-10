@@ -1,6 +1,6 @@
 """Auth API — login, register, session check."""
 import sqlite3
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel
 from datetime import datetime
 
@@ -73,6 +73,40 @@ def login(body: LoginRequest):
     now = datetime.utcnow().isoformat(timespec='seconds')
     conn.execute("UPDATE users SET last_login=? WHERE id=?", (now, row[0]))
     conn.commit()
+    conn.close()
+
+    token = create_token(row[0], row[1], row[4])
+    return {
+        'token': token,
+        'user': {'id': row[0], 'username': row[1], 'display_name': row[3], 'role': row[4]},
+    }
+
+@router.get("/local")
+def local_login(request: Request):
+    """本机免密登录 — 仅允许 localhost/127.0.0.1 访问，自动创建 local_admin 账户。"""
+    host = request.client.host if request.client else ""
+    if host not in ("127.0.0.1", "::1", "localhost"):
+        raise HTTPException(403, "仅限本机访问")
+
+    if not config.db_path:
+        raise HTTPException(503, "database_not_configured")
+    ensure_users_table(config.db_path)
+    conn = sqlite3.connect(config.db_path)
+
+    row = conn.execute("SELECT id, username, password_hash, display_name, role FROM users WHERE username='local_admin'").fetchone()
+    if not row:
+        now = datetime.utcnow().isoformat(timespec='seconds')
+        password_hash = hash_password("local_admin")
+        cur = conn.execute(
+            "INSERT INTO users (username, password_hash, display_name, role, created_at) VALUES ('local_admin', ?, '本地管理员', 'admin', ?)",
+            (password_hash, now)
+        )
+        user_id = cur.lastrowid
+        conn.commit()
+        row = (user_id, "local_admin", password_hash, "本地管理员", "admin")
+    else:
+        conn.execute("UPDATE users SET last_login=? WHERE id=?", (datetime.utcnow().isoformat(timespec='seconds'), row[0]))
+        conn.commit()
     conn.close()
 
     token = create_token(row[0], row[1], row[4])
