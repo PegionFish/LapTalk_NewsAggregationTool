@@ -19,13 +19,24 @@ export default function Workspace() {
   // Load existing chain or recover draft on mount
   useEffect(() => {
     if (chainId) {
-      api.getChainTimeline(Number(chainId)).then(data => {
-        // Transform timeline events → React Flow nodes
+      api.getChainTimeline(Number(chainId)).then(async data => {
+        // Fetch articles for each event in parallel
+        const eventDetails = await Promise.all(
+          data.timeline.map(evt =>
+            api.getEvent(evt.id).catch(() => ({ articles: [] }))
+          )
+        );
+        // Transform timeline events → React Flow nodes with articles
         const nodes = data.timeline.map((evt, i) => ({
           id: `event-${evt.id}`,
           type: 'eventCard',
           position: { x: 50 + (i % 3) * 350, y: 50 + Math.floor(i / 3) * 250 },
-          data: { eventId: evt.id, title: evt.title, priority: 'medium', articles: [] },
+          data: {
+            eventId: evt.id,
+            title: evt.title,
+            priority: 'medium',
+            articles: eventDetails[i]?.articles || [],
+          },
         }));
         setInitialNodes(nodes);
         setInitialEdges([]);  // Edge reconstruction from relation data in Phase 2
