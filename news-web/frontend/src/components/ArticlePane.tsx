@@ -21,15 +21,12 @@ export default function ArticlePane({ article, onClose }: Props) {
 
   if (!article) return null;
 
-  // 走本地缓存的 HTML 代理端点，回退直连外网
-  const htmlUrl = article.url ? `/api/articles/${article.id}/html` : '';
-
+  // 直连原站，广告/追踪脚本由浏览器自身沙箱处理
   return (
     <div style={overlayStyle}>
       <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 0 }} />
 
       <div style={panelStyle}>
-        {/* 顶栏 */}
         <div style={headerStyle}>
           <span style={{ fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
             {article.title.slice(0, 80)}
@@ -47,7 +44,6 @@ export default function ArticlePane({ article, onClose }: Props) {
           </button>
         </div>
 
-        {/* iframe — 优先本地缓存 HTML，回退代理获取 */}
         <div style={{ flex: 1, position: 'relative', background: '#fff' }}>
           {!loaded && (
             <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-primary)', zIndex: 1 }}>
@@ -55,10 +51,10 @@ export default function ArticlePane({ article, onClose }: Props) {
               <span style={{ color: 'var(--text-secondary)', fontSize: 13 }}>加载中...</span>
             </div>
           )}
-          {htmlUrl && (
+          {article.url && (
             <iframe
               ref={iframeRef}
-              src={htmlUrl}
+              src={article.url}
               onLoad={() => setLoaded(true)}
               style={{ width: '100%', height: '100%', border: 'none' }}
               sandbox="allow-scripts allow-same-origin allow-popups"
