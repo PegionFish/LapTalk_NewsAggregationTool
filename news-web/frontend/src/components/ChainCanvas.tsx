@@ -1,15 +1,16 @@
 import { useCallback, useRef, useState, useEffect } from 'react';
 import {
   ReactFlow, addEdge, useNodesState, useEdgesState, Controls, Background,
-  type Connection, type Edge, type Node,
+  type Connection, type Edge, type Node, type OnNodesChange, type OnEdgesChange,
+  type NodeChange, type EdgeChange,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import EventCard from './EventCard';
 import RelationDialog from './RelationDialog';
+import { useUndoRedo } from '../hooks/useUndoRedo';
 import { api } from '../api/client';
 import type { Article } from '../types';
 
-// Use a plain object for nodeTypes to avoid TS issues with xyflow v12
 const nodeTypes = { eventCard: EventCard as (props: Record<string, unknown>) => JSX.Element };
 
 interface Props {
@@ -25,11 +26,53 @@ const nextNodeId = () => `event-${++nodeIdCounter}`;
 const DRAFT_KEY = 'canvas-draft-new';
 
 export default function ChainCanvas({ articles, initialNodes = [], initialEdges = [], chainId }: Props) {
-  const [nodes, setNodes, onNodesChange] = useNodesState<Node>(initialNodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initialEdges);
+  const [nodes, setNodes, onNodesChangeRaw] = useNodesState<Node>(initialNodes);
+  const [edges, setEdges, onEdgesChangeRaw] = useEdgesState<Edge>(initialEdges);
   const [relationDialog, setRelationDialog] = useState<{ from: string; to: string } | null>(null);
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
+  const isProcessingHistory = useRef(false);
 
+  const applyHistory = useCallback((ns: Node[], es: Edge[]) => {
+    isProcessingHistory.current = true;
+    setNodes(ns);
+    setEdges(es);
+    // Reset flag after React commits
+    setTimeout(() => { isProcessingHistory.current = false; }, 0);
+  }, [setNodes, setEdges]);
+
+  const { pushSnapshot, undo, redo, canUndo, canRedo } = useUndoRedo(applyHistory);
+
+  // ── Push snapshot helper — debounces drag moves ─────────
+  const snapshotTimer = useRef<ReturnType<typeof setTimeout>>();
+  const scheduleSnapshot = useCallback(() => {
+    if (isProcessingHistory.current) return;
+    clearTimeout(snapshotTimer.current);
+    snapshotTimer.current = setTimeout(() => {
+      pushSnapshot(nodes, edges);
+    }, 100);
+  }, [nodes, edges, pushSnapshot]);
+
+  // ── Wrap change handlers to detect deletes ──────────────
+  const hadDelete = useRef(false);
+  const onNodesChange: OnNodesChange = useCallback((changes: NodeChange[]) => {
+    if (changes.some(c => c.type === 'remove')) hadDelete.current = true;
+    onNodesChangeRaw(changes);
+  }, [onNodesChangeRaw]);
+
+  const onEdgesChange: OnEdgesChange = useCallback((changes: EdgeChange[]) => {
+    if (changes.some(c => c.type === 'remove')) hadDelete.current = true;
+    onEdgesChangeRaw(changes);
+  }, [onEdgesChangeRaw]);
+
+  // Capture snapshot after deletes settle
+  useEffect(() => {
+    if (hadDelete.current) {
+      hadDelete.current = false;
+      scheduleSnapshot();
+    }
+  });
+
+  // ── Drop handler ────────────────────────────────────────
   const onDrop = useCallback((event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     const json = event.dataTransfer.getData('application/json');
@@ -40,7 +83,6 @@ export default function ChainCanvas({ articles, initialNodes = [], initialEdges 
     const article: Article = data.article;
     const eventName = article.event?.title || '未分类';
 
-    // Check if node for this event already exists
     const existing = nodes.find(n => n.data?.eventId === article.event?.id);
     if (existing) {
       setNodes(nds => nds.map(n => {
@@ -51,10 +93,10 @@ export default function ChainCanvas({ articles, initialNodes = [], initialEdges 
         }
         return n;
       }));
+      scheduleSnapshot();
       return;
     }
 
-    // Create new event node
     const position = reactFlowWrapper.current
       ? { x: event.clientX - 150, y: event.clientY - 50 }
       : { x: Math.random() * 300, y: Math.random() * 300 };
@@ -71,13 +113,15 @@ export default function ChainCanvas({ articles, initialNodes = [], initialEdges 
       },
     };
     setNodes(nds => [...nds, newNode]);
-  }, [nodes, setNodes]);
+    scheduleSnapshot();
+  }, [nodes, setNodes, scheduleSnapshot]);
 
   const onDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
   }, []);
 
+  // ── Connection handler ──────────────────────────────────
   const onConnect = useCallback((connection: Connection) => {
     if (connection.source && connection.target) {
       setRelationDialog({ from: connection.source.toString(), to: connection.target.toString() });
@@ -86,19 +130,41 @@ export default function ChainCanvas({ articles, initialNodes = [], initialEdges 
 
   const handleRelationSelect = useCallback(async (relation: string) => {
     if (!relationDialog) return;
-    setEdges(eds => addEdge({
-      id: `e-${relationDialog.from}-${relationDialog.to}-${Date.now()}`,
-      source: relationDialog.from,
-      target: relationDialog.to,
-      label: relation,
-      style: { stroke: '#4fc3f7', strokeWidth: 2 },
-      labelStyle: { fill: '#4fc3f7', fontSize: 10 },
-      animated: true,
-    }, eds));
+    setEdges(eds => {
+      const newEdges = addEdge({
+        id: `e-${relationDialog.from}-${relationDialog.to}-${Date.now()}`,
+        source: relationDialog.from,
+        target: relationDialog.to,
+        label: relation,
+        style: { stroke: '#4fc3f7', strokeWidth: 2 },
+        labelStyle: { fill: '#4fc3f7', fontSize: 10 },
+        animated: true,
+      }, eds);
+      // Schedule snapshot with new edges
+      setTimeout(() => pushSnapshot(nodes, newEdges), 50);
+      return newEdges;
+    });
     setRelationDialog(null);
-  }, [relationDialog, setEdges]);
+  }, [relationDialog, setEdges, nodes, pushSnapshot]);
 
-  // ── Auto-save draft to localStorage (debounced 2s) ──
+  // ── Keyboard shortcuts (Undo/Redo) ──────────────────────
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+        if (e.shiftKey) {
+          e.preventDefault();
+          redo(nodes, edges);
+        } else {
+          e.preventDefault();
+          undo(nodes, edges);
+        }
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [nodes, edges, undo, redo]);
+
+  // ── Auto-save draft to localStorage (debounced 2s) ──────
   const saveTimer = useRef<ReturnType<typeof setTimeout>>();
   useEffect(() => {
     if (chainId) return;
@@ -109,6 +175,7 @@ export default function ChainCanvas({ articles, initialNodes = [], initialEdges 
     return () => clearTimeout(saveTimer.current);
   }, [nodes, edges, chainId]);
 
+  // ── Create chain handler ────────────────────────────────
   const handleCreateChain = useCallback(async () => {
     const title = prompt('请输入逻辑链标题:', '新建逻辑链');
     if (!title) return;
@@ -130,25 +197,52 @@ export default function ChainCanvas({ articles, initialNodes = [], initialEdges 
         edges={edges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
+        onNodeDragStop={scheduleSnapshot}
         onConnect={onConnect}
         onDrop={onDrop}
         onDragOver={onDragOver}
         nodeTypes={nodeTypes}
         fitView
+        deleteKeyCode={['Backspace', 'Delete']}
         style={{ background: 'var(--bg-primary)' }}
       >
         <Controls />
         <Background color="#2a2a3e" gap={20} />
       </ReactFlow>
 
-      {nodes.length > 0 && (
-        <button onClick={handleCreateChain}
-          style={{ position: 'absolute', top: 12, right: 12, background: 'var(--accent)', border: 'none', borderRadius: 6, padding: '8px 16px', color: '#000', fontWeight: 'bold', fontSize: 13, cursor: 'pointer', zIndex: 10 }}>
-          ➕ 创建逻辑链
+      {/* Toolbar */}
+      <div style={{ position: 'absolute', top: 12, right: 12, display: 'flex', gap: 6, zIndex: 10 }}>
+        <button
+          onClick={() => undo(nodes, edges)}
+          disabled={!canUndo}
+          title="撤销 (Ctrl+Z)"
+          style={{ ...toolbarBtn, opacity: canUndo ? 1 : 0.4 }}>
+          ↩
         </button>
-      )}
+        <button
+          onClick={() => redo(nodes, edges)}
+          disabled={!canRedo}
+          title="重做 (Ctrl+Shift+Z)"
+          style={{ ...toolbarBtn, opacity: canRedo ? 1 : 0.4 }}>
+          ↪
+        </button>
+        {nodes.length > 0 && (
+          <button onClick={handleCreateChain} style={{
+            background: 'var(--accent)', border: 'none', borderRadius: 6,
+            padding: '6px 14px', color: '#000', fontWeight: 'bold', fontSize: 12, cursor: 'pointer',
+          }}>
+            ➕ 创建逻辑链
+          </button>
+        )}
+      </div>
 
       <RelationDialog open={!!relationDialog} onClose={() => setRelationDialog(null)} onSelect={handleRelationSelect} />
     </div>
   );
 }
+
+const toolbarBtn: React.CSSProperties = {
+  background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 6,
+  padding: '6px 10px', color: 'var(--text-primary)', fontSize: 16, cursor: 'pointer',
+  width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center',
+};
