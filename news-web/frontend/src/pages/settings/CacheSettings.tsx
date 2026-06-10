@@ -1,10 +1,65 @@
+import { useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
+
+interface CacheStatus {
+  checked_at: string;
+  cache_dir: string;
+  summary: {
+    total_articles: number;
+    with_url: number;
+    cached_db: number;
+    cached_disk: number;
+    missing_disk: number;
+    orphan_files: number;
+    with_text: number;
+    with_translation: number;
+    pending_download: number;
+    failed_download: number;
+    en_articles: number;
+  };
+  recent: { id: number; title: string; source: string; fetched_at: string }[];
+}
 
 interface Props {
   cachePath: string; setCachePath: Dispatch<SetStateAction<string>>;
 }
 
 export default function CacheSettings({ cachePath, setCachePath }: Props) {
+  const [status, setStatus] = useState<CacheStatus | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [cleaning, setCleaning] = useState(false);
+  const [verifying, setVerifying] = useState(false);
+
+  const handleCheck = async () => {
+    setChecking(true);
+    try {
+      const r = await fetch('/api/cache/status');
+      const d = await r.json();
+      setStatus(d);
+    } catch { setStatus(null); }
+    setChecking(false);
+  };
+
+  const handleVerify = async () => {
+    setVerifying(true);
+    const r = await fetch('/api/cache/verify', { method: 'POST' });
+    const d = await r.json();
+    alert(d.message || '开始校验');
+    setVerifying(false);
+  };
+
+  const handleCleanOrphan = async () => {
+    if (!confirm('确定清理磁盘上所有无对应数据库记录的孤立缓存文件？')) return;
+    setCleaning(true);
+    const r = await fetch('/api/cache/orphan', { method: 'DELETE' });
+    const d = await r.json();
+    alert(d.message || '清理完成');
+    handleCheck();
+    setCleaning(false);
+  };
+
+  const s = status?.summary;
+
   return (
     <div className="settings-container">
       <div className="settings-card">
@@ -24,6 +79,91 @@ export default function CacheSettings({ cachePath, setCachePath }: Props) {
         </div>
       </div>
 
+      {/* 缓存状态检查 */}
+      <div className="settings-card">
+        <div className="card-header">
+          <h3><i className="fas fa-heartbeat" /> 缓存健康检查</h3>
+          <p className="card-description">诊断磁盘文件完整性、DB 记录一致性、翻译覆盖率</p>
+        </div>
+        <div className="card-body">
+          <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+            <button className="btn btn-primary" onClick={handleCheck} disabled={checking}>
+              <i className={`fas fa-${checking ? 'spinner fa-spin' : 'stethoscope'}`} />
+              {' '}{checking ? '检查中...' : '检查缓存状态'}
+            </button>
+            <button className="btn btn-secondary" onClick={handleVerify} disabled={verifying}
+              style={{ padding: '8px 16px', fontSize: 13 }}>
+              <i className={`fas fa-${verifying ? 'spinner fa-spin' : 'check-double'}`} />
+              {' '}校验文件完整性
+            </button>
+            <button className="btn btn-danger-sm" onClick={handleCleanOrphan} disabled={cleaning}
+              style={{ padding: '8px 16px', fontSize: 13 }}>
+              <i className="fas fa-broom" /> 清理孤立文件
+            </button>
+          </div>
+
+          {s && (
+            <>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 12 }}>
+                检查时间: {status!.checked_at.slice(0, 19).replace('T', ' ')} · 缓存目录: <code style={{ color: 'var(--accent)' }}>{status!.cache_dir}</code>
+              </div>
+
+              {/* 统计卡片 */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 8 }}>
+                <StatCard label="总文章" value={s.total_articles} icon="fa-newspaper" />
+                <StatCard label="已缓存 (DB)" value={s.cached_db} icon="fa-database" color={s.cached_db < s.total_articles * 0.5 ? 'var(--accent-orange)' : 'var(--accent-tertiary)'} />
+                <StatCard label="磁盘文件" value={s.cached_disk} icon="fa-hdd" color={s.cached_disk < s.cached_db ? 'var(--accent-orange)' : 'var(--accent-tertiary)'} />
+                <StatCard label="文本已提取" value={s.with_text} icon="fa-file-alt" />
+                <StatCard label="已翻译" value={s.with_translation} icon="fa-language" color={s.en_articles > 0 && s.with_translation < s.en_articles ? 'var(--accent-orange)' : 'var(--accent-tertiary)'} />
+                <StatCard label="下载失败" value={s.failed_download} icon="fa-exclamation-triangle" color={s.failed_download > 0 ? 'var(--accent-red)' : 'var(--text-muted)'} />
+                <StatCard label="磁盘缺失" value={s.missing_disk} icon="fa-unlink" color={s.missing_disk > 0 ? 'var(--accent-red)' : 'var(--text-muted)'} />
+                <StatCard label="孤立文件" value={s.orphan_files} icon="fa-question-circle" color={s.orphan_files > 0 ? 'var(--accent-orange)' : 'var(--text-muted)'} />
+              </div>
+
+              {/* 覆盖率进度条 */}
+              <div style={{ marginTop: 16 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>
+                  <span>缓存覆盖率</span>
+                  <span>{s.total_articles > 0 ? Math.round((s.cached_db / s.total_articles) * 100) : 0}%</span>
+                </div>
+                <div style={{ height: 6, background: 'var(--bg-primary)', borderRadius: 3, overflow: 'hidden' }}>
+                  <div style={{
+                    height: '100%', borderRadius: 3, transition: 'width 0.6s ease',
+                    width: `${s.total_articles > 0 ? (s.cached_db / s.total_articles) * 100 : 0}%`,
+                    background: s.cached_db / Math.max(s.total_articles, 1) > 0.7 ? 'var(--gradient-accent)'
+                      : s.cached_db / Math.max(s.total_articles, 1) > 0.4 ? 'linear-gradient(90deg, #ffb74d, #00d4ff)'
+                      : 'var(--gradient-secondary)',
+                  }} />
+                </div>
+              </div>
+
+              {/* 最近下载 */}
+              {status!.recent.length > 0 && (
+                <div style={{ marginTop: 16 }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                    最近下载
+                  </div>
+                  <div style={{ maxHeight: 160, overflow: 'auto' }}>
+                    {status!.recent.map(a => (
+                      <div key={a.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 11, borderBottom: '1px solid var(--border)' }}>
+                        <span style={{ color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>#{a.id} {a.title}</span>
+                        <span style={{ color: 'var(--text-muted)', marginLeft: 12, whiteSpace: 'nowrap' }}>{a.source} · {a.fetched_at?.slice(5, 16).replace('T', ' ')}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {!s && !checking && (
+            <div style={{ color: 'var(--text-muted)', fontSize: 12, textAlign: 'center', padding: 16 }}>
+              <i className="fas fa-arrow-up" style={{ marginRight: 6 }} /> 点击"检查缓存状态"扫描当前缓存完整性
+            </div>
+          )}
+        </div>
+      </div>
+
       <div className="settings-card">
         <div className="card-header">
           <h3><i className="fas fa-info-circle" /> 缓存策略</h3>
@@ -40,3 +180,16 @@ export default function CacheSettings({ cachePath, setCachePath }: Props) {
     </div>
   );
 }
+
+const StatCard = ({ label, value, icon, color }: { label: string; value: number; icon: string; color?: string }) => (
+  <div style={{
+    background: 'var(--bg-card)', border: '1px solid var(--border)',
+    borderRadius: 8, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10,
+  }}>
+    <i className={`fas ${icon}`} style={{ color: color || 'var(--accent)', fontSize: 16, width: 22, textAlign: 'center' }} />
+    <div>
+      <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>{label}</div>
+      <div style={{ fontSize: 16, fontWeight: 700, color: color || 'var(--text-primary)' }}>{value}</div>
+    </div>
+  </div>
+);
