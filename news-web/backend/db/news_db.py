@@ -260,9 +260,20 @@ class NewsDB:
                                # AI 摘要缓存 + 标注状态
                                ('ai_summary','TEXT DEFAULT \'\''),
                                ('ai_analyzed','INTEGER DEFAULT 0'),
-                               ('human_processed','INTEGER DEFAULT 0')]:
+                               ('human_processed','INTEGER DEFAULT 0'),
+                               # AI 语义字段
+                               ('ai_keywords','TEXT DEFAULT \'\''),
+                               ('ai_category','TEXT DEFAULT \'\''),
+                               ('ai_tags','TEXT DEFAULT \'\''),
+                               ('ai_priority_score','REAL DEFAULT 0.0')]:
                 try:
                     conn.execute(f"ALTER TABLE articles ADD COLUMN {col} {dtype}")
+                except sqlite3.OperationalError:
+                    pass
+            # 迁移：给 events 表加 ai_summary
+            for col, dtype in [('ai_summary','TEXT DEFAULT \'\'')]:
+                try:
+                    conn.execute(f"ALTER TABLE events ADD COLUMN {col} {dtype}")
                 except sqlite3.OperationalError:
                     pass
             # 迁移：给 events 表加 priority_label

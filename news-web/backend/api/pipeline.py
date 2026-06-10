@@ -464,3 +464,238 @@ def start_build_chains():
     threading.Thread(target=_build_logic_chains, daemon=True).start()
     return {"ok": True, "message": "开始构筑逻辑链"}
 
+
+# ═════════════════════════════════════════════════════════
+# AI 接管批量端点 — 关键词 / 分类 / 评分 / 重聚类 / 事件摘要
+# ═════════════════════════════════════════════════════════
+
+_kw_state    = _new_state()
+_cls_state   = _new_state()
+_score_state = _new_state()
+_recluster_state  = _new_state()
+_evt_sum_state    = _new_state()
+
+
+def _batch_ai_keywords():
+    global _kw_state
+    _kw_state = _new_state(); _kw_state["running"] = True
+    try:
+        db = _conn()
+        rows = db.execute("SELECT id, title, text_content, source FROM articles WHERE text_content != '' AND (ai_keywords IS NULL OR ai_keywords = '') ORDER BY id DESC").fetchall(); db.close()
+        if not rows: _kw_state["running"] = False; return
+        _kw_state["total"] = len(rows)
+        _log(_kw_state, f"待提取关键词 {len(rows)} 篇")
+        from ai_client import extract_keywords_ai
+        import json as _json
+        for idx, (aid, title, text, source) in enumerate(rows, 1):
+            _kw_state["current"] = f"#{aid} {title[:50]}"
+            if _hp_check(aid): _log(_kw_state, f"#{aid} ⏭️ 人工已处理"); _kw_state["done"] += 1; continue
+            kws = extract_keywords_ai(title, text[:2000], source or "")
+            if kws:
+                db2 = _conn()
+                db2.execute("UPDATE articles SET keywords=?, ai_keywords=? WHERE id=?", (_json.dumps(kws, ensure_ascii=False), _json.dumps(kws, ensure_ascii=False), aid))
+                db2.commit(); db2.close()
+                _log(_kw_state, f"#{aid} ✅ {len(kws)} 个关键词: {', '.join(kws[:5])}")
+            else:
+                _log(_kw_state, f"#{aid} ⚠️ AI 返回空"); _kw_state["failed"] += 1
+            _kw_state["done"] += 1
+            time.sleep(0.8) if idx < len(rows) else None
+    except Exception as e: logger.error(f"batch-keywords: {e}")
+    finally: _kw_state["running"] = False
+
+
+def _batch_ai_classify():
+    global _cls_state
+    _cls_state = _new_state(); _cls_state["running"] = True
+    try:
+        db = _conn()
+        rows = db.execute("SELECT id, title, text_content FROM articles WHERE text_content != '' AND (ai_category IS NULL OR ai_category = '') ORDER BY id DESC").fetchall(); db.close()
+        if not rows: _cls_state["running"] = False; return
+        _cls_state["total"] = len(rows)
+        _log(_cls_state, f"待分类 {len(rows)} 篇")
+        from ai_client import classify_article_ai
+        import json as _json
+        for idx, (aid, title, text) in enumerate(rows, 1):
+            _cls_state["current"] = f"#{aid} {title[:50]}"
+            if _hp_check(aid): _log(_cls_state, f"#{aid} ⏭️ 人工已处理"); _cls_state["done"] += 1; continue
+            r = classify_article_ai(title, text[:1800])
+            if r:
+                db2 = _conn()
+                db2.execute("UPDATE articles SET ai_category=?, ai_tags=? WHERE id=?", (r.get("category",""), _json.dumps(r.get("tags",[]), ensure_ascii=False), aid))
+                db2.commit(); db2.close()
+                _log(_cls_state, f"#{aid} ✅ {r.get('category','?')} — {', '.join(r.get('tags',[])[:3])}")
+            else:
+                _log(_cls_state, f"#{aid} ⚠️ AI 返回空"); _cls_state["failed"] += 1
+            _cls_state["done"] += 1
+            time.sleep(0.8) if idx < len(rows) else None
+    except Exception as e: logger.error(f"batch-classify: {e}")
+    finally: _cls_state["running"] = False
+
+
+def _batch_ai_score():
+    global _score_state
+    _score_state = _new_state(); _score_state["running"] = True
+    try:
+        db = _conn()
+        rows = db.execute("SELECT id, title, text_content, source, fetched_at FROM articles WHERE text_content != '' AND (ai_priority_score IS NULL OR ai_priority_score = 0.0) ORDER BY id DESC").fetchall(); db.close()
+        if not rows: _score_state["running"] = False; return
+        _score_state["total"] = len(rows)
+        _log(_score_state, f"待评分 {len(rows)} 篇")
+        from ai_client import score_priority_ai
+        from datetime import datetime as _dt
+        for idx, (aid, title, text, source, fetched_at) in enumerate(rows, 1):
+            _score_state["current"] = f"#{aid} {title[:50]}"
+            if _hp_check(aid): _log(_score_state, f"#{aid} ⏭️ 人工已处理"); _score_state["done"] += 1; continue
+            try:
+                days = max(0, (_dt.now() - _dt.fromisoformat(fetched_at)).days) if fetched_at else 0
+            except Exception:
+                days = 0
+            r = score_priority_ai(title, text[:1800], source or "Unknown", days)
+            if r:
+                db2 = _conn()
+                db2.execute("UPDATE articles SET priority_score=?, priority_label=?, ai_priority_score=? WHERE id=?", (r["score"], r.get("label","medium"), r["score"], aid))
+                db2.commit(); db2.close()
+                _log(_score_state, f"#{aid} ✅ {r.get('label','medium')}({r['score']:.2f}) — {r.get('reason','')}")
+            else:
+                _log(_score_state, f"#{aid} ⚠️ AI 返回空"); _score_state["failed"] += 1
+            _score_state["done"] += 1
+            time.sleep(0.8) if idx < len(rows) else None
+    except Exception as e: logger.error(f"batch-score: {e}")
+    finally: _score_state["running"] = False
+
+
+def _batch_ai_recluster():
+    global _recluster_state
+    _recluster_state = _new_state(); _recluster_state["running"] = True
+    try:
+        db = _conn()
+        unlinked = db.execute("SELECT a.id, a.title FROM articles a LEFT JOIN article_events ae ON a.id=ae.article_id WHERE ae.article_id IS NULL AND a.text_content!=''").fetchall()
+        events  = db.execute("SELECT id, title FROM events WHERE status='active'").fetchall()
+        db.close()
+        if not unlinked: _recluster_state["running"] = False; return
+        _recluster_state["total"] = len(unlinked)
+        _log(_recluster_state, f"待聚类 {len(unlinked)} 篇 → {len(events)} 个活跃事件")
+        from ai_client import assess_event_similarity_ai
+        for idx, (aid, art_title) in enumerate(unlinked, 1):
+            _recluster_state["current"] = f"#{aid} {art_title[:50]}"
+            best_id, best_conf = None, 0
+            for evt_id, evt_title in events:
+                r = assess_event_similarity_ai(art_title, evt_title)
+                if r and r.get("similar") and r.get("confidence", 0) > best_conf:
+                    best_conf = r["confidence"]; best_id = evt_id
+            if best_id and best_conf > 0.5:
+                db2 = _conn()
+                db2.execute("INSERT OR IGNORE INTO article_events (article_id, event_id, relevance) VALUES (?, ?, ?)", (aid, best_id, round(best_conf, 2)))
+                db2.execute("UPDATE events SET article_count=article_count+1 WHERE id=?", (best_id,))
+                db2.commit(); db2.close()
+                _log(_recluster_state, f"#{aid} ✅ -> 事件#{best_id} (置信度 {best_conf:.2f})")
+            else:
+                _log(_recluster_state, f"#{aid} ➕ 创建新事件")
+                from datetime import datetime as _dt
+                now = _dt.now().isoformat(timespec='seconds')
+                db2 = _conn()
+                cur = db2.execute("INSERT INTO events (title, first_seen, last_seen, status) VALUES (?,?,?,'active')", (art_title[:80], now[:10], now[:10]))
+                db2.execute("INSERT INTO article_events (article_id, event_id) VALUES (?,?)", (aid, cur.lastrowid))
+                db2.commit(); db2.close()
+            _recluster_state["done"] += 1
+            time.sleep(1.0) if idx < len(unlinked) else None
+    except Exception as e: logger.error(f"batch-recluster: {e}")
+    finally: _recluster_state["running"] = False
+
+
+def _batch_ai_summarize_events():
+    global _evt_sum_state
+    _evt_sum_state = _new_state(); _evt_sum_state["running"] = True
+    try:
+        db = _conn()
+        events = db.execute("SELECT id, article_count FROM events WHERE article_count >= 2 AND (ai_summary IS NULL OR ai_summary = '')").fetchall(); db.close()
+        if not events: _evt_sum_state["running"] = False; return
+        _evt_sum_state["total"] = len(events)
+        _log(_evt_sum_state, f"待生成摘要 {len(events)} 个事件")
+        from ai_client import generate_event_summary_ai
+        for idx, (evt_id, _) in enumerate(events, 1):
+            _evt_sum_state["current"] = f"事件#{evt_id}"
+            db2 = _conn()
+            titles = [r[0] for r in db2.execute("SELECT a.title FROM articles a JOIN article_events ae ON ae.article_id=a.id WHERE ae.event_id=?", (evt_id,)).fetchall()]
+            db2.close()
+            if len(titles) < 2: _evt_sum_state["done"] += 1; continue
+            block = "\n".join(f"- {t}" for t in titles[:15])
+            summary = generate_event_summary_ai(block)
+            if summary:
+                db2 = _conn()
+                db2.execute("UPDATE events SET ai_summary=? WHERE id=?", (summary, evt_id))
+                db2.commit(); db2.close()
+                _log(_evt_sum_state, f"#{evt_id} ✅ {len(summary)} 字")
+            else:
+                _log(_evt_sum_state, f"#{evt_id} ⚠️ AI 返回空"); _evt_sum_state["failed"] += 1
+            _evt_sum_state["done"] += 1
+            time.sleep(0.8) if idx < len(events) else None
+    except Exception as e: logger.error(f"batch-summarize-events: {e}")
+    finally: _evt_sum_state["running"] = False
+
+
+def _hp_check(aid: int) -> bool:
+    """检查文章是否人工已处理"""
+    db = _conn()
+    r = db.execute("SELECT human_processed FROM articles WHERE id=?", (aid,)).fetchone()
+    db.close()
+    return bool(r and r[0])
+
+
+# ── 端点 ─────────────────────────────────────────
+
+def _batch_status(state, total_label: str, done_label: str):
+    """通用的批量进度查询"""
+    return dict(state)
+
+@router.post("/batch-keywords")
+def start_batch_keywords():
+    global _kw_state
+    if _kw_state.get("running"): return {"ok": False, "message": "关键词提取已在运行中"}
+    db = _conn(); n = db.execute("SELECT COUNT(*) FROM articles WHERE text_content!='' AND (ai_keywords IS NULL OR ai_keywords='')").fetchone()[0]; db.close()
+    threading.Thread(target=_batch_ai_keywords, daemon=True).start()
+    return {"ok": True, "message": f"启动 AI 关键词提取，预计 {n} 篇", "pending": n}
+
+@router.post("/batch-classify")
+def start_batch_classify():
+    global _cls_state
+    if _cls_state.get("running"): return {"ok": False, "message": "分类已在运行中"}
+    db = _conn(); n = db.execute("SELECT COUNT(*) FROM articles WHERE text_content!='' AND (ai_category IS NULL OR ai_category='')").fetchone()[0]; db.close()
+    threading.Thread(target=_batch_ai_classify, daemon=True).start()
+    return {"ok": True, "message": f"启动 AI 分类，预计 {n} 篇", "pending": n}
+
+@router.post("/batch-score")
+def start_batch_score():
+    global _score_state
+    if _score_state.get("running"): return {"ok": False, "message": "评分已在运行中"}
+    db = _conn(); n = db.execute("SELECT COUNT(*) FROM articles WHERE text_content!='' AND (ai_priority_score IS NULL OR ai_priority_score=0.0)").fetchone()[0]; db.close()
+    threading.Thread(target=_batch_ai_score, daemon=True).start()
+    return {"ok": True, "message": f"启动 AI 评分，预计 {n} 篇", "pending": n}
+
+@router.post("/batch-recluster")
+def start_batch_recluster():
+    global _recluster_state
+    if _recluster_state.get("running"): return {"ok": False, "message": "重聚类已在运行中"}
+    db = _conn(); n = db.execute("SELECT COUNT(*) FROM articles a LEFT JOIN article_events ae ON a.id=ae.article_id WHERE ae.article_id IS NULL AND a.text_content!=''").fetchone()[0]; db.close()
+    threading.Thread(target=_batch_ai_recluster, daemon=True).start()
+    return {"ok": True, "message": f"启动智能重聚类，预计 {n} 篇", "pending": n}
+
+@router.post("/batch-summarize-events")
+def start_batch_summarize_events():
+    global _evt_sum_state
+    if _evt_sum_state.get("running"): return {"ok": False, "message": "事件摘要已在运行中"}
+    db = _conn(); n = db.execute("SELECT COUNT(*) FROM events WHERE article_count>=2 AND (ai_summary IS NULL OR ai_summary='')").fetchone()[0]; db.close()
+    threading.Thread(target=_batch_ai_summarize_events, daemon=True).start()
+    return {"ok": True, "message": f"启动事件摘要，预计 {n} 个事件", "pending": n}
+
+@router.get("/batch-keywords/status")
+def get_batch_keywords_status(): return dict(_kw_state)
+@router.get("/batch-classify/status")
+def get_batch_classify_status(): return dict(_cls_state)
+@router.get("/batch-score/status")
+def get_batch_score_status(): return dict(_score_state)
+@router.get("/batch-recluster/status")
+def get_batch_recluster_status(): return dict(_recluster_state)
+@router.get("/batch-summarize-events/status")
+def get_batch_summarize_events_status(): return dict(_evt_sum_state)
+

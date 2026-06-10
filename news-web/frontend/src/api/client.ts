@@ -126,6 +126,18 @@ export const api = {
   startBuildChains: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/build-chains', { method: 'POST' }),
   getBuildChainsStatus: () => fetchJSON<{ running: boolean; total_groups: number; chains_created: number; current: string }>('/pipeline/build-chains/status'),
 
+  // AI 接管批量端点
+  startBatchKeywords: () => fetchJSON<{ ok: boolean; message: string; pending: number }>('/pipeline/batch-keywords', { method: 'POST' }),
+  getBatchKeywordsStatus: () => fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string; log: string[] }>('/pipeline/batch-keywords/status'),
+  startBatchClassify: () => fetchJSON<{ ok: boolean; message: string; pending: number }>('/pipeline/batch-classify', { method: 'POST' }),
+  getBatchClassifyStatus: () => fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string; log: string[] }>('/pipeline/batch-classify/status'),
+  startBatchScore: () => fetchJSON<{ ok: boolean; message: string; pending: number }>('/pipeline/batch-score', { method: 'POST' }),
+  getBatchScoreStatus: () => fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string; log: string[] }>('/pipeline/batch-score/status'),
+  startBatchRecluster: () => fetchJSON<{ ok: boolean; message: string; pending: number }>('/pipeline/batch-recluster', { method: 'POST' }),
+  getBatchReclusterStatus: () => fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string; log: string[] }>('/pipeline/batch-recluster/status'),
+  startBatchSummarizeEvents: () => fetchJSON<{ ok: boolean; message: string; pending: number }>('/pipeline/batch-summarize-events', { method: 'POST' }),
+  getBatchSummarizeEventsStatus: () => fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string; log: string[] }>('/pipeline/batch-summarize-events/status'),
+
   getNotifications: (params: { limit?: number; unread_only?: boolean } = {}) => {
     const qs = new URLSearchParams();
     if (params.limit) qs.set('limit', String(params.limit));

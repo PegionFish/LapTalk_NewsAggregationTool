@@ -18,10 +18,20 @@ export default function Dashboard() {
   const [analyState, setAnalyState] = useState<BatchState>(emptyBatch);
   const [chaining, setChaining] = useState(false);
   const [chainState, setChainState] = useState<ChainState>(emptyChain);
+  const [kwRunning, setKwRunning] = useState(false); const [kwState, setKwState] = useState<BatchState>(emptyBatch);
+  const [clsRunning, setClsRunning] = useState(false); const [clsState, setClsState] = useState<BatchState>(emptyBatch);
+  const [scoreRunning, setScoreRunning] = useState(false); const [scoreState, setScoreState] = useState<BatchState>(emptyBatch);
+  const [reclRunning, setReclRunning] = useState(false); const [reclState, setReclState] = useState<BatchState>(emptyBatch);
+  const [esRunning, setEsRunning] = useState(false); const [esState, setEsState] = useState<BatchState>(emptyBatch);
 
   const transTimer = useRef<ReturnType<typeof setInterval>>();
   const analyTimer  = useRef<ReturnType<typeof setInterval>>();
   const chainTimer  = useRef<ReturnType<typeof setInterval>>();
+  const kwTimer = useRef<ReturnType<typeof setInterval>>();
+  const clsTimer = useRef<ReturnType<typeof setInterval>>();
+  const scoreTimer = useRef<ReturnType<typeof setInterval>>();
+  const reclTimer = useRef<ReturnType<typeof setInterval>>();
+  const esTimer = useRef<ReturnType<typeof setInterval>>();
 
   const poll = useCallback((fn: () => Promise<unknown>, setter: (v: unknown) => void, stop: () => void, timer: ReturnType<typeof useRef<ReturnType<typeof setInterval>>>) => {
     fn().then(v => { setter(v); if (!(v as BatchState).running) { stop(); clearInterval(timer.current); } }).catch(stop);
@@ -51,6 +61,17 @@ export default function Dashboard() {
   const handleTranslate = startPoll(api.startBatchTranslate, pollTranslate, transTimer, setTranslating);
   const handleAnalyze   = startPoll(api.startBatchAnalyze, pollAnalyze, analyTimer, setAnalyzing);
   const handleBuildChains = startPoll(api.startBuildChains, pollChains, chainTimer, setChaining);
+
+  const pollKw = useCallback(() => poll(api.getBatchKeywordsStatus, v => {const s=v as BatchState; setKwState(s); if(!s.running){setKwRunning(false);clearInterval(kwTimer.current)}},(()=>setKwRunning(false)),kwTimer),[]);
+  const handleKeywords = startPoll(api.startBatchKeywords, pollKw, kwTimer, setKwRunning);
+  const pollCls = useCallback(() => poll(api.getBatchClassifyStatus, v => {const s=v as BatchState; setClsState(s); if(!s.running){setClsRunning(false);clearInterval(clsTimer.current)}},(()=>setClsRunning(false)),clsTimer),[]);
+  const handleClassify = startPoll(api.startBatchClassify, pollCls, clsTimer, setClsRunning);
+  const pollSc = useCallback(() => poll(api.getBatchScoreStatus, v => {const s=v as BatchState; setScoreState(s); if(!s.running){setScoreRunning(false);clearInterval(scoreTimer.current)}},(()=>setScoreRunning(false)),scoreTimer),[]);
+  const handleScore = startPoll(api.startBatchScore, pollSc, scoreTimer, setScoreRunning);
+  const pollRecl = useCallback(() => poll(api.getBatchReclusterStatus, v => {const s=v as BatchState; setReclState(s); if(!s.running){setReclRunning(false);clearInterval(reclTimer.current)}},(()=>setReclRunning(false)),reclTimer),[]);
+  const handleRecluster = startPoll(api.startBatchRecluster, pollRecl, reclTimer, setReclRunning);
+  const pollEs = useCallback(() => poll(api.getBatchSummarizeEventsStatus, v => {const s=v as BatchState; setEsState(s); if(!s.running){setEsRunning(false);clearInterval(esTimer.current)}},(()=>setEsRunning(false)),esTimer),[]);
+  const handleSummarizeEvents = startPoll(api.startBatchSummarizeEvents, pollEs, esTimer, setEsRunning);
 
   const progressPct = (done: number, total: number) => total > 0 ? Math.round((done / total) * 100) : 0;
 
@@ -101,6 +122,17 @@ export default function Dashboard() {
             </div>
             {chainState.log?.length! > 0 && <LogPanel entries={chainState.log!} />}
           </div>
+        </div>
+      )}
+
+      {/* ── AI 语义处理 ── */}
+      {stats && (
+        <div style={{ marginTop: 16, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16 }}>
+          <Card icon="fa-tags" color="var(--accent-tertiary)" title="AI 关键词提取" desc="从文章正文提取技术关键词，替代硬编码映射表" state={kwState} running={kwRunning} onClick={handleKeywords} label="提取关键词" />
+          <Card icon="fa-folder-tree" color="var(--accent)" title="AI 智能分类" desc="自动归类文章细粒度领域 + 生成标签" state={clsState} running={clsRunning} onClick={handleClassify} label="智能分类" />
+          <Card icon="fa-star" color="var(--accent-orange)" title="AI 优先级评分" desc="AI 综合评估文章重要性、时效性、影响力" state={scoreState} running={scoreRunning} onClick={handleScore} label="智能评分" />
+          <Card icon="fa-object-group" color="var(--accent-purple)" title="智能事件重聚类" desc="AI 重新判定文章归属事件，修正误聚类" state={reclState} running={reclRunning} onClick={handleRecluster} label="重聚类" />
+          <Card icon="fa-file-lines" color="var(--accent-green)" title="事件摘要生成" desc="为多篇文章的事件生成综合 AI 摘要" state={esState} running={esRunning} onClick={handleSummarizeEvents} label="生成摘要" />
         </div>
       )}
 
@@ -162,3 +194,20 @@ const logGreen: React.CSSProperties  = { color: '#81c784' };
 const logBlue: React.CSSProperties   = { color: '#90caf9' };
 const logYellow: React.CSSProperties = { color: '#ffb74d' };
 const logRed: React.CSSProperties    = { color: '#ef5350' };
+
+// 通用卡片组件 — 5 张 AI 卡片复用
+const Card = ({ icon, color, title, desc, state, running, onClick, label }: {
+  icon: string; color: string; title: string; desc: string; state: BatchState; running: boolean; onClick: () => void; label: string;
+}) => (
+  <div style={card}>
+    <div style={cardHeader}>
+      <i className={`fas ${icon}`} style={{ color, fontSize: 18 }} />
+      <div><div style={{ fontWeight: 600, fontSize: 14 }}>{title}</div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{desc}</div></div>
+    </div>
+    <div style={cardBody}>
+      <Btn onClick={onClick} disabled={running} color={color} label={label} running={running} />
+      {state.total > 0 && <Progress done={state.done} total={state.total} failed={state.failed} current={state.current} pct={state.total > 0 ? Math.round((state.done / state.total) * 100) : 0} color={color} />}
+    </div>
+    {state.log?.length! > 0 && <LogPanel entries={state.log!} />}
+  </div>
+);
