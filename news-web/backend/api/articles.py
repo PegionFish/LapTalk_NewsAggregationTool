@@ -121,13 +121,69 @@ def update_article(article_id: int, body: ArticleUpdate):
     return {'ok': True}
 
 @router.get("/{article_id}/content")
-async def proxy_article_content(article_id: int):
-    """Proxy fetch the original article content, carrying the configured UA."""
+async def get_article_content(article_id: int):
+    """获取文章内容 — 三级回退：DB缓存 → 磁盘文件 → 代理获取。
+    返回结构化 JSON（原文 content + 译文 translation 独立不覆盖）。"""
     db = get_db()
     with db._conn() as conn:
-        row = conn.execute("SELECT url FROM articles WHERE id=?", (article_id,)).fetchone()
-    if not row or not row[0]:
+        row = conn.execute(
+            "SELECT url, local_path, text_content, translated_content, content_lang, content_status "
+            "FROM articles WHERE id=?", (article_id,)
+        ).fetchone()
+    if not row:
+        raise HTTPException(404, "article_not_found")
+
+    url, local_path, text_content, translated_content, content_lang, content_status = row
+
+    # 1. DB 文本缓存已存在 → 直接返回
+    if text_content:
+        return {
+            "url": url,
+            "content": text_content,
+            "translation": translated_content or "",
+            "lang": content_lang,
+            "status": content_status,
+            "source": "local",
+        }
+
+    # 2. 磁盘 HTML 文件存在 → 实时提取
+    if local_path and not local_path.startswith('[ERR:'):
+        import os
+        cache_dir = config.content_cache_path
+        full_path = os.path.join(cache_dir, os.path.basename(local_path))
+        if os.path.isfile(full_path):
+            from utils.text import extract_text_from_html, detect_language
+            with open(full_path, 'r', encoding='utf-8') as f:
+                html = f.read()
+            text = extract_text_from_html(html)
+            lang = detect_language(text)
+            return {
+                "url": url,
+                "content": text,
+                "translation": "",
+                "lang": lang,
+                "status": "cached",
+                "source": "local",
+            }
+
+    # 3. 回退：代理获取原文
+    if not url:
         raise HTTPException(404, "no_url")
     async with httpx.AsyncClient() as client:
-        resp = await client.get(row[0], headers={'User-Agent': config.user_agent}, follow_redirects=True, timeout=15)
-    return resp.text
+        try:
+            resp = await client.get(url, headers={'User-Agent': config.user_agent},
+                                    follow_redirects=True, timeout=15)
+            from utils.text import extract_text_from_html, detect_language
+            html = resp.text
+            text = extract_text_from_html(html)
+            lang = detect_language(text)
+            return {
+                "url": url,
+                "content": text,
+                "translation": "",
+                "lang": lang,
+                "status": "proxied",
+                "source": "remote",
+            }
+        except Exception as e:
+            raise HTTPException(502, f"fetch_failed: {str(e)[:80]}")
