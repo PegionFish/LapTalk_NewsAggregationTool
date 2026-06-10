@@ -162,7 +162,7 @@ export default function Dashboard() {
               </button>
               {analyState.total > 0 && (
                 <div style={{ flex: 1, marginLeft: 12 }}>
-                  <div style={progressText}>{analyState.done}/{analyState.total} · {analyState.failed > 0 ? `${analyState.failed} 失败 ` : ''}{progressPct(analyState.done, analyzeState.total)}%</div>
+                  <div style={progressText}>{analyState.done}/{analyState.total} · {analyState.failed > 0 ? `${analyState.failed} 失败 ` : ''}{progressPct(analyState.done, analyState.total)}%</div>
                   <div style={track}><div style={{ ...bar, width: `${progressPct(analyState.done, analyState.total)}%`, background: 'var(--accent)' }} /></div>
                   {analyState.current && <div style={{ fontSize: 10, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{analyState.current}</div>}
                 </div>

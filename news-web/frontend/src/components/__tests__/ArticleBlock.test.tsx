@@ -16,6 +16,7 @@ const mockArticle: Article = {
   verified: 1,
   keywords: ['Intel', 'Nova Lake', 'CPU'],
   human_tags: [],
+  content_status: 'fetched',
 };
 
 describe('ArticleBlock', () => {

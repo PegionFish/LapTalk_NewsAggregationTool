@@ -86,9 +86,11 @@ export interface Stats {
   active_events: number;
   human_verified: number;
   by_category: Record<string, number>;
-  cache_cached: number;   // 已缓存 (fetched + translated)
-  cache_pending: number;  // 待下载
-  cache_failed: number;   // 下载失败
+  cache_cached: number;      // 已缓存 HTML (local_path 有效)
+  cache_text: number;        // 文本已提取 (text_content)
+  cache_translated: number;  // 翻译已完成
+  cache_pending: number;     // 待下载
+  cache_failed: number;      // 下载失败
 }
 
 export interface PaginatedResponse<T> {

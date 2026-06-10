@@ -1010,16 +1010,26 @@ class NewsDB:
             by_cat = conn.execute(
                 "SELECT category, COUNT(*) FROM articles GROUP BY category"
             ).fetchall()
-            # 缓存状态统计
+            # 缓存状态统计 — 与 cache.py 保持一致的口径
+            # HTML 已下载到磁盘（有 local_path 且非错误标记）
             cache_cached = conn.execute(
-                "SELECT COUNT(*) FROM articles WHERE content_status IN ('fetched','translated')"
+                "SELECT COUNT(*) FROM articles WHERE local_path != '' AND local_path NOT LIKE '[ERR:%'"
             ).fetchone()[0]
-            cache_pending = conn.execute(
-                "SELECT COUNT(*) FROM articles WHERE content_status='pending'"
+            # 文本已提取（可从 DB 直接阅读/分析）
+            cache_text = conn.execute(
+                "SELECT COUNT(*) FROM articles WHERE text_content != ''"
             ).fetchone()[0]
+            # 翻译已完成
+            cache_translated = conn.execute(
+                "SELECT COUNT(*) FROM articles WHERE translated_content != ''"
+            ).fetchone()[0]
+            # 下载失败
             cache_failed = conn.execute(
-                "SELECT COUNT(*) FROM articles WHERE content_status='failed'"
+                "SELECT COUNT(*) FROM articles WHERE local_path LIKE '[ERR:%'"
             ).fetchone()[0]
+            # 从未尝试下载
+            total_for_cache = conn.execute("SELECT COUNT(*) FROM articles").fetchone()[0]
+            cache_pending = total_for_cache - cache_cached - cache_failed
             return {
                 'articles': articles,
                 'events': events,
@@ -1027,6 +1037,8 @@ class NewsDB:
                 'human_verified': verified,
                 'by_category': dict(by_cat),
                 'cache_cached': cache_cached,
+                'cache_text': cache_text,
+                'cache_translated': cache_translated,
                 'cache_pending': cache_pending,
                 'cache_failed': cache_failed,
             }
