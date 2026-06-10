@@ -11,3 +11,8 @@ venv/
 *.db.*
 *.backup.*
 .superpowers/
+
+# 运行时配置（含密钥）
+news-web/config.json
+logs/
+pids/
