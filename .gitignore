@@ -6,7 +6,7 @@ __pycache__/
 .env
 .venv/
 venv/
-logs/*.log
+**/logs/*.log
 *.db
 *.db.*
 *.backup.*
