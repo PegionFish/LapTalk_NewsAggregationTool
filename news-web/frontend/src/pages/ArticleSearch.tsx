@@ -103,7 +103,8 @@ export default function ArticleSearch() {
             </div>
           )}
           <div style={{ display: 'flex', gap: 8 }}>
-            <a href={selected.url} target="_blank" rel="noopener noreferrer" style={{ background: 'var(--accent)', padding: '6px 14px', borderRadius: 6, fontSize: 12, color: '#000', textDecoration: 'none' }}>打开原文</a>
+            <a href={`/articles/${selected.id}`} style={{ background: 'var(--accent)', padding: '6px 14px', borderRadius: 6, fontSize: 12, color: '#000', textDecoration: 'none' }}>阅读全文</a>
+            <a href={selected.url} target="_blank" rel="noopener noreferrer" style={{ background: 'var(--bg-card)', padding: '6px 14px', borderRadius: 6, fontSize: 12, color: 'var(--accent)', textDecoration: 'none' }}>打开原文</a>
             {selected.event && (
               <a href={`/workspace?event=${selected.event.id}`} style={{ background: 'var(--bg-card)', padding: '6px 14px', borderRadius: 6, fontSize: 12, color: 'var(--accent)', textDecoration: 'none' }}>查看所属事件 →</a>
             )}

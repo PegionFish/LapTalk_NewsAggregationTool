@@ -8,6 +8,7 @@ import ArticleSearch from './pages/ArticleSearch';
 import ChainList from './pages/ChainList';
 import Settings from './pages/Settings';
 import Login from './pages/Login';
+import ArticleReader from './pages/ArticleReader';
 
 // ── Error Boundary ────────────────────────────────────────
 class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: Error | null }> {
@@ -51,6 +52,7 @@ function AuthedApp() {
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/workspace" element={<Workspace />} />
+          <Route path="/articles/:id" element={<ArticleReader />} />
           <Route path="/articles" element={<ArticleSearch />} />
           <Route path="/chains" element={<ChainList />} />
           <Route path="/settings" element={<Settings />} />

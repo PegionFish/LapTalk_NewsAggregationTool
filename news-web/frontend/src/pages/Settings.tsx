@@ -12,6 +12,13 @@ export default function Settings() {
   const [message, setMessage] = useState('');
   const [pipelineRunning, setPipelineRunning] = useState(false);
   const [pipelineStatus, setPipelineStatus] = useState<{ last_run?: string | null; last_status?: string | null; current_step?: string | null }>({});
+  // 翻译 API
+  const [translationEnabled, setTranslationEnabled] = useState(false);
+  const [translationBaseUrl, setTranslationBaseUrl] = useState('');
+  const [translationApiKey, setTranslationApiKey] = useState('');
+  const [translationModel, setTranslationModel] = useState('');
+  // 缓存路径
+  const [cachePath, setCachePath] = useState('');
 
   useEffect(() => {
     api.getSettings().then(s => {
@@ -21,8 +28,12 @@ export default function Settings() {
       setOpenaiApiKey(s.openai_api_key || '');
       setOpenaiModel(s.openai_model || 'gpt-4o-mini');
       setPipelineEnabled(s.pipeline_schedule_enabled !== false);
+      setTranslationEnabled(s.translation_enabled === true);
+      setTranslationBaseUrl(s.translation_base_url || 'https://api.siliconflow.cn/v1');
+      setTranslationApiKey(s.translation_api_key || '');
+      setTranslationModel(s.translation_model || 'deepseek-ai/DeepSeek-V3-0324');
+      setCachePath(s.content_cache_path || '');
     }).catch(() => {});
-    // 获取当前管道状态
     api.getPipelineStatus().then(s => setPipelineStatus(s)).catch(() => {});
   }, []);
 
@@ -73,6 +84,11 @@ export default function Settings() {
         openai_api_key: openaiApiKey,
         openai_model: openaiModel,
         pipeline_schedule_enabled: pipelineEnabled,
+        translation_enabled: translationEnabled,
+        translation_base_url: translationBaseUrl,
+        translation_api_key: translationApiKey,
+        translation_model: translationModel,
+        content_cache_path: cachePath,
       });
       setMessage('已保存');
     } catch (e) {
@@ -144,6 +160,33 @@ export default function Settings() {
             </div>
           )}
         </div>
+
+        <h3 style={{ fontSize: 14, marginTop: 20, marginBottom: 8, color: 'var(--accent)' }}>翻译 API（硅基流动 DeepSeek V3.2）</h3>
+        <label style={{ ...labelStyle, flexDirection: 'row', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input type="checkbox" checked={translationEnabled} onChange={e => setTranslationEnabled(e.target.checked)}
+            style={{ width: 16, height: 16 }} />
+          <span>启用 AI 翻译（英文文章自动译中文）</span>
+        </label>
+        <label style={labelStyle}>
+          🔗 API 地址
+          <input value={translationBaseUrl} onChange={e => setTranslationBaseUrl(e.target.value)} style={inputStyle} />
+        </label>
+        <label style={labelStyle}>
+          🔑 API Key
+          <input value={translationApiKey} onChange={e => setTranslationApiKey(e.target.value)} type="password" style={inputStyle} />
+        </label>
+        <label style={labelStyle}>
+          🤖 模型
+          <input value={translationModel} onChange={e => setTranslationModel(e.target.value)} style={inputStyle} />
+        </label>
+        <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>默认指向硅基流动，约 ¥1/百万 token</div>
+
+        <h3 style={{ fontSize: 14, marginTop: 20, marginBottom: 8, color: 'var(--accent)' }}>缓存</h3>
+        <label style={labelStyle}>
+          📁 内容缓存目录
+          <input value={cachePath} onChange={e => setCachePath(e.target.value)} placeholder="留空则为数据库同级的 content/ 目录" style={inputStyle} />
+        </label>
+        <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>下载的文章 HTML 和提取的文本存放于此</div>
 
         <h3 style={{ fontSize: 14, marginTop: 20, marginBottom: 8, color: 'var(--accent)' }}>网络</h3>
         <label style={labelStyle}>

@@ -67,6 +67,15 @@ export interface ChainEvent {
   note: string;
 }
 
+export interface ArticleContent {
+  url: string;
+  content: string;
+  translation: string;
+  lang: string;
+  status: string;
+  source: 'local' | 'remote';
+}
+
 export interface Stats {
   articles: number;
   events: number;
