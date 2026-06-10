@@ -57,7 +57,7 @@ export default function ArticleReader() {
           src={`/api/articles/${id}/html`}
           onLoad={() => setIframeLoaded(true)}
           style={{ width: '100%', height: '100%', border: 'none' }}
-          sandbox="allow-scripts allow-same-origin allow-popups"
+          sandbox="allow-same-origin allow-popups"
           title={article.title}
         />
       </div>
