@@ -2,6 +2,7 @@ import React from 'react';
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { ReactFlowProvider } from '@xyflow/react';
+import { MemoryRouter } from 'react-router-dom';
 import EventCard from '../EventCard';
 import type { Article } from '../../types';
 
@@ -14,22 +15,26 @@ const mockArticles: Article[] = [
   { id: 6, title: 'Test article 6', source: 'ZDNet', url: '', published: '', fetched: '2026-06-10', score: 0.4, label: 'low', verified: 0, keywords: [], human_tags: [] },
 ];
 
+function TestWrapper({ children }: { children: React.ReactNode }) {
+  return <MemoryRouter><ReactFlowProvider>{children}</ReactFlowProvider></MemoryRouter>;
+}
+
 describe('EventCard', () => {
   it('renders event title', () => {
     const Card = EventCard as unknown as React.FC<{ data: { eventId: number; title: string; priority: string; articles: Article[] } }>;
-    render(<ReactFlowProvider><Card data={{ eventId: 1, title: 'Intel Nova Lake Leak', priority: 'high', articles: [mockArticles[0]] }} /></ReactFlowProvider>);
+    render(<TestWrapper><Card data={{ eventId: 1, title: 'Intel Nova Lake Leak', priority: 'high', articles: [mockArticles[0]] }} /></TestWrapper>);
     expect(screen.getByText('📦 Intel Nova Lake Leak')).toBeInTheDocument();
   });
 
   it('shows article count', () => {
     const Card = EventCard as unknown as React.FC<{ data: { eventId: number; title: string; priority: string; articles: Article[] } }>;
-    render(<ReactFlowProvider><Card data={{ eventId: 2, title: 'Test Event', priority: 'medium', articles: mockArticles.slice(0, 3) }} /></ReactFlowProvider>);
+    render(<TestWrapper><Card data={{ eventId: 2, title: 'Test Event', priority: 'medium', articles: mockArticles.slice(0, 3) }} /></TestWrapper>);
     expect(screen.getByText(/3 篇文章/)).toBeInTheDocument();
   });
 
   it('shows +N overflow for >5 articles', () => {
     const Card = EventCard as unknown as React.FC<{ data: { eventId: number; title: string; priority: string; articles: Article[] } }>;
-    render(<ReactFlowProvider><Card data={{ eventId: 3, title: 'Big Event', priority: 'low', articles: mockArticles }} /></ReactFlowProvider>);
+    render(<TestWrapper><Card data={{ eventId: 3, title: 'Big Event', priority: 'low', articles: mockArticles }} /></TestWrapper>);
     expect(screen.getByText('+1 篇')).toBeInTheDocument();
   });
 });

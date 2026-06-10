@@ -1,5 +1,6 @@
 import { memo } from 'react';
 import { Handle, Position } from '@xyflow/react';
+import { useNavigate } from 'react-router-dom';
 import type { Node } from '@xyflow/react';
 import type { Article } from '../types';
 
@@ -12,11 +13,8 @@ interface EventNodeData {
 
 type EventNode = Node & { data: EventNodeData };
 
-function openArticle(url: string) {
-  if (url) window.open(url, '_blank', 'noopener');
-}
-
 function EventCard({ data }: { data: EventNodeData }) {
+  const navigate = useNavigate();
   const priorityColor = data.priority === 'high' ? 'var(--accent-green)' :
     data.priority === 'medium' ? 'var(--accent-orange)' : 'var(--accent-purple)';
 
@@ -33,8 +31,8 @@ function EventCard({ data }: { data: EventNodeData }) {
       <div style={{ borderTop: '1px solid var(--border)', paddingTop: 6 }}>
         {data.articles.slice(0, 5).map((a: Article) => (
           <div key={a.id}
-            onClick={() => openArticle(a.url)}
-            title="点击打开原文"
+            onClick={() => navigate(`/articles/${a.id}`)}
+            title="点击阅读全文（本地缓存优先）"
             style={{ padding: '3px 0', fontSize: 11, color: 'var(--text-primary)', display: 'flex', justifyContent: 'space-between', cursor: 'pointer' }}>
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{a.title}</span>
             <span style={{ color: 'var(--accent)', fontSize: 10, marginLeft: 8 }}>{a.source}</span>

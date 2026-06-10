@@ -1,5 +1,5 @@
-import { useCallback } from 'react';
 import type { Article } from '../types';
+import { useNavigate } from 'react-router-dom';
 
 interface Props {
   article: Article;
@@ -7,19 +7,14 @@ interface Props {
 }
 
 export default function ArticleBlock({ article, onSelect }: Props) {
-  const handleClick = useCallback(() => {
-    if (onSelect) {
-      onSelect(article);
-    } else if (article.url) {
-      window.open(article.url, '_blank', 'noopener');
-    }
-  }, [article, onSelect]);
+  const navigate = useNavigate();
+  const readerUrl = `/articles/${article.id}`;
 
   return (
     <div
       draggable
-      onClick={handleClick}
-      title="点击打开原文"
+      onClick={() => { if (onSelect) { onSelect(article); } else { navigate(readerUrl); } }}
+      title="点击阅读全文（本地缓存优先）"
       onDragStart={(e) => {
         e.dataTransfer.setData('application/json', JSON.stringify({ type: 'article', article }));
       }}

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import ArticleBlock from '../ArticleBlock';
 import type { Article } from '../../types';
 
@@ -19,22 +20,22 @@ const mockArticle: Article = {
 
 describe('ArticleBlock', () => {
   it('renders article title truncated to 60 chars', () => {
-    render(<ArticleBlock article={mockArticle} />);
+    render(<MemoryRouter><ArticleBlock article={mockArticle} /></MemoryRouter>);
     expect(screen.getByText(/Intel Nova Lake CPU leak/)).toBeInTheDocument();
   });
 
   it('shows source name', () => {
-    render(<ArticleBlock article={mockArticle} />);
+    render(<MemoryRouter><ArticleBlock article={mockArticle} /></MemoryRouter>);
     expect(screen.getByText('Guru3D')).toBeInTheDocument();
   });
 
   it('shows fetched date', () => {
-    render(<ArticleBlock article={mockArticle} />);
+    render(<MemoryRouter><ArticleBlock article={mockArticle} /></MemoryRouter>);
     expect(screen.getByText('06-09')).toBeInTheDocument();
   });
 
   it('is draggable', () => {
-    render(<ArticleBlock article={mockArticle} />);
+    render(<MemoryRouter><ArticleBlock article={mockArticle} /></MemoryRouter>);
     const el = screen.getByText(/Intel Nova Lake/).closest('div[draggable]');
     expect(el).toHaveAttribute('draggable', 'true');
   });
