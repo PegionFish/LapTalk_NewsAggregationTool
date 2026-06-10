@@ -116,6 +116,13 @@ export const api = {
 
   getPipelineStatus: () => fetchJSON<{ running: boolean; last_run: string | null; last_status: string | null; current_step: string | null; steps: { name: string; status: string; duration_ms: number }[] }>('/pipeline/status'),
 
+  // 批量 AI 处理
+  startBatchTranslate: () => fetchJSON<{ ok: boolean; message: string; pending: number }>('/pipeline/batch-translate', { method: 'POST' }),
+  getBatchTranslateStatus: () => fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string }>('/pipeline/batch-translate/status'),
+
+  startBatchAnalyze: () => fetchJSON<{ ok: boolean; message: string; pending: number }>('/pipeline/batch-analyze', { method: 'POST' }),
+  getBatchAnalyzeStatus: () => fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string }>('/pipeline/batch-analyze/status'),
+
   getNotifications: (params: { limit?: number; unread_only?: boolean } = {}) => {
     const qs = new URLSearchParams();
     if (params.limit) qs.set('limit', String(params.limit));
