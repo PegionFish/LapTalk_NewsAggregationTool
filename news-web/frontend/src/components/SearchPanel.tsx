@@ -5,9 +5,10 @@ import ArticleBlock from './ArticleBlock';
 
 interface Props {
   onSearchResults: (articles: Article[]) => void;
+  onArticleSelect?: (article: Article) => void;
 }
 
-export default function SearchPanel({ onSearchResults }: Props) {
+export default function SearchPanel({ onSearchResults, onArticleSelect }: Props) {
   const [query, setQuery] = useState('');
   const [datePreset, setDatePreset] = useState('today');
   const [articles, setArticles] = useState<Article[]>([]);
@@ -69,7 +70,7 @@ export default function SearchPanel({ onSearchResults }: Props) {
       <div style={{ flex: 1, overflowY: 'auto', padding: '4px 12px' }}>
         {loading && <div style={{ color: 'var(--text-secondary)', fontSize: 12, textAlign: 'center', padding: 20 }}>搜索中...</div>}
         {!loading && articles.length === 0 && <div style={{ color: 'var(--text-secondary)', fontSize: 12, textAlign: 'center', padding: 20 }}>无结果</div>}
-        {!loading && articles.map(a => <ArticleBlock key={a.id} article={a} />)}
+        {!loading && articles.map(a => <ArticleBlock key={a.id} article={a} onSelect={onArticleSelect} />)}
       </div>
     </div>
   );

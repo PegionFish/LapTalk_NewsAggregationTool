@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { type Node, type Edge } from '@xyflow/react';
 import SearchPanel from '../components/SearchPanel';
 import ChainCanvas from '../components/ChainCanvas';
+import ArticlePane from '../components/ArticlePane';
 import { api } from '../api/client';
 import type { Article } from '../types';
 
@@ -12,6 +13,7 @@ export default function Workspace() {
   const [searchParams] = useSearchParams();
   const chainId = searchParams.get('chain');
   const [canvasArticles, setCanvasArticles] = useState<Article[]>([]);
+  const [selectedArticle, setSelectedArticle] = useState<Article | null>(null);
   const [initialNodes, setInitialNodes] = useState<Node[]>([]);
   const [initialEdges, setInitialEdges] = useState<Edge[]>([]);
   const [loading, setLoading] = useState(!!chainId);
@@ -100,8 +102,9 @@ export default function Workspace() {
 
   return (
     <div style={{ display: 'flex', height: 'calc(100vh - 48px)', margin: -24 }}>
-      <SearchPanel onSearchResults={handleSearchResults} />
+      <SearchPanel onSearchResults={handleSearchResults} onArticleSelect={setSelectedArticle} />
       <ChainCanvas articles={canvasArticles} initialNodes={initialNodes} initialEdges={initialEdges} chainId={chainId} />
+      <ArticlePane article={selectedArticle} onClose={() => setSelectedArticle(null)} />
     </div>
   );
 }
