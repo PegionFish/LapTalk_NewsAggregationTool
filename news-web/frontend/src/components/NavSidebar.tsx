@@ -1,4 +1,5 @@
 import { NavLink } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
 
 const NAV_ITEMS = [
   { path: '/', label: '仪表盘', icon: '📊' },
@@ -9,6 +10,8 @@ const NAV_ITEMS = [
 ];
 
 export default function NavSidebar() {
+  const { user, logout } = useAuth();
+
   return (
     <nav style={{
       width: 200, height: '100vh', background: 'var(--bg-secondary)',
@@ -17,6 +20,13 @@ export default function NavSidebar() {
       <div style={{ padding: '12px 16px', fontSize: 16, fontWeight: 'bold', color: 'var(--accent)', marginBottom: 8 }}>
         新闻知识聚合
       </div>
+
+      {/* User info */}
+      <div style={{ padding: '8px 16px', fontSize: 11, color: 'var(--text-secondary)', borderBottom: '1px solid var(--border)', marginBottom: 4 }}>
+        {user?.display_name || user?.username}
+        <span style={{ float: 'right', color: 'var(--accent)' }}>{user?.role === 'admin' ? '👑' : '👤'}</span>
+      </div>
+
       {NAV_ITEMS.map(item => (
         <NavLink
           key={item.path}
@@ -34,6 +44,16 @@ export default function NavSidebar() {
           <span>{item.label}</span>
         </NavLink>
       ))}
+
+      {/* Logout */}
+      <div style={{ marginTop: 'auto', padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
+        <button onClick={logout} style={{
+          background: 'var(--bg-card)', border: 'none', borderRadius: 4, padding: '6px 12px',
+          color: 'var(--text-secondary)', fontSize: 12, cursor: 'pointer', width: '100%', textAlign: 'left',
+        }}>
+          🚪 退出登录
+        </button>
+      </div>
     </nav>
   );
 }
