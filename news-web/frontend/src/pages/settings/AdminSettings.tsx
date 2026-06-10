@@ -37,6 +37,39 @@ export default function AdminSettings() {
     loadUsers();
   };
 
+  // 导出用户为 JSON
+  const handleExport = async () => {
+    const r = await fetch('/api/auth/users/export', { headers: getAuthHeaders() });
+    const data = await r.json();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `users_export_${new Date().toISOString().slice(0, 10)}.json`;
+    a.click(); URL.revokeObjectURL(url);
+  };
+
+  // 导入用户
+  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const json = JSON.parse(text);
+      const users = json.users || json;
+      if (!Array.isArray(users)) { alert('无效格式：需要 users 数组'); return; }
+      const onConflict = confirm('导入模式选择：\n\n点"确定"= 跳过已存在的用户名\n点"取消"= 更新已存在的用户') ? 'skip' : 'update';
+      const r = await fetch('/api/auth/users/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({ users, on_conflict: onConflict }),
+      });
+      const result = await r.json();
+      alert(result.message || '导入完成');
+      loadUsers();
+    } catch { alert('导入失败：文件格式错误'); }
+    e.target.value = ''; // 清空以允许重新选择同一文件
+  };
+
   if (!loaded) return null;
 
   return (
@@ -44,7 +77,19 @@ export default function AdminSettings() {
       <div className="settings-card">
         <div className="card-header">
           <h3><i className="fas fa-users-cog" /> 用户管理</h3>
-          <p className="card-description">管理员可查看、修改角色、删除用户。仅 admin 角色可见此面板。</p>
+          <p className="card-description">管理员可查看、修改角色、删除用户。支持 JSON 导入/导出。
+            <span style={{ display: 'inline-flex', gap: 6, marginLeft: 12 }}>
+              <button className="btn btn-secondary" onClick={handleExport}
+                style={{ padding: '2px 10px', fontSize: 11 }} title="导出用户列表为 JSON">
+                <i className="fas fa-download" /> 导出
+              </button>
+              <label className="btn btn-secondary" style={{ padding: '2px 10px', fontSize: 11, cursor: 'pointer' }}>
+                <i className="fas fa-upload" /> 导入
+                <input type="file" accept=".json" onChange={handleImport}
+                  style={{ display: 'none' }} />
+              </label>
+            </span>
+          </p>
         </div>
         <div className="card-body">
           {!isAdmin ? (

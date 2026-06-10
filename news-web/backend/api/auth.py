@@ -149,6 +149,65 @@ def list_users(admin: dict = Depends(get_current_user)):
     }
 
 
+# ── 导入导出 ──────────────────────────────────────────
+
+@router.get("/users/export")
+def export_users(admin: dict = Depends(get_current_user)):
+    _require_admin(admin)
+    if not config.db_path:
+        raise HTTPException(503, "database_not_configured")
+    conn = sqlite3.connect(config.db_path)
+    rows = conn.execute("SELECT username, display_name, role, created_at FROM users ORDER BY id").fetchall()
+    conn.close()
+    return {
+        'exported_at': datetime.utcnow().isoformat(timespec='seconds'),
+        'format_version': 1,
+        'users': [{'username': r[0], 'display_name': r[1], 'role': r[2], 'created_at': r[3]} for r in rows],
+    }
+
+
+class ImportUsersRequest(BaseModel):
+    users: list[dict]
+    default_password: str = ''
+    on_conflict: str = 'skip'
+
+
+@router.post("/users/import")
+def import_users(body: ImportUsersRequest, admin: dict = Depends(get_current_user)):
+    _require_admin(admin)
+    if not config.db_path:
+        raise HTTPException(503, "database_not_configured")
+    ensure_users_table(config.db_path)
+    conn = sqlite3.connect(config.db_path)
+    imported = skipped = updated = 0
+    now = datetime.utcnow().isoformat(timespec='seconds')
+    for u in body.users:
+        username = str(u.get('username', '')).strip()
+        if not username or len(username) < 3:
+            continue
+        role = u.get('role', 'user')
+        if role not in ('admin', 'user', 'viewer'):
+            role = 'user'
+        display_name = str(u.get('display_name', ''))
+        existing = conn.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone()
+        if existing:
+            if body.on_conflict == 'update':
+                conn.execute("UPDATE users SET display_name=?, role=? WHERE username=?", (display_name, role, username))
+                updated += 1
+            else:
+                skipped += 1
+            continue
+        import secrets, string
+        pwd = body.default_password or ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(12))
+        conn.execute("INSERT INTO users (username, password_hash, display_name, role, created_at) VALUES (?, ?, ?, ?, ?)",
+                     (username, hash_password(pwd), display_name, role, now))
+        imported += 1
+    conn.commit()
+    conn.close()
+    return {'ok': True, 'imported': imported, 'skipped': skipped, 'updated': updated,
+            'message': f'导入 {imported} 名, 跳过 {skipped} 名, 更新 {updated} 名'}
+
+
 class UserUpdate(BaseModel):
     role: str | None = None          # 'admin' | 'user' | 'viewer'
     display_name: str | None = None
