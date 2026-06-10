@@ -48,7 +48,7 @@ function AuthedApp() {
   return (
     <div style={{ display: 'flex', height: '100vh' }}>
       <NavSidebar />
-      <main style={{ flex: 1, overflow: 'auto', padding: 24 }}>
+      <main style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/workspace" element={<Workspace />} />

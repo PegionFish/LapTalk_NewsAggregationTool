@@ -101,7 +101,7 @@ export default function Workspace() {
   }
 
   return (
-    <div style={{ display: 'flex', height: 'calc(100vh - 48px)', margin: -24, position: 'relative' }}>
+    <div style={{ display: 'flex', flex: 1, overflow: 'hidden', position: 'relative' }}>
       <SearchPanel onSearchResults={handleSearchResults} onArticleSelect={setSelectedArticle} />
       <ChainCanvas articles={canvasArticles} initialNodes={initialNodes} initialEdges={initialEdges} chainId={chainId} />
       <ArticlePane article={selectedArticle} onClose={() => setSelectedArticle(null)} />

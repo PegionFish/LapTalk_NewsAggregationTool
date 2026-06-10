@@ -12,7 +12,7 @@ export default function Dashboard() {
   }, []);
 
   return (
-    <div>
+    <div style={{ padding: 24, overflow: 'auto', flex: 1 }}>
       <h2 style={{ marginBottom: 20 }}>📊 仪表盘</h2>
       <DashboardCards stats={stats} loading={loading} />
 

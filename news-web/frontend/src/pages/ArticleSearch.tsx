@@ -48,7 +48,7 @@ export default function ArticleSearch() {
   const totalPages = Math.ceil(total / PER_PAGE);
 
   return (
-    <div style={{ display: 'flex', height: 'calc(100vh - 48px)', margin: -24, gap: 0 }}>
+    <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
       {/* 中：文章列表 */}
       <div style={{ flex: 1, overflow: 'auto', padding: 24 }}>
         {/* 工具栏 */}

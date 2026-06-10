@@ -5,8 +5,7 @@
 /* ── 布局 ───────────────────────────────────────────── */
 .settings-layout {
   display: flex;
-  height: calc(100vh - 64px);
-  margin: -24px;
+  flex: 1;
   overflow: hidden;
 }
 
