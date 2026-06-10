@@ -56,7 +56,7 @@ export default function ArticlePane({ article, onClose }: Props) {
             src={`/api/articles/${article.id}/html`}
             onLoad={() => setLoaded(true)}
             style={{ width: '100%', height: '100%', border: 'none' }}
-            sandbox="allow-scripts allow-same-origin allow-popups"
+            sandbox="allow-popups"
             title={article.title}
           />
         </div>

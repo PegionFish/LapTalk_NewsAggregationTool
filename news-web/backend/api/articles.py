@@ -200,7 +200,7 @@ def _inject_base(html: str, base_url: str) -> str:
 
 @router.get("/{article_id}/html")
 async def serve_article_html(article_id: int):
-    """返回文章 HTML — 优先本地缓存，注入 <base> 使资源回源站。"""
+    """返回文章 HTML — 优先本地缓存，注入 <base> + CSP 禁止第三方脚本。"""
     from fastapi.responses import HTMLResponse
     db = get_db()
     with db._conn() as conn:
@@ -212,7 +212,7 @@ async def serve_article_html(article_id: int):
 
     url, local_path = row
 
-    # 1. 本地 HTML 缓存 — 注入 <base> 让 CSS/图片回源站加载
+    # 1. 本地 HTML 缓存
     if local_path and not local_path.startswith('[ERR:'):
         import os
         cache_dir = config.content_cache_path
@@ -222,15 +222,18 @@ async def serve_article_html(article_id: int):
                 html = f.read()
             if url:
                 html = _inject_base(html, url)
-            return HTMLResponse(content=html, media_type="text/html")
+            # CSP: 禁止所有脚本 — 纯阅读模式，广告/追踪/分析全部阻断
+            headers = {'Content-Security-Policy': "script-src 'none'; img-src * data:; style-src * 'unsafe-inline'; font-src *; connect-src 'none'"}
+            return HTMLResponse(content=html, media_type="text/html", headers=headers)
 
-    # 2. 回退代理获取
+    # 2. 回退代理 — 同样注入 CSP
     if not url:
         raise HTTPException(404, "no_url")
     async with httpx.AsyncClient() as client:
         try:
             resp = await client.get(url, headers={'User-Agent': config.user_agent},
                                     follow_redirects=True, timeout=15)
-            return HTMLResponse(content=resp.text, media_type="text/html")
+            headers = {'Content-Security-Policy': "script-src 'none'; img-src * data:; style-src * 'unsafe-inline'; font-src *; connect-src 'none'"}
+            return HTMLResponse(content=resp.text, media_type="text/html", headers=headers)
         except Exception as e:
             raise HTTPException(502, f"fetch_failed: {str(e)[:80]}")
