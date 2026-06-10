@@ -9,81 +9,142 @@
 **仓库根目录：** `C:\Users\PegionFish\Desktop\LapTalk_NewsAggregationTool`  
 **主项目代码：** `news-web/`  
 **分支策略：** 直接在 `main` 上开发（单人项目）  
-**每次提交后主动 push 到 GitHub origin。**
+**每次提交后主动 push 到 GitHub origin。**  
 
 ### 技术栈速查
 
 | 层 | 技术 | 关键文件 |
 |----|------|---------|
 | 后端 | Python 3.14, FastAPI, SQLite (WAL), APScheduler | `news-web/backend/main.py` |
-| AI | OpenAI 兼容 API (openai 库) | `news-web/backend/ai_client.py` |
+| AI | OpenAI 兼容 API — DeepSeek V3.2 @ 硅基流动 | `news-web/backend/ai_client.py` |
+| 翻译 | OpenAI 兼容 API — 独立配置，分段翻译 | `news-web/backend/translation_client.py` |
 | 鉴权 | bcrypt + PyJWT (72h 令牌) | `news-web/backend/auth/auth.py` |
 | 前端 | React 18, Vite 5, TypeScript, React Flow 12 | `news-web/frontend/src/` |
 | 后端测试 | pytest (15 用例) | `news-web/tests/backend/test_api.py` |
 | 前端测试 | Vitest + Testing Library (16 用例) | `news-web/frontend/src/components/__tests__/` |
 | E2E | Playwright (5 用例) | `news-web/frontend/e2e/` |
+| 启动脚本 | bash, stop/start/restart/status/test/build | `start_platform.sh` |
 
 ### 关键路径
 
 ```
 news-web/
 ├── backend/
-│   ├── main.py              # 入口: 生命周期 + 路由注册 + 静态挂载
+│   ├── main.py              # 入口: 生命周期 + 路由注册 + 静态托管 :8081
 │   ├── scheduler.py         # 定时抓取 10:00/17:00 + 备份 03:00
-│   ├── ai_client.py         # chat(), summarize_events()
+│   ├── ai_client.py         # chat(), summarize_events(), analyze_article(), build_chain_title()
+│   ├── translation_client.py # translate_to_chinese() — 长文自动分段翻译
 │   ├── auth/auth.py         # hash_password, verify_password, create_token, get_current_user
-│   ├── api/                 # 8 个模块: settings, stats, articles, events, chains, relations, auth, audit, notifications
-│   ├── db/news_db.py        # 技能仓库 ORM (1025 行, 只读+反馈写入)
+│   ├── api/                 # 12 个模块: settings, stats, articles, events, chains, relations,
+│   │                        #            auth, audit, notifications, logs, cache, pipeline
+│   ├── db/news_db.py        # ORM + link_articles_to_events() + calculate_priority() + 迁移
 │   ├── db/migrations.py     # ensure_schema() — 幂等迁移
-│   └── pipeline/run_all.py  # 4 步编排 (fetch→cluster→archive→AI)
+│   └── pipeline/            # 管道步骤: fetch→cluster→archive→translate→analyze
 ├── frontend/src/
-│   ├── App.tsx              # AuthProvider → ErrorBoundary → 鉴权门控 → 路由
+│   ├── App.tsx              # 路由: /chains → /chains/new /chains/:id 子路由
 │   ├── contexts/AuthContext.tsx  # JWT localStorage 持久化
 │   ├── hooks/useUndoRedo.ts     # 自定义 50 步历史栈
-│   ├── pages/Workspace.tsx      # 核心画布 (加载链→边重建→搜索→拖放)
-│   ├── components/ChainCanvas.tsx # React Flow 实例 (节点/边/撤销/自动保存)
-│   └── api/client.ts        # 全量 fetchJSON 封装 (36 端点)
-├── tests/backend/test_api.py  # 15 用例覆盖所有端点
-└── config.json              # 运行时配置 (db_path, openai_*, pipeline_schedule_enabled)
+│   ├── pages/
+│   │   ├── Dashboard.tsx       # 仪表盘 — 缓存统计 + AI 操作卡片 + 日志窗
+│   │   ├── ArticleSearch.tsx   # 文章检索 — 9 列状态表 + AI 分析面板 + 标注徽章
+│   │   ├── Workspace.tsx       # 逻辑链工作台（/chains 子路由）
+│   │   ├── ChainList.tsx       # 逻辑链列表
+│   │   └── settings/           # 6 个子面板: 通用/AI/翻译/缓存/管理/日志
+│   └── api/client.ts           # 40+ 端点封装
+├── tests/backend/test_api.py   # 15 用例覆盖所有端点
+└── config.json                 # 运行时配置（已 gitignore，含 API 密钥）
 ```
 
 ### 常用命令
 
 ```bash
-# 后端
-cd news-web/backend
-python main.py                                    # 开发服务器 :8080
-python -m pytest ../tests/backend/test_api.py -v  # 15 用例
+# 后端（开发模式，:8081）
+cd news-web/backend && python main.py
 
-# 前端
-cd news-web/frontend
-npm run dev                     # Vite :3000 → 代理 :8080
-npm run build                   # tsc + vite build → dist/
-npm test                        # vitest run (16 用例)
-npx playwright test             # E2E (5 用例, 需先启动 :8080)
+# 全部服务（生产模式 — 一键启动）
+bash start_platform.sh start      # 启动后端 + 自动构建前端
+bash start_platform.sh stop       # 停止后端
+bash start_platform.sh restart    # 重启后端
+bash start_platform.sh status     # 查看服务 / 数据库状态
+bash start_platform.sh test       # 全量测试 (pytest + vitest)
+bash start_platform.sh build      # 仅构建前端
 
-# Git (每次工作后必须执行)
-git add -A && git commit -m "描述" && git push origin main
+# 手动测试
+cd news-web
+python -m pytest tests/backend/test_api.py -v   # 15 用例
+cd frontend && npm test                          # 16 用例
+npm run build                                    # tsc + vite build → dist/
 ```
+
+### 数据库核心表与字段
+
+```
+articles
+├── title, source, url, category, published_date, fetched_at
+├── priority_score, priority_label, keywords, human_tags
+├── local_path              ← HTML 磁盘缓存路径
+├── text_content            ← 提取的纯文本（源文）
+├── translated_content      ← AI 翻译后的中文（译文）
+├── content_lang            ← 语言检测结果 (en/zh)
+├── content_status          ← 缓存状态 (pending/fetched/translated/failed)
+├── ai_summary              ← AI 分析摘要
+├── ai_analyzed             ← AI 分析完成标记 (0/1)
+├── human_processed         ← 人工已处理标记 (0/1) — 保护评分/关键词不被 AI 覆写
+└── human_verified          ← 审核标记
+
+events
+├── title, first_seen, last_seen, article_count, status
+
+logic_chains
+├── title, description, created_at, updated_at, created_by (human|auto)
+├── chain_events (chain_id, event_id, position)
+└── chain_relations (parent_chain_id, child_chain_id)
+```
+
+### 批量 AI 处理 API（仪表盘操作卡片）
+
+| 端点 | 说明 |
+|------|------|
+| `POST /api/pipeline/batch-translate` | 遍历 HTML 缓存 → 提取文本 → 分段翻译 → 入库 |
+| `GET /api/pipeline/batch-translate/status` | 进度: running/total/done/log[] |
+| `POST /api/pipeline/batch-analyze` | 遍历已提取文本 → AI 分析摘要 → 入库 |
+| `GET /api/pipeline/batch-analyze/status` | 进度: running/total/done/log[] |
+| `POST /api/pipeline/build-chains` | 基于事件关键词分组 → AI 命名 → 创建逻辑链 |
+| `GET /api/pipeline/build-chains/status` | 进度: total_groups/chains_created/log[] |
+| `POST /api/articles/{id}/analyze` | 单篇分析（前端选中文章自动调用） |
+| `POST /api/settings/test-ai` | AI 分析连接测试 |
+| `POST /api/settings/test-translation` | 翻译连接测试 |
+
+任务状态从 DB 派生（done/total 实时查询），running/current/log 来自内存。
 
 ### 架构决策记录
 
-1. **Pipeline 集成在 FastAPI 进程中**（非独立 Hermes/OpenClaw 节点）— APScheduler 触发子进程
-2. **SQLite WAL 模式** — 并发读写安全，Skill 写入不阻塞 Web 读取
-3. **news_db.py 直接复用** — 从 Skill 仓库复制，不做抽象层包装
-4. **前端鉴权门控** — `App.tsx` 在 AuthProvider 内检查令牌，未登录重定向到 Login
-5. **API 密钥掩码** — `config.to_dict()` 返回 `"***"`；`settings.py` 忽略 `"***"` 回写
-6. **Article 字段规范化** — `get_event()` 将 `date` → `fetched` 以匹配前端接口
-7. **撤销/重做** — 自定义 hook，非 xyflow 内置（v12 API 变更后暂不可用）
-8. **边重建** — 从 `event_relations` 按颜色/线型映射 (before=绿色实线, update=橙色, related=灰色虚线, auto=动画)
+1. **Pipeline 集成在 FastAPI 进程中** — APScheduler 触发子进程
+2. **SQLite WAL 模式** — 并发读写安全
+3. **批量 AI 处理为后台线程** — threading.Thread + 轮询 status 端点，DB 统计 ≈ 状态
+4. **翻译走纯文本而非 HTML** — `extract_text_from_html → translate_to_chinese(text)`，长文自动分段（≤1800 字/段）
+5. **AI 分析走单篇短上下文** — `analyze_article` 截取 2000 字正文
+6. **源文/译文独立存储** — `text_content` + `translated_content` 两列，对照阅读
+7. **人工标注不覆写** — `human_processed=1` 时 `calculate_priority` 和 `extract_keywords_for` 跳过
+8. **事件日期使用 `published_date`** — 无发布日期时回退到 `fetched_at`
+9. **逻辑链自动构筑** — Jaccard 重叠分组 + AI 命名（极短上下文，仅含事件标题）
+10. **前端鉴权门控** — `App.tsx` 在 AuthProvider 内检查令牌
+11. **API 密钥掩码** — `config.to_dict()` 返回 `"***"`；`settings.py` 忽略 `"***"` 回写
+12. **`config.json` 已 gitignore** — 含 API 密钥，不进入版本控制
+13. **撤销/重做** — 自定义 hook，`onNodeDragStop` 触发快照
+14. **边重建** — from `event_relations` 按颜色/线型映射
+15. **前端路由** — `/chains` 列表 → `/chains/new` 新建工作台 / `/chains/:id` 编辑
+16. **HTML 安全** — `_sanitize_html` 切除 script/iframe/link/tracking，仅保留 rel="stylesheet"
+17. **OpenAI 客户端超时** — AI 30s / 翻译 120s，防止请求无限挂起
+18. **iframe 阅读** — `sandbox="allow-same-origin allow-popups"`（服务器已切除脚本）
 
 ### 已知设计约束
 
-- **Phase 2 仅存的功能：** 边重建已实现。规范中提到的 LDAP/SSO 仍为后续阶段的功能。
-- **撤销/重做限制：** XYFlow v12 移除了内置 `useUndoRedo`；自定义 hook 跟踪节点/边快照。`onNodeDragStop` 触发快照（不跟踪中间拖拽位置）。
-- **E2E 测试需运行服务器：** `playwright.config.ts` 通过 `webServer` 配置自动启动 `:8080`。
-- **analyze.py 作为子进程运行：** 不是库调用 — `run_all.py` 通过 `subprocess.run([sys.executable, script_path])` 生成一个独立 Python 进程以隔离管道步骤。
-- **测试期间不启动调度器：** `main.py` 在 `NEWS_WEB_TESTING=1` 时会跳过 `start_scheduler()` — 在 `tests/backend/test_api.py` 中设置。
+- **Phase 2 仅存的功能：** 边重建已实现。LDAP/SSO 仍为后续阶段。
+- **撤销/重做限制：** XYFlow v12 移除了内置 `useUndoRedo`；自定义 hook 跟踪节点/边快照。
+- **E2E 测试需运行服务器：** `playwright.config.ts` 自动启动 `:8080`。
+- **测试期间不启动调度器：** `main.py` 在 `NEWS_WEB_TESTING=1` 时跳过 `start_scheduler()`。
+- **批量任务状态不能只绑前端：** status 端点从 DB 派生统计，服务重启不丢失进度。
 
 ## 核心交互原则
 
@@ -250,6 +311,7 @@ git add -A && git commit -m "描述" && git push origin main
 - 设计时必须评估时间复杂度、内存占用与 I/O 影响，避免无谓消耗。
 - 识别潜在瓶颈后应提供监测或优化建议，确保可持续迭代。
 - 禁止引入未经评估的昂贵依赖或阻塞操作。
+- **AI 调用必须控制上下文长度**：翻译分段 ≤1800 字/段，分析截取 ≤2000 字，链命名仅含事件标题。
 
 ## 通用工作流程
 
@@ -262,24 +324,9 @@ git add -A && git commit -m "描述" && git push origin main
 ### 研究-计划-实施-验证模式
 
 1. **研究**：阅读材料、厘清约束，禁止编码
-   - 分析至少 3 个现有实现或模式，识别可复用的接口与约束
-   - 绘制依赖与集成点，确认输入输出协议、配置与环境需求
-   - 弄清现有测试框架、命名约定和格式化规则
-
 2. **计划**：制定详细计划与成功标准
-   - 分解任务为可验证的小步骤
-   - 定义接口规格、边界条件、性能要求、测试标准
-   - 识别风险点和缓解策略
-
 3. **实施**：根据计划执行并保持小步提交
-   - 保持每次改动可编译、可验证
-   - 优先使用既有库、工具或辅助函数
-   - 遵循既有代码风格，包括导入顺序、命名与格式化
-
 4. **验证**：运行测试或验证脚本，记录结果
-   - 使用项目现有构建系统和测试框架
-   - 验证失败时立即终止，不允许带缺陷交付
-   - 连续三次验证失败必须暂停实现，回到需求和设计阶段复盘
 
 ### 上下文收集原则
 
@@ -287,12 +334,6 @@ git add -A && git commit -m "描述" && git push origin main
 - 问题驱动：基于关键疑问收集，而非机械执行固定流程
 - 充分性优先：追求"足以支撑决策和规划"，而非"信息100%完整"
 - 动态调整：根据实际需要决定深挖次数，避免过度收集
-
-**基本流程**：
-1. **快速扫描**：定位功能模块、识别相似实现、了解技术栈和测试方式
-2. **识别疑问**：分析已知和未知，排列优先级
-3. **针对性深挖**：仅针对高优先级疑问进行深挖，聚焦单个疑问
-4. **充分性检查**：确认能定义接口契约、理解技术选型、识别风险、知道如何验证
 
 ## 架构优先级
 
@@ -337,6 +378,7 @@ git add -A && git commit -m "描述" && git push origin main
 
 **绝对禁止：**
 - 在缺乏证据的情况下做出假设，所有结论都必须援引现有代码或文档
+- 提交 `config.json` 或任何含 API 密钥的文件
 
 **必须做到：**
 - 在实现复杂任务前完成详尽规划并记录
@@ -345,3 +387,5 @@ git add -A && git commit -m "描述" && git push origin main
 - 保持小步交付，确保每次提交处于可用状态
 - 主动学习既有实现的优缺点并加以复用或改进
 - 连续三次失败后必须暂停操作，重新评估策略
+- 后端代码改动后需重启服务或等待 uvicorn reload 生效
+- 前端代码改动后需 `npm run build` 构建才能在前端页面体现
