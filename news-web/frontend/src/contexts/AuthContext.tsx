@@ -27,25 +27,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // 本机访问免密登录 — localhost 自动获取 local_admin 令牌
+  // 本机免密登录 — localhost 始终使用 local_admin 令牌
   useEffect(() => {
+    const host = window.location.hostname;
+    const isLocal = host === 'localhost' || host === '127.0.0.1';
+
     const savedToken = localStorage.getItem(TOKEN_KEY);
     const savedUser = localStorage.getItem(USER_KEY);
     if (savedToken && savedUser) {
       try {
-        setToken(savedToken);
-        setUser(JSON.parse(savedUser));
-        setLoading(false);
-        return;
+        const user = JSON.parse(savedUser);
+        // localhost 上 role 非 admin 时，重新获取 local_admin 令牌
+        if (isLocal && user.role !== 'admin') {
+          localStorage.removeItem(TOKEN_KEY);
+          localStorage.removeItem(USER_KEY);
+        } else {
+          setToken(savedToken);
+          setUser(user);
+          setLoading(false);
+          return;
+        }
       } catch {
         localStorage.removeItem(TOKEN_KEY);
         localStorage.removeItem(USER_KEY);
       }
     }
 
-    // 无缓存令牌时，localhost 自动免密登录
-    const host = window.location.hostname;
-    if (host === 'localhost' || host === '127.0.0.1') {
+    if (isLocal) {
       fetch('/api/auth/local')
         .then(res => res.ok ? res.json() : null)
         .then(data => {
