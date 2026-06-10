@@ -1,0 +1,246 @@
+#!/usr/bin/env python3
+"""
+数据采集整理器 — 只做数据收集和基础去重，不做分析聚类
+输出原始数据供 AI 后续分析
+"""
+import sys, os, json, re, time
+from datetime import datetime
+from collections import defaultdict
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPORTS_DIR = os.path.join(SCRIPT_DIR, 'hot_reports')
+
+sys.path.insert(0, SCRIPT_DIR)
+from news_db import NewsDB
+
+# ─── 排除关键词 ──────────────────────────────────────────
+EXCLUDE_KEYWORDS = [
+    '天气', '气象', '台风', '暴雨', '地震', '预警',
+    '明星', '八卦', '塌房', '绯闻', '综艺', '选秀',
+    '房价', '楼市', '买房', '清明', '祭祀',
+    '补给', '装备补给', '龙威燎天', '抽卡', '晒卡', '十连',
+    '个人喜', '公个喜',
+    'off', 'deal', 'sale', 'discount', 'coupon', 'promo',
+    'buy', 'snag', 'shopping', 'save ',
+    '降价', '打折', '优惠', '促销', '秒杀',
+    '(PR)', '(pr)',
+    '为什么同样是', '如何评价', '什么体验', '怎么看',
+    '什么感觉', '算不算',
+]
+
+# 已知中文媒体（用于过滤中文媒体的英文文章）
+CHINESE_MEDIA = ['钛媒体', '36Kr', '36氪', 'IT之家', '爱范儿', '少数派',
+    'Solidot', '机器之心', '雷锋网', '虎嗅', '极客公园',
+    '澎湃新闻', '腾讯新闻', '新浪', '网易', '百度',
+    '知乎', '微博', '头条', '数字尾巴', '果壳']
+
+def is_garbage(title):
+    t = title.lower()
+    return any(k.lower() in t for k in EXCLUDE_KEYWORDS)
+
+def is_chinese_media_english(title, source):
+    if not any(c in source for c in CHINESE_MEDIA):
+        return False
+    cjk = sum(1 for c in title if '\u4e00' <= c <= '\u9fff')
+    ascii_chars = sum(1 for c in title if c.isascii() and c.isalpha())
+    total = cjk + ascii_chars
+    if total == 0: return False
+    return ascii_chars / total > 0.6
+
+def load_json(pattern):
+    files = sorted([f for f in os.listdir(REPORTS_DIR) if f.startswith(pattern) and f.endswith('.json')], reverse=True)
+    if files:
+        with open(os.path.join(REPORTS_DIR, files[0]), encoding='utf-8') as f:
+            return json.load(f)
+    return {}
+
+def main():
+    date_tag = datetime.now().strftime('%Y-%m-%d')
+    os.makedirs(REPORTS_DIR, exist_ok=True)
+
+    # 各数据源按分类整理
+    sources = {
+        'platform_hotlists': [],  # 微博/抖音/头条/知乎 热搜
+        'rss_news': [],           # IT之家/36Kr/英文科技媒体
+        'bilibili_videos': [],    # B站热门视频
+    }
+
+    # ── 1. 4平台热榜（微博/抖音/头条） ──
+    data = load_json('daily_report_')
+    if data:
+        for pid, items in data.get('data', {}).items():
+            if pid == 'bilibili':
+                for item in items:
+                    if not is_garbage(item.get('title', '')):
+                        sources['bilibili_videos'].append({
+                            'source': f'{pid}_hotlist',
+                            'title': item.get('title', ''),
+                            'url': item.get('url', ''),
+                            'metadata': {
+                                'rank': item.get('rank'),
+                                'views': item.get('value_text', ''),
+                                'author': item.get('author', ''),
+                            }
+                        })
+            else:
+                for item in items:
+                    title = item.get('title', '')
+                    if title and not is_garbage(title):
+                        sources['platform_hotlists'].append({
+                            'source': f'{pid}_hotlist',
+                            'title': title,
+                            'url': item.get('url', ''),
+                            'metadata': {
+                                'rank': item.get('rank'),
+                                'heat': item.get('value_text', ''),
+                            }
+                        })
+
+    # ── 2. DailyHotApi（知乎/微博/抖音） ──
+    data = load_json('dailyhot_api_')
+    if data:
+        for pid, items in data.get('data', {}).items():
+            if pid in ('bilibili'):
+                for item in items:
+                    if not is_garbage(item.get('title', '')):
+                        sources['bilibili_videos'].append({
+                            'source': f'{pid}_dailyhot',
+                            'title': item.get('title', ''),
+                            'url': item.get('url', ''),
+                            'metadata': {'rank': item.get('rank')}
+                        })
+            elif pid in ('zhihu', 'weibo', 'douyin'):
+                for item in items:
+                    title = item.get('title', '')
+                    if title and not is_garbage(title):
+                        sources['platform_hotlists'].append({
+                            'source': f'{pid}_dailyhot',
+                            'title': title,
+                            'url': item.get('url', ''),
+                            'metadata': {
+                                'rank': item.get('rank'),
+                                'heat': item.get('value_text', ''),
+                            }
+                        })
+
+    # ── 3. RSS/英文追溯 ──
+    # 优先使用 english_news.json（最新的 RSS 原始数据，包含游戏媒体）
+    # 如果 traced 文件存在且有更多条目，则使用 traced 版本
+    news_path = os.path.join(REPORTS_DIR, 'english_news.json')
+    traced_path = os.path.join(REPORTS_DIR, 'english_news_traced.json')
+    data = {}
+    if os.path.exists(news_path):
+        with open(news_path, encoding='utf-8') as f:
+            data = json.load(f)
+    traced_data = {}
+    if os.path.exists(traced_path):
+        with open(traced_path, encoding='utf-8') as f:
+            traced_data = json.load(f)
+    if traced_data and len(traced_data.get('items', [])) > len(data.get('items', [])):
+        data = traced_data
+    if not data or not data.get('items'):
+        data = {}
+    if data:
+        for item in data.get('items', []):
+            title = item.get('title', '')
+            if not title or is_garbage(title):
+                continue
+            source = item.get('source', '')
+            if source in ('Not found', 'Other', 'Unknown'):
+                url = item.get('url', item.get('original_rss_url', ''))
+                m = re.search(r'https?://([^/]+)', url)
+                source = m.group(1).replace('www.', '').split('.')[0].title() if m else source
+            if is_chinese_media_english(title, source):
+                continue
+            sources['rss_news'].append({
+                'source': source,
+                'title': title,
+                'url': item.get('url', item.get('original_rss_url', item.get('link', ''))),
+                'metadata': {
+                    'published': item.get('published', item.get('pub_date', ''))[:10],
+                    'rating': item.get('rating', ''),
+                }
+            })
+
+    # ── 4. 基础去重（完全相同的标题合并） ──
+    for category in sources:
+        seen = {}
+        deduped = []
+        for item in sources[category]:
+            key = item['title'].lower().strip()
+            if key in seen:
+                seen[key]['sources'].append(item['source'])
+                seen[key]['urls'].append(item['url'])
+            else:
+                item['sources'] = [item['source']]
+                item['urls'] = [item['url']]
+                deduped.append(item)
+                seen[key] = item
+        # ── 4.5 RSS 相似标题聚类（不同标题的同一事件合并，仅 RSS） ──
+        if category == 'rss_news' and len(deduped) > 1:
+            clustered = []
+            used = set()
+            for i in range(len(deduped)):
+                if i in used:
+                    continue
+                cluster = [deduped[i]]
+                used.add(i)
+                for j in range(i + 1, len(deduped)):
+                    if j in used:
+                        continue
+                    t1 = re.sub(r'[^\w\u4e00-\u9fff]', '', deduped[i]['title'].lower())
+                    t2 = re.sub(r'[^\w\u4e00-\u9fff]', '', deduped[j]['title'].lower())
+                    bigrams1 = set(t1[k:k+2] for k in range(len(t1)-1))
+                    bigrams2 = set(t2[k:k+2] for k in range(len(t2)-1))
+                    if bigrams1 and bigrams2:
+                        sim = len(bigrams1 & bigrams2) / len(bigrams1 | bigrams2)
+                        if sim > 0.35:
+                            cluster.append(deduped[j])
+                            used.add(j)
+                if len(cluster) > 1:
+                    merged = dict(cluster[0])
+                    merged['sources'] = [c['source'] for c in cluster]
+                    merged['urls'] = [c['url'] for c in cluster if c.get('url')]
+                    merged['title'] = min([c['title'] for c in cluster], key=lambda x: len(x))
+                    clustered.append(merged)
+                else:
+                    clustered.append(deduped[i])
+            deduped = clustered
+
+        sources[category] = deduped
+
+    # ── 输出 ──
+    print(f"   平台热榜: {len(sources['platform_hotlists'])} 条")
+    print(f"   RSS 新闻: {len(sources['rss_news'])} 条")
+    print(f"   B站视频:  {len(sources['bilibili_videos'])} 条")
+
+    output = {
+        'date': f"{date_tag} {datetime.now().strftime('%H:%M')}",
+        'sources': {k: len(v) for k, v in sources.items()},
+        'data': sources,
+    }
+
+    out_path = os.path.join(REPORTS_DIR, f'raw_data_{date_tag}.json')
+    with open(out_path, 'w', encoding='utf-8') as f:
+        json.dump(output, f, ensure_ascii=False, indent=2)
+    print(f"✅ 原始数据已保存: {out_path}")
+
+    # ── 5. 写入数据库 + 事件关联 ──
+    try:
+        db = NewsDB()
+        total = 0
+        for cat in ('platform_hotlists', 'rss_news', 'bilibili_videos'):
+            n = db.save_articles(cat, sources[cat])
+            total += n
+            print(f"   DB ↑ {cat}: {n} 条新增")
+        new_events = db.link_articles_to_events()
+        print(f"   DB 🏷️ 事件关联: {new_events} 个新事件")
+        stats = db.get_stats()
+        print(f"   DB 📊 总计: {stats['articles']} 篇文章, {stats['events']} 个事件")
+    except Exception as e:
+        print(f"   DB ⚠️ 写入失败: {e}")
+
+    return sources
+
+if __name__ == '__main__':
+    main()
