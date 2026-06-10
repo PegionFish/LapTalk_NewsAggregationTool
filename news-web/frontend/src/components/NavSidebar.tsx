@@ -1,16 +1,19 @@
+import { useMemo } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 
-const NAV_ITEMS = [
-  { path: '/', label: '仪表盘', icon: 'fa-chart-pie' },
-  { path: '/workspace', label: '逻辑链工作台', icon: 'fa-diagram-project' },
-  { path: '/articles', label: '文章检索', icon: 'fa-newspaper' },
-  { path: '/chains', label: '逻辑链列表', icon: 'fa-list-check' },
-  { path: '/settings', label: '设置', icon: 'fa-sliders' },
+const ALL_ITEMS = [
+  { path: '/', label: '仪表盘', icon: 'fa-chart-pie', adminOnly: false },
+  { path: '/workspace', label: '逻辑链工作台', icon: 'fa-diagram-project', adminOnly: false },
+  { path: '/articles', label: '文章检索', icon: 'fa-newspaper', adminOnly: false },
+  { path: '/chains', label: '逻辑链列表', icon: 'fa-list-check', adminOnly: false },
+  { path: '/settings', label: '设置', icon: 'fa-sliders', adminOnly: true },
 ];
 
 export default function NavSidebar() {
   const { user, logout } = useAuth();
+  const isAdmin = user?.role === 'admin';
+  const navItems = useMemo(() => ALL_ITEMS.filter(item => !item.adminOnly || isAdmin), [isAdmin]);
 
   return (
     <nav style={{
@@ -46,7 +49,7 @@ export default function NavSidebar() {
       </div>
 
       {/* 导航项 */}
-      {NAV_ITEMS.map(item => (
+      {navItems.map(item => (
         <NavLink
           key={item.path}
           to={item.path}

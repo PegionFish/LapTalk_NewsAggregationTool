@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { Navigate } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
 import { api } from '../api/client';
 import GeneralSettings from './settings/GeneralSettings';
 import AISettings from './settings/AISettings';
@@ -27,7 +29,13 @@ const SECTIONS: SectionDef[] = [
 ];
 
 export default function Settings() {
+  const { user } = useAuth();
   const [activeSection, setActiveSection] = useState<Section>('general');
+
+  // 仅管理员可访问
+  if (user?.role !== 'admin') {
+    return <Navigate to="/" replace />;
+  }
 
   // 通用设置
   const [dbPath, setDbPath] = useState('');
