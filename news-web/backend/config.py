@@ -10,6 +10,14 @@ DEFAULT_CONFIG = {
     'openai_api_key': '',
     'openai_model': 'gpt-4o-mini',
     'pipeline_schedule_enabled': True,
+    # 翻译 API — 独立配置，默认指向硅基流动 DeepSeek V3.2
+    'translation_enabled': False,
+    'translation_base_url': 'https://api.siliconflow.cn/v1',
+    'translation_api_key': '',
+    'translation_model': 'deepseek-ai/DeepSeek-V3-0324',
+    'translation_target_lang': 'zh-CN',
+    # 内容缓存目录 — 默认为 DB 同级的 content/ 目录
+    'content_cache_path': '',
 }
 
 class AppConfig:
@@ -87,11 +95,74 @@ class AppConfig:
         self._data['pipeline_schedule_enabled'] = val
         self.save()
 
+    # ── 翻译 API 配置 ──────────────────────────────────────
+    @property
+    def translation_enabled(self) -> bool:
+        return self._data.get('translation_enabled', False)
+
+    @translation_enabled.setter
+    def translation_enabled(self, val: bool):
+        self._data['translation_enabled'] = val
+        self.save()
+
+    @property
+    def translation_base_url(self) -> str:
+        return self._data.get('translation_base_url', DEFAULT_CONFIG['translation_base_url'])
+
+    @translation_base_url.setter
+    def translation_base_url(self, val: str):
+        self._data['translation_base_url'] = val
+        self.save()
+
+    @property
+    def translation_api_key(self) -> str:
+        return self._data.get('translation_api_key', '')
+
+    @translation_api_key.setter
+    def translation_api_key(self, val: str):
+        self._data['translation_api_key'] = val
+        self.save()
+
+    @property
+    def translation_model(self) -> str:
+        return self._data.get('translation_model', DEFAULT_CONFIG['translation_model'])
+
+    @translation_model.setter
+    def translation_model(self, val: str):
+        self._data['translation_model'] = val
+        self.save()
+
+    @property
+    def translation_target_lang(self) -> str:
+        return self._data.get('translation_target_lang', 'zh-CN')
+
+    @translation_target_lang.setter
+    def translation_target_lang(self, val: str):
+        self._data['translation_target_lang'] = val
+        self.save()
+
+    # ── 内容缓存路径 ───────────────────────────────────────
+    @property
+    def content_cache_path(self) -> str:
+        val = self._data.get('content_cache_path', '')
+        if val:
+            return val
+        # 默认为 DB 同级的 content/ 目录
+        db_dir = os.path.dirname(self.db_path)
+        return os.path.join(db_dir, 'content')
+
+    @content_cache_path.setter
+    def content_cache_path(self, val: str):
+        self._data['content_cache_path'] = val
+        self.save()
+
     def to_dict(self) -> dict:
-        # Mask API key in serialized output
+        # Mask API keys in serialized output
         d = dict(self._data)
         if d.get('openai_api_key'):
             d['openai_api_key'] = '***'
+        if d.get('translation_api_key'):
+            d['translation_api_key'] = '***'
         return d
 
 config = AppConfig()

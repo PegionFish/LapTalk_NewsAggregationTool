@@ -250,7 +250,13 @@ class NewsDB:
                                ('human_verified','INTEGER DEFAULT 0'),
                                ('human_tags','TEXT DEFAULT \'[]\''),
                                ('local_path','TEXT DEFAULT \'\''),
-                               ('content_fetched_at','TEXT')]:
+                               ('content_fetched_at','TEXT'),
+                               # 内容下载 + 翻译迁移列
+                               ('text_content','TEXT DEFAULT \'\''),
+                               ('translated_content','TEXT DEFAULT \'\''),
+                               ('content_lang','TEXT DEFAULT \'\''),
+                               ('content_status','TEXT DEFAULT \'pending\''),
+                               ('translated_at','TEXT')]:
                 try:
                     conn.execute(f"ALTER TABLE articles ADD COLUMN {col} {dtype}")
                 except sqlite3.OperationalError:

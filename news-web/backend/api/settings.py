@@ -11,6 +11,14 @@ class SettingsUpdate(BaseModel):
     openai_api_key: str | None = None
     openai_model: str | None = None
     pipeline_schedule_enabled: bool | None = None
+    # 翻译 API
+    translation_enabled: bool | None = None
+    translation_base_url: str | None = None
+    translation_api_key: str | None = None
+    translation_model: str | None = None
+    translation_target_lang: str | None = None
+    # 内容缓存
+    content_cache_path: str | None = None
 
 @router.get("")
 def get_settings():
@@ -30,4 +38,18 @@ def update_settings(body: SettingsUpdate):
         config.openai_model = body.openai_model
     if body.pipeline_schedule_enabled is not None:
         config.pipeline_schedule_enabled = body.pipeline_schedule_enabled
+    # 翻译 API
+    if body.translation_enabled is not None:
+        config.translation_enabled = body.translation_enabled
+    if body.translation_base_url is not None:
+        config.translation_base_url = body.translation_base_url
+    if body.translation_api_key is not None and body.translation_api_key != '***':
+        config.translation_api_key = body.translation_api_key
+    if body.translation_model is not None:
+        config.translation_model = body.translation_model
+    if body.translation_target_lang is not None:
+        config.translation_target_lang = body.translation_target_lang
+    # 内容缓存
+    if body.content_cache_path is not None:
+        config.content_cache_path = body.content_cache_path
     return config.to_dict()
