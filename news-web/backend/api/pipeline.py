@@ -115,10 +115,11 @@ def _batch_translate():
                 _translate_state["done"] += 1
                 continue
 
-            # 翻译文本（而非 HTML）— 截取前 3000 字符控制延迟
+            # 翻译文本（自动分段翻译长文，每段 ≤1800 字独立请求）
             try:
-                _log(_translate_state, f"#{aid} 📡 翻译中... ({len(text)} 字, 模型: {config.translation_model})")
-                translation = translate_to_chinese(text[:3000])
+                chunks = (len(text) + 1799) // 1800
+                _log(_translate_state, f"#{aid} 📡 翻译中... ({len(text)} 字, {chunks} 段, 模型: {config.translation_model})")
+                translation = translate_to_chinese(text)
                 if translation and len(translation) > 20:
                     db2 = _conn()
                     db2.execute(

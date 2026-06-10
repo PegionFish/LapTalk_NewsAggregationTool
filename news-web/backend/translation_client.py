@@ -67,29 +67,69 @@ def translate_html(html: str) -> str:
 
 
 def translate_to_chinese(text: str) -> str:
-    """纯文本翻译 — 兼容旧调用，内部转为 translate_html 模式处理。"""
+    """纯文本翻译 — 长文本自动分段，每段独立翻译后拼接。"""
     if not config.translation_api_key:
         return ""
-    text = text[:30000]
-    try:
-        client = get_client()
-        resp = client.chat.completions.create(
-            model=config.translation_model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "你是一名资深科技新闻翻译。将以下英文科技新闻译成自然流畅的中文。"
-                        "保留技术名词、产品名、公司名的英文原文（如 GPU、API、NVIDIA、TSMC）。"
-                        "人名使用中文通用译名。只输出译文，不要解释。"
-                    ),
-                },
-                {"role": "user", "content": text},
-            ],
-            temperature=0.05,
-            max_tokens=2048,
-            top_p=0.95,
-        )
-        return resp.choices[0].message.content or ""
-    except Exception as e:
-        raise RuntimeError(f"Translation API error: {e}")
+    if not text or len(text.strip()) < 10:
+        return ""
+
+    # 短文本直接翻译
+    if len(text) <= 2500:
+        return _translate_chunk(text)
+
+    # 长文本按段落边界分段，每段 ≤ 2000 字符
+    chunks = _split_text(text, 1800)
+    results = []
+    for i, chunk in enumerate(chunks):
+        try:
+            translated = _translate_chunk(chunk)
+            if translated:
+                results.append(translated)
+        except Exception:
+            results.append(f"[第{i+1}段翻译失败]")
+    return "\n\n".join(results)
+
+
+def _split_text(text: str, max_len: int = 1800) -> list:
+    """在自然断句处切分文本，每段不超过 max_len 字符。"""
+    if len(text) <= max_len:
+        return [text]
+
+    chunks = []
+    remaining = text
+    while len(remaining) > max_len:
+        # 在最近的段落分隔符处切分
+        cut = max_len
+        for sep in ('\n\n', '\n', '. ', '? ', '! ', '. ', '; '):
+            pos = remaining.rfind(sep, max_len // 2, max_len)
+            if pos > 0:
+                cut = pos + len(sep)
+                break
+        chunks.append(remaining[:cut].strip())
+        remaining = remaining[cut:].strip()
+    if remaining:
+        chunks.append(remaining)
+    return chunks
+
+
+def _translate_chunk(text: str) -> str:
+    """翻译单个文本块。"""
+    client = get_client()
+    resp = client.chat.completions.create(
+        model=config.translation_model,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "你是一名资深科技新闻翻译。将以下英文科技新闻译成自然流畅的中文。"
+                    "保留技术名词、产品名、公司名的英文原文（如 GPU、API、NVIDIA、TSMC）。"
+                    "人名使用中文通用译名。只输出译文，不要解释。"
+                ),
+            },
+            {"role": "user", "content": text},
+        ],
+        temperature=0.05,
+        max_tokens=2048,
+        top_p=0.95,
+    )
+    return resp.choices[0].message.content or ""
