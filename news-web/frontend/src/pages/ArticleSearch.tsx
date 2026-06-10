@@ -105,11 +105,14 @@ export default function ArticleSearch() {
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)', background: 'rgba(0,0,0,0.1)' }}>
                 <th style={thStyle}>标题</th>
-                <th style={{ ...thStyle, width: 100 }}>来源</th>
-                <th style={{ ...thStyle, width: 70 }}>评分</th>
-                <th style={{ ...thStyle, width: 60 }}>缓存</th>
-                <th style={{ ...thStyle, width: 60 }}>状态</th>
-                <th style={{ ...thStyle, width: 70 }}>日期</th>
+                <th style={{ ...thStyle, width: 70 }}>来源</th>
+                <th style={{ ...thStyle, width: 42 }}>语言</th>
+                <th style={{ ...thStyle, width: 50 }}>评分</th>
+                <th style={{ ...thStyle, width: 36 }}>缓存</th>
+                <th style={{ ...thStyle, width: 36 }}>翻译</th>
+                <th style={{ ...thStyle, width: 36 }}>分析</th>
+                <th style={{ ...thStyle, width: 42 }}>审核</th>
+                <th style={{ ...thStyle, width: 55 }}>日期</th>
               </tr>
             </thead>
             <tbody>
@@ -121,16 +124,36 @@ export default function ArticleSearch() {
                     background: selected?.id === a.id ? 'rgba(0,212,255,0.06)' : 'transparent',
                     transition: 'var(--transition-fast)',
                   }}>
-                  <td style={{ padding: '7px 12px', fontWeight: selected?.id === a.id ? 600 : 400, maxWidth: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.title}</td>
-                  <td style={{ padding: '7px 12px', color: 'var(--text-secondary)', fontSize: 11 }}>{a.source}</td>
-                  <td style={{ padding: '7px 12px', color: a.score > 0.7 ? 'var(--accent-tertiary)' : a.score > 0.4 ? 'var(--accent-orange)' : 'var(--text-muted)', fontWeight: 600 }}>
+                  <td style={{ padding: '6px 10px', fontWeight: selected?.id === a.id ? 600 : 400, maxWidth: 350, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.title}</td>
+                  <td style={{ padding: '6px 10px', color: 'var(--text-secondary)', fontSize: 10 }}>{a.source}</td>
+                  <td style={{ padding: '6px 10px', textAlign: 'center', fontSize: 10 }}>
+                    <span style={{ color: a.content_lang === 'en' ? '#81c784' : a.content_lang === 'zh' ? '#ce93d8' : 'var(--text-muted)', fontWeight: 600 }}>
+                      {a.content_lang?.toUpperCase() || '?'}
+                    </span>
+                  </td>
+                  <td style={{ padding: '6px 10px', textAlign: 'center', color: a.score > 0.7 ? 'var(--accent-tertiary)' : a.score > 0.4 ? 'var(--accent-orange)' : 'var(--text-muted)', fontWeight: 600, fontSize: 11 }}>
                     {a.score.toFixed(2)}
                   </td>
-                  <td style={{ padding: '7px 12px', textAlign: 'center', fontSize: 12 }}>
+                  <td style={{ padding: '6px 10px', textAlign: 'center', fontSize: 11 }}>
                     {(() => { const b = cacheBadge(a.content_status); return <i className={`fas ${b.icon}`} style={{ color: b.color }} title={b.tooltip} />; })()}
                   </td>
-                  <td style={{ padding: '7px 12px', fontSize: 11 }}><span style={{ color: a.verified ? 'var(--accent-tertiary)' : 'var(--text-muted)' }}>{a.verified ? '已审' : '待审'}</span></td>
-                  <td style={{ padding: '7px 12px', color: 'var(--text-muted)', fontSize: 11 }}>{a.fetched?.slice(5, 10)}</td>
+                  <td style={{ padding: '6px 10px', textAlign: 'center', fontSize: 11 }}>
+                    <i className={`fas ${a.has_translation ? 'fa-check-circle' : 'fa-minus-circle'}`}
+                       style={{ color: a.has_translation ? 'var(--accent-tertiary)' : 'var(--text-muted)', fontSize: 10 }}
+                       title={a.has_translation ? '已翻译' : '未翻译'} />
+                  </td>
+                  <td style={{ padding: '6px 10px', textAlign: 'center', fontSize: 11 }}>
+                    <i className={`fas ${a.ai_analyzed ? 'fa-check-circle' : 'fa-minus-circle'}`}
+                       style={{ color: a.ai_analyzed ? 'var(--accent)' : 'var(--text-muted)', fontSize: 10 }}
+                       title={a.ai_analyzed ? '已分析' : '未分析'} />
+                  </td>
+                  <td style={{ padding: '6px 10px', textAlign: 'center', fontSize: 10 }}>
+                    <span style={{ color: a.human_processed ? 'var(--accent)' : a.verified ? 'var(--accent-tertiary)' : 'var(--text-muted)' }}
+                      title={a.human_processed ? '人工已处理' : a.verified ? '已审核' : '待审核'}>
+                      {a.human_processed ? '人工' : a.verified ? '已审' : '待审'}
+                    </span>
+                  </td>
+                  <td style={{ padding: '6px 10px', color: 'var(--text-muted)', fontSize: 10 }}>{a.published?.slice(5, 10) || a.fetched?.slice(5, 10)}</td>
                 </tr>
               ))}
             </tbody>

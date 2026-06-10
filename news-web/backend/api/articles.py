@@ -56,7 +56,9 @@ def list_articles(
         rows = conn.execute(f"""
             SELECT a.id, a.title, a.source, a.url, a.published_date, a.fetched_at,
                    a.priority_score, a.priority_label, a.human_verified, a.keywords, a.human_tags,
-                   a.content_status, a.content_fetched_at
+                   a.content_status, a.content_fetched_at,
+                   a.content_lang, a.ai_analyzed, a.human_processed,
+                   CASE WHEN a.translated_content != '' THEN 1 ELSE 0 END as has_translation
             FROM articles a WHERE {where}
             ORDER BY a.fetched_at DESC
             LIMIT ? OFFSET ?
@@ -71,6 +73,10 @@ def list_articles(
         'human_tags': json.loads(r[10]) if r[10] else [],
         'content_status': r[11] or 'pending',
         'content_fetched_at': r[12],
+        'content_lang': r[13] or '',
+        'ai_analyzed': bool(r[14]),
+        'human_processed': bool(r[15]),
+        'has_translation': bool(r[16]),
     } for r in rows]
 
     return {'articles': articles, 'total': count, 'page': page, 'limit': limit}

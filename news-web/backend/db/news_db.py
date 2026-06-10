@@ -463,7 +463,7 @@ class NewsDB:
     def link_articles_to_events(self, threshold: float = 0.35) -> int:
         with self._conn() as conn:
             unlinked = conn.execute("""
-                SELECT a.id, a.title, a.fetched_at
+                SELECT a.id, a.title, a.published_date, a.fetched_at
                 FROM articles a
                 LEFT JOIN article_events ae ON a.id = ae.article_id
                 WHERE ae.article_id IS NULL
@@ -474,7 +474,9 @@ class NewsDB:
                 "SELECT id, title FROM events WHERE status='active'"
             ).fetchall()
             new_events = 0
-            for art_id, art_title, fetched_at in unlinked:
+            for art_id, art_title, pub_date, fetched_at in unlinked:
+                # 优先使用真实发布日期，无日期时回退到抓取日期
+                event_date = (pub_date or '')[:10] if pub_date else fetched_at[:10]
                 best_event = None
                 best_score = 0
                 art_entities = extract_entities(art_title)
@@ -493,14 +495,13 @@ class NewsDB:
                     """, (art_id, best_event, round(best_score, 2)))
                     conn.execute("""
                         UPDATE events SET last_seen=?, article_count=article_count+1 WHERE id=?
-                    """, (fetched_at[:10], best_event))
+                    """, (event_date, best_event))
                 else:
                     event_title = art_title[:80]
-                    today = fetched_at[:10]
                     cur = conn.execute("""
                         INSERT INTO events (title, first_seen, last_seen, status)
                         VALUES (?, ?, ?, 'active')
-                    """, (event_title, today, today))
+                    """, (event_title, event_date, event_date))
                     evt_id = cur.lastrowid
                     conn.execute("""
                         INSERT INTO article_events (article_id, event_id)
@@ -510,7 +511,7 @@ class NewsDB:
                     active_events.append((evt_id, event_title))
             conn.commit()
             # 重算 B 维度
-            for art_id, _, _ in unlinked:
+            for art_id, _, _, _ in unlinked:
                 self.calculate_priority(art_id, conn)
             conn.commit()
         return new_events

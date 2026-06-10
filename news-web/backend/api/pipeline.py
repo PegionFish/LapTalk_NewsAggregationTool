@@ -375,7 +375,22 @@ def start_batch_translate():
 
 @router.get("/batch-translate/status")
 def get_batch_translate_status():
-    """查询批量翻译进度。"""
+    """查询批量翻译进度 — running/current/log 来自内存，统计从 DB 派生。"""
+    if _translate_state.get("running"):
+        db = _conn()
+        total = db.execute("""
+            SELECT COUNT(*) FROM articles
+            WHERE local_path != '' AND local_path NOT LIKE '[ERR:%'
+              AND (translated_content IS NULL OR translated_content = '')
+        """).fetchone()[0]
+        done = db.execute("""
+            SELECT COUNT(*) FROM articles
+            WHERE local_path != '' AND local_path NOT LIKE '[ERR:%'
+              AND translated_content != ''
+        """).fetchone()[0]
+        db.close()
+        return {"running": True, "total": total, "done": done, "failed": 0,
+                "current": _translate_state["current"], "log": _translate_state["log"]}
     return dict(_translate_state)
 
 
@@ -385,7 +400,6 @@ def start_batch_analyze():
     global _analyze_state
     if _analyze_state.get("running"):
         return {"ok": False, "message": "分析任务已在运行中", "state": _analyze_state}
-
     db = _conn()
     pending = db.execute("""
         SELECT COUNT(*) FROM articles
@@ -393,7 +407,6 @@ def start_batch_analyze():
           AND (ai_analyzed IS NULL OR ai_analyzed = 0 OR ai_summary IS NULL OR ai_summary = '')
     """).fetchone()[0]
     db.close()
-
     threading.Thread(target=_batch_analyze, daemon=True).start()
     return {"ok": True, "message": f"启动批量分析，预计 {pending} 篇", "pending": pending}
 
@@ -401,7 +414,33 @@ def start_batch_analyze():
 @router.get("/batch-analyze/status")
 def get_batch_analyze_status():
     """查询批量分析进度。"""
+    if _analyze_state.get("running"):
+        db = _conn()
+        total = db.execute("""
+            SELECT COUNT(*) FROM articles
+            WHERE text_content != ''
+              AND (ai_analyzed IS NULL OR ai_analyzed = 0 OR ai_summary IS NULL OR ai_summary = '')
+        """).fetchone()[0]
+        done = db.execute("""
+            SELECT COUNT(*) FROM articles WHERE ai_analyzed = 1 AND ai_summary != ''
+        """).fetchone()[0]
+        db.close()
+        return {"running": True, "total": total, "done": done, "failed": 0,
+                "current": _analyze_state["current"], "log": _analyze_state["log"]}
     return dict(_analyze_state)
+
+
+@router.get("/build-chains/status")
+def get_build_chains_status():
+    """查询逻辑链构筑进度。"""
+    if _chain_state.get("running"):
+        db = _conn()
+        chains = db.execute("SELECT COUNT(*) FROM logic_chains WHERE created_by='auto'").fetchone()[0]
+        db.close()
+        return {"running": True, "total_groups": _chain_state["total_groups"],
+                "chains_created": chains, "current": _chain_state["current"],
+                "log": _chain_state["log"]}
+    return dict(_chain_state)
 
 
 @router.post("/build-chains")
@@ -414,8 +453,3 @@ def start_build_chains():
     threading.Thread(target=_build_logic_chains, daemon=True).start()
     return {"ok": True, "message": "开始构筑逻辑链"}
 
-
-@router.get("/build-chains/status")
-def get_build_chains_status():
-    """查询逻辑链构筑进度。"""
-    return dict(_chain_state)

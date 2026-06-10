@@ -17,6 +17,10 @@ const mockArticle: Article = {
   keywords: ['Intel', 'Nova Lake', 'CPU'],
   human_tags: [],
   content_status: 'fetched',
+  content_lang: 'en',
+  ai_analyzed: false,
+  human_processed: false,
+  has_translation: false,
 };
 
 describe('ArticleBlock', () => {
