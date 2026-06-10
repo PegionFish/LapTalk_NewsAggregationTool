@@ -215,9 +215,14 @@ def _batch_analyze():
         logger.error(f"Batch analyze error: {e}")
     finally:
         _analyze_state["running"] = False
-        # 分析完成后自动构筑逻辑链（仅在成功处理 1 篇以上时触发）
+        # 分析完成后自动串联全部后续 AI 步骤
         if _analyze_state["done"] > 0 and _analyze_state["total"] > 0:
-            logger.info("Batch analyze done — auto-building logic chains...")
+            logger.info("Batch analyze done — auto-keywords → classify → score → recluster → summarize → chains")
+            _batch_ai_keywords()
+            _batch_ai_classify()
+            _batch_ai_score()
+            _batch_ai_recluster()
+            _batch_ai_summarize_events()
             _build_logic_chains()
 
 
@@ -699,3 +704,56 @@ def get_batch_recluster_status(): return dict(_recluster_state)
 @router.get("/batch-summarize-events/status")
 def get_batch_summarize_events_status(): return dict(_evt_sum_state)
 
+
+# ═════════════════════════════════════════════════════════
+# 统一全流程 — 翻译 → 关键词 → 分类 → 评分 → 分析 → 聚类 → 摘要 → 链
+# ═════════════════════════════════════════════════════════
+
+_full_state = _new_state()
+
+def _batch_ai_full():
+    """顺序执行全部 AI 处理步骤。每步检查是否有待处理项，无则跳过。"""
+    global _full_state
+    _full_state = _new_state(); _full_state["running"] = True
+    steps = [
+        ("翻译", _batch_translate, _translate_state),
+        ("AI 分析", _batch_analyze, _analyze_state),
+        ("关键词提取", _batch_ai_keywords, _kw_state),
+        ("智能分类", _batch_ai_classify, _cls_state),
+        ("优先级评分", _batch_ai_score, _score_state),
+        ("事件重聚类", _batch_ai_recluster, _recluster_state),
+        ("事件摘要", _batch_ai_summarize_events, _evt_sum_state),
+        ("构筑逻辑链", _build_logic_chains, _chain_state),
+    ]
+    _full_state["total"] = len(steps)
+    _log(_full_state, f"🚀 启动全流程 AI 处理 — 共 {len(steps)} 步")
+    for idx, (label, fn, st) in enumerate(steps, 1):
+        _log(_full_state, f"━━━ 步骤 {idx}/{len(steps)}: {label} ━━━")
+        _full_state["current"] = f"{label} — 执行中..."
+        _full_state["done"] = idx - 1
+        try:
+            fn()
+            # 等待子任务完成（子任务的 running 为 False 即完成）
+            while st.get("running"):
+                time.sleep(2)
+            _log(_full_state, f"✅ {label} 完成")
+        except Exception as e:
+            _log(_full_state, f"❌ {label} 失败: {str(e)[:100]}")
+        _full_state["done"] = idx
+    _full_state["running"] = False
+    _full_state["current"] = "全部完成"
+
+
+@router.post("/batch-ai-full")
+def start_batch_ai_full():
+    """一键启动全流程 AI 处理。"""
+    global _full_state
+    if _full_state.get("running"):
+        return {"ok": False, "message": "全流程已在运行中"}
+    threading.Thread(target=_batch_ai_full, daemon=True).start()
+    return {"ok": True, "message": "启动全流程 AI 处理 — 翻译→分析→关键词→分类→评分→聚类→摘要→链"}
+
+
+@router.get("/batch-ai-full/status")
+def get_batch_ai_full_status():
+    return dict(_full_state)

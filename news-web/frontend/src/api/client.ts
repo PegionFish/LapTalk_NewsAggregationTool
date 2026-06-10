@@ -138,6 +138,9 @@ export const api = {
   startBatchSummarizeEvents: () => fetchJSON<{ ok: boolean; message: string; pending: number }>('/pipeline/batch-summarize-events', { method: 'POST' }),
   getBatchSummarizeEventsStatus: () => fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string; log: string[] }>('/pipeline/batch-summarize-events/status'),
 
+  startBatchAiFull: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/batch-ai-full', { method: 'POST' }),
+  getBatchAiFullStatus: () => fetchJSON<{ running: boolean; total: number; done: number; current: string; log: string[] }>('/pipeline/batch-ai-full/status'),
+
   getNotifications: (params: { limit?: number; unread_only?: boolean } = {}) => {
     const qs = new URLSearchParams();
     if (params.limit) qs.set('limit', String(params.limit));

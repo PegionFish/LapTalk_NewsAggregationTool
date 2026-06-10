@@ -73,6 +73,12 @@ export default function Dashboard() {
   const pollEs = useCallback(() => poll(api.getBatchSummarizeEventsStatus, v => {const s=v as BatchState; setEsState(s); if(!s.running){setEsRunning(false);clearInterval(esTimer.current)}},(()=>setEsRunning(false)),esTimer),[]);
   const handleSummarizeEvents = startPoll(api.startBatchSummarizeEvents, pollEs, esTimer, setEsRunning);
 
+  const [fullRunning, setFullRunning] = useState(false);
+  const [fullState, setFullState] = useState<BatchState>(emptyBatch);
+  const fullTimer = useRef<ReturnType<typeof setInterval>>(undefined);
+  const pollFull = useCallback(() => poll(api.getBatchAiFullStatus, v => {const s=v as BatchState; setFullState(s); if(!s.running){setFullRunning(false);clearInterval(fullTimer.current)}},(()=>setFullRunning(false)),fullTimer),[]);
+  const handleFullAi = startPoll(api.startBatchAiFull, pollFull, fullTimer, setFullRunning);
+
   const progressPct = (done: number, total: number) => total > 0 ? Math.round((done / total) * 100) : 0;
 
   return (
@@ -82,6 +88,30 @@ export default function Dashboard() {
 
       {stats && (
         <div style={{ marginTop: 24, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16 }}>
+
+          {/* ═══ 一键全流程 ═══ grid-column:1/-1 强制全宽 */}
+          <div style={{ ...card, gridColumn: '1 / -1', background: 'linear-gradient(135deg, rgba(0,212,255,0.08), rgba(129,199,132,0.05))', border: '1px solid rgba(0,212,255,0.25)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 14 }}>
+              <i className="fas fa-rocket" style={{ color: 'var(--accent)', fontSize: 22 }} />
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 700, fontSize: 15 }}>一键全流程 AI 处理</div>
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>翻译 → 分析 → 关键词 → 分类 → 评分 → 聚类 → 摘要 → 构筑逻辑链</div>
+              </div>
+              <button onClick={handleFullAi} disabled={fullRunning}
+                style={{ border: 'none', borderRadius: 8, padding: '10px 28px', fontWeight: 700, fontSize: 14, display: 'flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap', cursor: fullRunning ? 'default' : 'pointer', background: fullRunning ? 'var(--bg-card)' : 'var(--accent)', color: fullRunning ? 'var(--text-muted)' : '#000' }}>
+                {fullRunning ? <><i className="fas fa-spinner fa-spin" /> 运行中...</> : <><i className="fas fa-play" /> 启动全流程</>}
+              </button>
+            </div>
+            {fullState.total > 0 && (
+              <div style={{ maxWidth: 500 }}>
+                <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4 }}>步骤 {fullState.done}/{fullState.total} · {fullState.current || ''}</div>
+                <div style={{ height: 5, background: 'var(--bg-primary)', borderRadius: 3, overflow: 'hidden' }}>
+                  <div style={{ height: '100%', borderRadius: 3, background: 'var(--accent)', transition: 'width 0.5s ease', width: `${fullState.total>0?Math.round(fullState.done/fullState.total*100):0}%` }} />
+                </div>
+              </div>
+            )}
+            {fullState.log?.length! > 0 && <LogPanel entries={fullState.log!} />}
+          </div>
 
           {/* ═══ 批量翻译 ═══ */}
           <div style={card}>
