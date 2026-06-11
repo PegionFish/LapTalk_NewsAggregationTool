@@ -228,7 +228,7 @@ def _build_logic_chains():
     """基于 AI 摘要中的关键词/产品/公司实体，将事件分组并自动创建逻辑链。
     每链仅发一次 AI 请求取名，上下文极短（只含事件标题）。"""
     global _chain_state
-    _chain_state = {"running": True, "total_groups": 0, "chains_created": 0, "current": ""}
+    _chain_state = {"running": True, "total_groups": 0, "chains_created": 0, "current": "", "log": []}
 
     try:
         db = _conn()
@@ -576,9 +576,12 @@ def _batch_ai_recluster():
             _recluster_state["current"] = f"#{aid} {art_title[:50]}"
             best_id, best_conf = None, 0
             for evt_id, evt_title in events:
-                r = assess_event_similarity_ai(art_title, evt_title)
-                if r and r.get("similar") and r.get("confidence", 0) > best_conf:
-                    best_conf = r["confidence"]; best_id = evt_id
+                try:
+                    r = assess_event_similarity_ai(art_title, evt_title)
+                    if r and r.get("similar") and r.get("confidence", 0) > best_conf:
+                        best_conf = r["confidence"]; best_id = evt_id
+                except Exception as cmp_err:
+                    _log(_recluster_state, f"#{aid} ⚠️ 与事件#{evt_id}比对失败: {str(cmp_err)[:60]}")
             if best_id and best_conf > 0.5:
                 db2 = _conn()
                 db2.execute("INSERT OR IGNORE INTO article_events (article_id, event_id, relevance) VALUES (?, ?, ?)", (aid, best_id, round(best_conf, 2)))
@@ -706,6 +709,8 @@ def _batch_ai_full():
     """顺序执行全部 AI 处理步骤。每步检查是否有待处理项，无则跳过。"""
     global _full_state
     _full_state = _new_state(); _full_state["running"] = True
+    _full_state["steps"] = []
+    step_names = ["翻译", "AI 分析", "关键词提取", "智能分类", "优先级评分", "事件重聚类", "事件摘要", "构筑逻辑链"]
     steps = [
         ("翻译", _batch_translate, _translate_state),
         ("AI 分析", _batch_analyze, _analyze_state),
@@ -716,20 +721,28 @@ def _batch_ai_full():
         ("事件摘要", _batch_ai_summarize_events, _evt_sum_state),
         ("构筑逻辑链", _build_logic_chains, _chain_state),
     ]
+    # 初始化所有步骤状态
+    _full_state["steps"] = [{"name": nm, "status": "pending"} for nm in step_names]
     _full_state["total"] = len(steps)
     _log(_full_state, f"🚀 启动全流程 AI 处理 — 共 {len(steps)} 步")
     for idx, (label, fn, st) in enumerate(steps, 1):
         _log(_full_state, f"━━━ 步骤 {idx}/{len(steps)}: {label} ━━━")
         _full_state["current"] = f"{label} — 执行中..."
         _full_state["done"] = idx - 1
+        if _full_state["steps"]:
+            _full_state["steps"][idx - 1]["status"] = "running"
         try:
             fn()
             # 等待子任务完成（子任务的 running 为 False 即完成）
             while st.get("running"):
                 time.sleep(2)
             _log(_full_state, f"✅ {label} 完成")
+            if _full_state["steps"]:
+                _full_state["steps"][idx - 1]["status"] = "done"
         except Exception as e:
             _log(_full_state, f"❌ {label} 失败: {str(e)[:100]}")
+            if _full_state["steps"]:
+                _full_state["steps"][idx - 1]["status"] = "failed"
         _full_state["done"] = idx
     _full_state["running"] = False
     _full_state["current"] = "全部完成"

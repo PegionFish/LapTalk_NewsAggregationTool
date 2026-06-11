@@ -3,7 +3,7 @@ import { api } from '../api/client';
 import type { Stats } from '../types';
 import DashboardCards from '../components/DashboardCards';
 
-type BatchState = { running: boolean; total: number; done: number; failed: number; current: string; log?: string[] };
+type BatchState = { running: boolean; total: number; done: number; failed: number; current: string; log?: string[]; steps?: { name: string; status: string }[] };
 type ChainState = { running: boolean; total_groups: number; chains_created: number; current: string; log?: string[] };
 
 const emptyBatch: BatchState = { running: false, total: 0, done: 0, failed: 0, current: '' };
@@ -50,10 +50,19 @@ export default function Dashboard() {
   useEffect(() => { api.getStats().then(setStats).catch(() => setStats(null)).finally(() => setLoading(false)); }, []);
 
   useEffect(() => {
+    // 挂载时恢复所有 AI 任务状态（切换页面后轮询继续）
     api.getBatchTranslateStatus().then((s: unknown) => { const st = s as BatchState; if (st.running) { setTranslating(true); transTimer.current = setInterval(pollTranslate, 2000); } else setTransState(st); }).catch(() => {});
     api.getBatchAnalyzeStatus().then((s: unknown)  => { const st = s as BatchState; if (st.running) { setAnalyzing(true);  analyTimer.current  = setInterval(pollAnalyze, 2000);  } else setAnalyState(st);  }).catch(() => {});
     api.getBuildChainsStatus().then((s: unknown)    => { const st = s as ChainState; if (st.running) { setChaining(true);  chainTimer.current  = setInterval(pollChains, 2000);  } else setChainState(st);  }).catch(() => {});
-    return () => { clearInterval(transTimer.current); clearInterval(analyTimer.current); clearInterval(chainTimer.current); };
+    api.getBatchKeywordsStatus().then((s: unknown)  => { const st = s as BatchState; if (st.running) { setKwRunning(true); kwTimer.current = setInterval(pollKw, 2000); } else setKwState(st); }).catch(() => {});
+    api.getBatchClassifyStatus().then((s: unknown)  => { const st = s as BatchState; if (st.running) { setClsRunning(true); clsTimer.current = setInterval(pollCls, 2000); } else setClsState(st); }).catch(() => {});
+    api.getBatchScoreStatus().then((s: unknown)     => { const st = s as BatchState; if (st.running) { setScoreRunning(true); scoreTimer.current = setInterval(pollSc, 2000); } else setScoreState(st); }).catch(() => {});
+    api.getBatchReclusterStatus().then((s: unknown) => { const st = s as BatchState; if (st.running) { setReclRunning(true); reclTimer.current = setInterval(pollRecl, 2000); } else setReclState(st); }).catch(() => {});
+    api.getBatchSummarizeEventsStatus().then((s: unknown) => { const st = s as BatchState; if (st.running) { setEsRunning(true); esTimer.current = setInterval(pollEs, 2000); } else setEsState(st); }).catch(() => {});
+    api.getBatchAiFullStatus().then((s: unknown)    => { const st = s as BatchState; if (st.running) { setFullRunning(true); fullTimer.current = setInterval(pollFull, 2000); } else setFullState(st); }).catch(() => {});
+    return () => {
+      [transTimer, analyTimer, chainTimer, kwTimer, clsTimer, scoreTimer, reclTimer, esTimer, fullTimer].forEach(t => clearInterval(t.current));
+    };
   }, []); // eslint-disable-line
 
   const startPoll = (starter: () => Promise<unknown>, poller: () => void, timer: ReturnType<typeof useRef<ReturnType<typeof setInterval>>>, setRunning: (v: boolean) => void) => async () => {
@@ -105,85 +114,103 @@ export default function Dashboard() {
       )}
       <DashboardCards stats={stats} loading={loading} />
 
-      {stats && (
-        <div style={{ marginTop: 24, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16 }}>
+      {/* ═══ AI 批量处理 ───────────────────────────────────── */}
+      <div style={{ marginTop: 24, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16 }}>
 
-          {/* ═══ 一键全流程 ═══ grid-column:1/-1 强制全宽 */}
-          <div style={{ ...card, gridColumn: '1 / -1', background: 'linear-gradient(135deg, rgba(0,212,255,0.08), rgba(129,199,132,0.05))', border: '1px solid rgba(0,212,255,0.25)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 14 }}>
-              <i className="fas fa-rocket" style={{ color: 'var(--accent)', fontSize: 22 }} />
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 700, fontSize: 15 }}>一键全流程 AI 处理</div>
-                <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>翻译 → 分析 → 关键词 → 分类 → 评分 → 聚类 → 摘要 → 构筑逻辑链</div>
-              </div>
-              <button onClick={handleFullAi} disabled={fullRunning}
-                style={{ border: 'none', borderRadius: 8, padding: '10px 28px', fontWeight: 700, fontSize: 14, display: 'flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap', cursor: fullRunning ? 'default' : 'pointer', background: fullRunning ? 'var(--bg-card)' : 'var(--accent)', color: fullRunning ? 'var(--text-muted)' : '#000' }}>
-                {fullRunning ? <><i className="fas fa-spinner fa-spin" /> 运行中...</> : <><i className="fas fa-play" /> 启动全流程</>}
-              </button>
+        {/* ═══ 一键全流程 ═══ grid-column:1/-1 强制全宽 */}
+        <div style={{ ...card, gridColumn: '1 / -1', background: 'linear-gradient(135deg, rgba(0,212,255,0.08), rgba(129,199,132,0.05))', border: '1px solid rgba(0,212,255,0.25)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 14 }}>
+            <i className="fas fa-rocket" style={{ color: 'var(--accent)', fontSize: 22 }} />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 700, fontSize: 15 }}>一键全流程 AI 处理</div>
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>翻译 → 分析 → 关键词 → 分类 → 评分 → 聚类 → 摘要 → 构筑逻辑链</div>
             </div>
-            {fullState.total > 0 && (
-              <div style={{ maxWidth: 500 }}>
-                <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4 }}>步骤 {fullState.done}/{fullState.total} · {fullState.current || ''}</div>
-                <div style={{ height: 5, background: 'var(--bg-primary)', borderRadius: 3, overflow: 'hidden' }}>
+            <button onClick={handleFullAi} disabled={fullRunning}
+              style={{ border: 'none', borderRadius: 8, padding: '10px 28px', fontWeight: 700, fontSize: 14, display: 'flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap', cursor: fullRunning ? 'default' : 'pointer', background: fullRunning ? 'var(--bg-card)' : 'var(--accent)', color: fullRunning ? 'var(--text-muted)' : '#000' }}>
+              {fullRunning ? <><i className="fas fa-spinner fa-spin" /> 运行中...</> : <><i className="fas fa-play" /> 启动全流程</>}
+            </button>
+          </div>
+          {(fullRunning || fullState.total > 0) && (
+            <div style={{ maxWidth: '100%' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 6 }}>
+                {fullRunning ? <i className="fas fa-spinner fa-spin" style={{ marginRight: 6 }} /> : <i className="fas fa-check-circle" style={{ color: 'var(--accent-tertiary)', marginRight: 6 }} />}
+                步骤 {fullState.done}/{fullState.total || 8} · {fullState.current || '等待中...'}
+              </div>
+              {fullState.total > 0 && (
+                <div style={{ height: 5, background: 'var(--bg-primary)', borderRadius: 3, overflow: 'hidden', marginBottom: 10 }}>
                   <div style={{ height: '100%', borderRadius: 3, background: 'var(--accent)', transition: 'width 0.5s ease', width: `${fullState.total>0?Math.round(fullState.done/fullState.total*100):0}%` }} />
                 </div>
-              </div>
-            )}
-            {fullState.log?.length! > 0 && <LogPanel entries={fullState.log!} />}
-          </div>
-
-          {/* ═══ 批量翻译 ═══ */}
-          <div style={card}>
-            <div style={cardHeader}>
-              <i className="fas fa-language" style={{ color: 'var(--accent-tertiary)', fontSize: 18 }} />
-              <div><div style={{ fontWeight: 600, fontSize: 14 }}>AI 批量翻译</div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>遍历英文文章 HTML，调用 API 翻译为中文</div></div>
+              )}
+              {/* 分步状态指示器 */}
+              {fullState.steps && fullState.steps.length > 0 && (
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
+                  {fullState.steps.map((s, i) => {
+                    const icon = s.status === 'done' ? '✅' : s.status === 'failed' ? '❌' : s.status === 'running' ? '⏳' : '⬜';
+                    const bg = s.status === 'done' ? 'rgba(129,199,132,0.12)' : s.status === 'failed' ? 'rgba(239,83,80,0.12)' : s.status === 'running' ? 'rgba(0,212,255,0.12)' : 'transparent';
+                    const border = s.status === 'done' ? '1px solid rgba(129,199,132,0.3)' : s.status === 'failed' ? '1px solid rgba(239,83,80,0.3)' : s.status === 'running' ? '1px solid rgba(0,212,255,0.4)' : '1px solid var(--border)';
+                    return (
+                      <div key={i} style={{ fontSize: 11, padding: '3px 8px', borderRadius: 12, background: bg, border, display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
+                        <span>{icon}</span>
+                        <span style={{ color: s.status === 'running' ? 'var(--accent)' : 'var(--text-secondary)' }}>{s.name}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
-            <div style={cardBody}>
-              <Btn onClick={handleTranslate} disabled={translating} color="var(--accent-tertiary)" label="开始批量翻译" running={translating} />
-              {transState.total > 0 && <Progress done={transState.done} total={transState.total} failed={transState.failed} current={transState.current} pct={progressPct(transState.done, transState.total)} color="var(--accent-tertiary)" />}
-            </div>
-            {transState.log?.length! > 0 && <LogPanel entries={transState.log!} />}
-          </div>
-
-          {/* ═══ 批量分析 ═══ */}
-          <div style={card}>
-            <div style={cardHeader}>
-              <i className="fas fa-brain" style={{ color: 'var(--accent)', fontSize: 18 }} />
-              <div><div style={{ fontWeight: 600, fontSize: 14 }}>AI 批量分析</div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>遍历已提取文本的文章，生成结构化分析摘要</div></div>
-            </div>
-            <div style={cardBody}>
-              <Btn onClick={handleAnalyze} disabled={analyzing} color="var(--accent)" label="开始批量分析" running={analyzing} />
-              {analyState.total > 0 && <Progress done={analyState.done} total={analyState.total} failed={analyState.failed} current={analyState.current} pct={progressPct(analyState.done, analyState.total)} color="var(--accent)" />}
-            </div>
-            {analyState.log?.length! > 0 && <LogPanel entries={analyState.log!} />}
-          </div>
-
-          {/* ═══ 自动构筑逻辑链 ═══ */}
-          <div style={card}>
-            <div style={cardHeader}>
-              <i className="fas fa-diagram-project" style={{ color: 'var(--accent-purple)', fontSize: 18 }} />
-              <div><div style={{ fontWeight: 600, fontSize: 14 }}>自动构筑逻辑链</div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>基于已分析事件的关键词自动分组，AI 命名后创建逻辑链</div></div>
-            </div>
-            <div style={cardBody}>
-              <Btn onClick={handleBuildChains} disabled={chaining} color="var(--accent-purple)" label="自动构筑" running={chaining} />
-              {chainState.total_groups > 0 && <Progress done={chainState.chains_created} total={chainState.total_groups} failed={0} current={chainState.current} pct={Math.round(chainState.total_groups > 0 ? (chainState.chains_created / chainState.total_groups) * 100 : 0)} color="var(--accent-purple)" />}
-              {chainState.chains_created > 0 && !chaining && <div style={{ fontSize: 11, color: 'var(--accent-tertiary)', marginLeft: 12 }}><i className="fas fa-check-circle" /> 完成 {chainState.chains_created} 个链</div>}
-            </div>
-            {chainState.log?.length! > 0 && <LogPanel entries={chainState.log!} />}
-          </div>
+          )}
+          {fullState.log?.length! > 0 && <LogPanel entries={fullState.log!} />}
         </div>
-      )}
+
+        {/* ═══ 批量翻译 ═══ */}
+        <div style={card}>
+          <div style={cardHeader}>
+            <i className="fas fa-language" style={{ color: 'var(--accent-tertiary)', fontSize: 18 }} />
+            <div><div style={{ fontWeight: 600, fontSize: 14 }}>AI 批量翻译</div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>遍历英文文章 HTML，调用 API 翻译为中文</div></div>
+          </div>
+          <div style={cardBody}>
+            <Btn onClick={handleTranslate} disabled={translating} color="var(--accent-tertiary)" label="开始批量翻译" running={translating} />
+            {transState.total > 0 && <Progress done={transState.done} total={transState.total} failed={transState.failed} current={transState.current} pct={progressPct(transState.done, transState.total)} color="var(--accent-tertiary)" />}
+          </div>
+          {transState.log?.length! > 0 && <LogPanel entries={transState.log!} />}
+        </div>
+
+        {/* ═══ 批量分析 ═══ */}
+        <div style={card}>
+          <div style={cardHeader}>
+            <i className="fas fa-brain" style={{ color: 'var(--accent)', fontSize: 18 }} />
+            <div><div style={{ fontWeight: 600, fontSize: 14 }}>AI 批量分析</div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>遍历已提取文本的文章，生成结构化分析摘要</div></div>
+          </div>
+          <div style={cardBody}>
+            <Btn onClick={handleAnalyze} disabled={analyzing} color="var(--accent)" label="开始批量分析" running={analyzing} />
+            {analyState.total > 0 && <Progress done={analyState.done} total={analyState.total} failed={analyState.failed} current={analyState.current} pct={progressPct(analyState.done, analyState.total)} color="var(--accent)" />}
+          </div>
+          {analyState.log?.length! > 0 && <LogPanel entries={analyState.log!} />}
+        </div>
+
+        {/* ═══ 自动构筑逻辑链 ═══ */}
+        <div style={card}>
+          <div style={cardHeader}>
+            <i className="fas fa-diagram-project" style={{ color: 'var(--accent-purple)', fontSize: 18 }} />
+            <div><div style={{ fontWeight: 600, fontSize: 14 }}>自动构筑逻辑链</div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>基于已分析事件的关键词自动分组，AI 命名后创建逻辑链</div></div>
+          </div>
+          <div style={cardBody}>
+            <Btn onClick={handleBuildChains} disabled={chaining} color="var(--accent-purple)" label="自动构筑" running={chaining} />
+            {chainState.total_groups > 0 && <Progress done={chainState.chains_created} total={chainState.total_groups} failed={0} current={chainState.current} pct={Math.round(chainState.total_groups > 0 ? (chainState.chains_created / chainState.total_groups) * 100 : 0)} color="var(--accent-purple)" />}
+            {chainState.chains_created > 0 && !chaining && <div style={{ fontSize: 11, color: 'var(--accent-tertiary)', marginLeft: 12 }}><i className="fas fa-check-circle" /> 完成 {chainState.chains_created} 个链</div>}
+          </div>
+          {chainState.log?.length! > 0 && <LogPanel entries={chainState.log!} />}
+        </div>
+      </div>
 
       {/* ── AI 语义处理 ── */}
-      {stats && (
-        <div style={{ marginTop: 16, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16 }}>
-          <Card icon="fa-tags" color="var(--accent-tertiary)" title="AI 关键词提取" desc="从文章正文提取技术关键词，替代硬编码映射表" state={kwState} running={kwRunning} onClick={handleKeywords} label="提取关键词" />
-          <Card icon="fa-folder-tree" color="var(--accent)" title="AI 智能分类" desc="自动归类文章细粒度领域 + 生成标签" state={clsState} running={clsRunning} onClick={handleClassify} label="智能分类" />
-          <Card icon="fa-star" color="var(--accent-orange)" title="AI 优先级评分" desc="AI 综合评估文章重要性、时效性、影响力" state={scoreState} running={scoreRunning} onClick={handleScore} label="智能评分" />
-          <Card icon="fa-object-group" color="var(--accent-purple)" title="智能事件重聚类" desc="AI 重新判定文章归属事件，修正误聚类" state={reclState} running={reclRunning} onClick={handleRecluster} label="重聚类" />
-          <Card icon="fa-file-lines" color="var(--accent-green)" title="事件摘要生成" desc="为多篇文章的事件生成综合 AI 摘要" state={esState} running={esRunning} onClick={handleSummarizeEvents} label="生成摘要" />
-        </div>
-      )}
+      <div style={{ marginTop: 16, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16 }}>
+        <Card icon="fa-tags" color="var(--accent-tertiary)" title="AI 关键词提取" desc="从文章正文提取技术关键词，替代硬编码映射表" state={kwState} running={kwRunning} onClick={handleKeywords} label="提取关键词" />
+        <Card icon="fa-folder-tree" color="var(--accent)" title="AI 智能分类" desc="自动归类文章细粒度领域 + 生成标签" state={clsState} running={clsRunning} onClick={handleClassify} label="智能分类" />
+        <Card icon="fa-star" color="var(--accent-orange)" title="AI 优先级评分" desc="AI 综合评估文章重要性、时效性、影响力" state={scoreState} running={scoreRunning} onClick={handleScore} label="智能评分" />
+        <Card icon="fa-object-group" color="var(--accent-purple)" title="智能事件重聚类" desc="AI 重新判定文章归属事件，修正误聚类" state={reclState} running={reclRunning} onClick={handleRecluster} label="重聚类" />
+        <Card icon="fa-file-lines" color="var(--accent-green)" title="事件摘要生成" desc="为多篇文章的事件生成综合 AI 摘要" state={esState} running={esRunning} onClick={handleSummarizeEvents} label="生成摘要" />
+      </div>
 
       {stats && (
         <div style={{ marginTop: 24, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 16 }}>
