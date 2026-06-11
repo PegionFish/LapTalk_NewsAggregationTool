@@ -11,9 +11,11 @@ from config import config
 
 @pytest.fixture
 def client(test_db_path):
-    config.db_path = test_db_path
+    # 直接操作 _data 绕过 setter，避免测试路径写入 config.json
+    config._data['db_path'] = test_db_path
     with TestClient(app) as c:
         yield c
+    config._data['db_path'] = ''  # 恢复
 
 def test_health(client):
     resp = client.get("/api/health")
