@@ -81,6 +81,7 @@ from api.logs import router as logs_router
 from api.cache import router as cache_router
 from api.pipeline import router as pipeline_router
 from api.hotlists import router as hotlists_router
+from api.fetch import router as fetch_router
 
 app.include_router(settings_router)
 app.include_router(stats_router)
@@ -95,6 +96,7 @@ app.include_router(logs_router)
 app.include_router(cache_router)
 app.include_router(pipeline_router)
 app.include_router(hotlists_router)
+app.include_router(fetch_router)
 
 # ── SPA fallback + static mount (must be last) ──────────
 from fastapi.responses import FileResponse
