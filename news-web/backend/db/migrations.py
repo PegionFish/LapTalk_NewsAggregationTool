@@ -57,3 +57,31 @@ def ensure_schema(db_path: str):
     # Audit log migration
     from db.audit import ensure_audit_table
     ensure_audit_table(db_path)
+
+    # ── fetch_logs: 抓取历史记录表 ──────────────────────
+    conn = sqlite3.connect(db_path)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS fetch_logs (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_name     TEXT    NOT NULL,
+            source_type     TEXT    NOT NULL,
+            articles_fetched INTEGER DEFAULT 0,
+            articles_new    INTEGER DEFAULT 0,
+            status          TEXT    DEFAULT 'ok',
+            error_msg       TEXT,
+            duration_ms     INTEGER,
+            started_at      TEXT    NOT NULL,
+            finished_at     TEXT,
+            run_type        TEXT    DEFAULT 'scheduled'
+        )
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_fetch_logs_source
+        ON fetch_logs(source_name, started_at)
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_fetch_logs_type
+        ON fetch_logs(source_type, started_at)
+    """)
+    conn.commit()
+    conn.close()
