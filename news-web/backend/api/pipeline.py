@@ -118,8 +118,7 @@ def _batch_translate():
 
             # 翻译文本（自动分段翻译长文，每段 ≤1800 字独立请求）
             try:
-                chunks = (len(text) + 1799) // 1800
-                _log(_translate_state, f"#{aid} 📡 翻译中... ({len(text)} 字, {chunks} 段, 模型: {config.translation_model})")
+                _log(_translate_state, f"#{aid} 📡 翻译中... ({len(text)} 字, 1 次请求, 模型: {config.translation_model})")
                 translation = translate_to_chinese(text)
                 if translation and len(translation) > 20:
                     db2 = _conn()
