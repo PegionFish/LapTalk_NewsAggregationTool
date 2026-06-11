@@ -184,4 +184,53 @@ export const api = {
     if (date) qs.set('date', date);
     return fetchJSON<{ total: number; items: import('../types').HotlistItem[] }>(`/hotlists/top?${qs}`);
   },
+
+  // ── 数据采集监控 ────────────────────────────────────
+  getFetchOverview: () =>
+    fetchJSON<import('../types').FetchOverview>('/fetch/overview'),
+
+  getFetchSources: (sourceType?: string) => {
+    const qs = sourceType ? `?source_type=${encodeURIComponent(sourceType)}` : '';
+    return fetchJSON<{ sources: import('../types').FetchSource[] }>(`/fetch/sources${qs}`);
+  },
+
+  getFetchSourceHistory: (name: string, days = 7) =>
+    fetchJSON<{ source: string; days: number; history: import('../types').FetchLog[] }>(
+      `/fetch/sources/${encodeURIComponent(name)}/history?days=${days}`
+    ),
+
+  retryFetchSource: (name: string) =>
+    fetchJSON<{ ok: boolean; message: string }>(
+      `/fetch/sources/${encodeURIComponent(name)}/retry`, { method: 'POST' }
+    ),
+
+  getFetchSourceArticles: (name: string, params: { page?: number; limit?: number; status?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.page) qs.set('page', String(params.page));
+    if (params.limit) qs.set('limit', String(params.limit));
+    if (params.status) qs.set('status', params.status);
+    const query = qs.toString();
+    return fetchJSON<{ total: number; page: number; limit: number; source: string; articles: import('../types').FetchArticleItem[] }>(
+      `/fetch/sources/${encodeURIComponent(name)}/articles${query ? `?${query}` : ''}`
+    );
+  },
+
+  retryArticleCache: (id: number) =>
+    fetchJSON<{ ok: boolean; message: string }>(`/fetch/articles/${id}/retry-cache`, { method: 'POST' }),
+
+  retryArticlesBatch: (ids: number[]) =>
+    fetchJSON<{ ok: boolean; total: number; message: string }>(
+      '/fetch/articles/batch-retry', { method: 'POST', body: JSON.stringify({ ids }) }
+    ),
+
+  getBatchRetryStatus: () =>
+    fetchJSON<import('../types').BatchRetryState>('/fetch/articles/batch-retry/status'),
+
+  getFailedArticles: (page = 1, limit = 50) =>
+    fetchJSON<{ total: number; page: number; limit: number; articles: import('../types').FailedArticle[] }>(
+      `/fetch/articles/failed?page=${page}&limit=${limit}`
+    ),
+
+  getFetchLogs: (limit = 50) =>
+    fetchJSON<{ logs: import('../types').FetchLog[] }>(`/fetch/logs?limit=${limit}`),
 };
