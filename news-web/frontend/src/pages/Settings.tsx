@@ -58,6 +58,10 @@ export default function Settings() {
   // 缓存
   const [cachePath, setCachePath] = useState('');
 
+  // 代理
+  const [proxyEnabled, setProxyEnabled] = useState(false);
+  const [proxyUrl, setProxyUrl] = useState('');
+
   // 保存
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
@@ -76,6 +80,8 @@ export default function Settings() {
       setTranslationApiKey(s.translation_api_key || '');
       setTranslationModel(s.translation_model || 'deepseek-ai/DeepSeek-V3-0324');
       setCachePath(s.content_cache_path || '');
+      setProxyEnabled(s.proxy_enabled === true);
+      setProxyUrl(s.proxy_url || '');
     }).catch(() => {});
     api.getPipelineStatus().then(s => setPipelineStatus(s)).catch(() => {});
   }, []);
@@ -97,6 +103,8 @@ export default function Settings() {
         translation_api_key: translationApiKey,
         translation_model: translationModel,
         content_cache_path: cachePath,
+        proxy_enabled: proxyEnabled,
+        proxy_url: proxyUrl,
       });
       setMessage('配置已保存');
     } catch (e) {
@@ -139,6 +147,8 @@ export default function Settings() {
           pipelineEnabled={pipelineEnabled} setPipelineEnabled={setPipelineEnabled}
           pipelineRunning={pipelineRunning} pipelineStatus={pipelineStatus}
           onTriggerPipeline={handleTriggerPipeline}
+          proxyEnabled={proxyEnabled} setProxyEnabled={setProxyEnabled}
+          proxyUrl={proxyUrl} setProxyUrl={setProxyUrl}
         />;
       case 'ai':
         return <AISettings

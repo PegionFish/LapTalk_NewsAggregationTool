@@ -7,11 +7,14 @@ interface Props {
   pipelineRunning: boolean;
   pipelineStatus: { last_run?: string | null; last_status?: string | null };
   onTriggerPipeline: () => void;
+  proxyEnabled: boolean; setProxyEnabled: Dispatch<SetStateAction<boolean>>;
+  proxyUrl: string; setProxyUrl: Dispatch<SetStateAction<string>>;
 }
 
 export default function GeneralSettings({
   dbPath, setDbPath, userAgent, setUserAgent,
   pipelineEnabled, setPipelineEnabled, pipelineRunning, pipelineStatus, onTriggerPipeline,
+  proxyEnabled, setProxyEnabled, proxyUrl, setProxyUrl,
 }: Props) {
   return (
     <div className="settings-container">
@@ -76,6 +79,21 @@ export default function GeneralSettings({
             <input className="form-control" value={userAgent} onChange={e => setUserAgent(e.target.value)}
               placeholder="Mozilla/5.0 ..." />
           </div>
+          <div className="form-group" style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
+            <label className="form-check">
+              <input type="checkbox" checked={proxyEnabled}
+                onChange={e => setProxyEnabled(e.target.checked)} />
+              <span className="form-check-label">启用境外内容抓取代理</span>
+            </label>
+          </div>
+          {proxyEnabled && (
+            <div className="form-group" style={{ marginTop: 8 }}>
+              <label className="form-label"><i className="fas fa-network-wired" /> 代理地址</label>
+              <input className="form-control" value={proxyUrl} onChange={e => setProxyUrl(e.target.value)}
+                placeholder="http://127.0.0.1:7890" />
+              <div className="form-text">支持 HTTP 和 SOCKS5 代理协议（如 socks5://127.0.0.1:1080）。仅对 RSS 抓取和页面下载生效，AI 分析/翻译不走代理。SOCKS5 需要安装 pip install PySocks。</div>
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -24,6 +24,13 @@ except Exception:
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# ── 境外代理 — 如已配置代理则启用 ──────────────────────
+try:
+    from utils.proxy import setup_urllib_proxy
+    setup_urllib_proxy()
+except Exception:
+    pass
+
 # ─── RSS 源配置 ────────────────────────────────────────
 RSS_FEEDS = [
     # ══════════════════════════════════════════════════

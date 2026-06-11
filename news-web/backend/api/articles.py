@@ -4,6 +4,7 @@ from typing import Optional
 import httpx
 from config import config
 from db.news_db import NewsDB
+from utils.proxy import get_httpx_proxy
 
 router = APIRouter(prefix="/api/articles", tags=["articles"])
 
@@ -182,7 +183,7 @@ async def get_article_content(article_id: int):
     # 3. 回退：代理获取原文
     if not url:
         raise HTTPException(404, "no_url")
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(proxy=get_httpx_proxy()) as client:
         try:
             resp = await client.get(url, headers={'User-Agent': config.user_agent},
                                     follow_redirects=True, timeout=15)
@@ -265,7 +266,7 @@ async def serve_article_html(article_id: int):
     # 2. 回退代理获取 — 同样切除脚本
     if not url:
         raise HTTPException(404, "no_url")
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(proxy=get_httpx_proxy()) as client:
         try:
             resp = await client.get(url, headers={'User-Agent': config.user_agent},
                                     follow_redirects=True, timeout=15)

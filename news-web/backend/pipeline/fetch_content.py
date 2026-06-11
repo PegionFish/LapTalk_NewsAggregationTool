@@ -25,6 +25,13 @@ sys.path.insert(0, PARENT_DIR)
 from config import config
 from utils.text import extract_text_from_html, detect_language
 
+# ── 境外代理 — 如已配置代理则启用 ──────────────────────
+try:
+    from utils.proxy import setup_urllib_proxy
+    setup_urllib_proxy()
+except Exception:
+    pass
+
 DELAY = 0.5
 TIMEOUT = 15
 BLOCKED = ['expreview.com', 'solidot.org', 'weibo.com', 'douyin.com']

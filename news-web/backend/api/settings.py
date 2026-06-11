@@ -21,6 +21,9 @@ class SettingsUpdate(BaseModel):
     translation_target_lang: str | None = None
     # 内容缓存
     content_cache_path: str | None = None
+    # 境外内容抓取代理
+    proxy_enabled: bool | None = None
+    proxy_url: str | None = None
 
 @router.get("")
 def get_settings():
@@ -54,6 +57,11 @@ def update_settings(body: SettingsUpdate):
     # 内容缓存
     if body.content_cache_path is not None:
         config.content_cache_path = body.content_cache_path
+    # 境外代理
+    if body.proxy_enabled is not None:
+        config.proxy_enabled = body.proxy_enabled
+    if body.proxy_url is not None:
+        config.proxy_url = body.proxy_url
     return config.to_dict()
 
 

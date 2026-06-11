@@ -107,6 +107,7 @@ export const api = {
     translation_enabled?: boolean; translation_base_url?: string;
     translation_api_key?: string; translation_model?: string;
     translation_target_lang?: string; content_cache_path?: string;
+    proxy_enabled?: boolean; proxy_url?: string;
   }>('/settings'),
 
   updateSettings: (data: Record<string, string | boolean>) =>

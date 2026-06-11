@@ -26,6 +26,13 @@ except Exception:
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPORTS_DIR = os.path.join(SCRIPT_DIR, 'hot_reports')
 
+# ── 境外代理 — 如已配置代理则启用 ──────────────────────
+try:
+    from utils.proxy import setup_urllib_proxy
+    setup_urllib_proxy()
+except Exception:
+    pass
+
 TIMEOUT = 10  # 单次请求超时秒数
 DELAY = 0.5   # 请求间延迟（礼貌间隔）
 

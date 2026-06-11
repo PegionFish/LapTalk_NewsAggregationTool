@@ -21,6 +21,9 @@ DEFAULT_CONFIG = {
     # 平台热搜采集 — 微博/知乎/抖音/头条 + B站热门视频
     'platform_hotlist_enabled': True,
     'bilibili_max_pages': 7,
+    # 境外内容抓取代理 — 仅用于 RSS/页面下载，AI/翻译不走代理
+    'proxy_enabled': False,
+    'proxy_url': '',   # http://127.0.0.1:7890 或 socks5://127.0.0.1:1080
 }
 
 class AppConfig:
@@ -176,6 +179,25 @@ class AppConfig:
     @bilibili_max_pages.setter
     def bilibili_max_pages(self, val: int):
         self._data['bilibili_max_pages'] = val
+        self.save()
+
+    # ── 境外内容抓取代理 ──────────────────────────────────────
+    @property
+    def proxy_enabled(self) -> bool:
+        return self._data.get('proxy_enabled', False)
+
+    @proxy_enabled.setter
+    def proxy_enabled(self, val: bool):
+        self._data['proxy_enabled'] = val
+        self.save()
+
+    @property
+    def proxy_url(self) -> str:
+        return self._data.get('proxy_url', '')
+
+    @proxy_url.setter
+    def proxy_url(self, val: str):
+        self._data['proxy_url'] = val
         self.save()
 
     def to_dict(self) -> dict:
