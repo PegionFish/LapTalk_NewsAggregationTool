@@ -34,9 +34,9 @@ def _queue_timeout_retry(
     state: dict,
     item_id: int,
     retry_counts: dict[int, int],
-    max_retries: int = 1,
+    max_retries: int = 4,
 ) -> bool:
-    """判断当前超时任务是否仍可进入队尾重试；每轮最多重试一次。"""
+    """判断当前超时任务是否仍可进入队尾重试；最多重试 4 次（共 5 次尝试）。"""
     count = retry_counts.get(item_id, 0) + 1
     retry_counts[item_id] = count
     if count <= max_retries:
