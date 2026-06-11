@@ -166,6 +166,8 @@ export const api = {
 
   testTranslation: () => fetchJSON<{ ok: boolean; original?: string; translation?: string; error?: string; model?: string }>('/settings/test-translation', { method: 'POST' }),
 
+  testProxy: () => fetchJSON<{ ok: boolean; message?: string; error?: string; elapsed_ms?: number; proxy_url?: string }>('/settings/test-proxy', { method: 'POST' }),
+
   // ── 实时热点 ──────────────────────────────────────────
   getHotlists: (params?: { date?: string; platform?: string }) => {
     const qs = new URLSearchParams();

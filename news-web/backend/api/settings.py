@@ -92,3 +92,77 @@ def test_translation_api():
         return {'ok': True, 'original': test_text, 'translation': result[:300], 'model': config.translation_model}
     except Exception as e:
         return {'ok': False, 'error': str(e)[:200]}
+
+
+# ══════════════════════════════════════════════════════════════
+# 代理连通性测试
+# ══════════════════════════════════════════════════════════════
+
+@router.post("/test-proxy")
+def test_proxy():
+    """通过访问 Google 测试代理是否可用。"""
+    if not config.proxy_enabled or not config.proxy_url:
+        return {'ok': False, 'error': '代理未启用或未配置代理地址'}
+
+    import time as _time
+    import urllib.request
+    import urllib.error
+
+    proxy_url = config.proxy_url.strip()
+    started = _time.monotonic()
+
+    try:
+        if proxy_url.startswith('socks'):
+            try:
+                import socks
+                import sockshandler
+                from urllib.parse import urlparse
+                parsed = urlparse(proxy_url)
+                proxy_type = socks.PROXY_TYPE_SOCKS5
+                proxy_host = parsed.hostname or '127.0.0.1'
+                proxy_port = parsed.port or 1080
+                handler = sockshandler.SocksiPyHandler(proxy_type, proxy_host, proxy_port)
+                opener = urllib.request.build_opener(handler)
+            except ImportError:
+                return {'ok': False, 'error': 'PySocks 未安装，无法使用 SOCKS5 代理'}
+        else:
+            handler = urllib.request.ProxyHandler({'http': proxy_url, 'https': proxy_url})
+            opener = urllib.request.build_opener(handler)
+
+        req = urllib.request.Request(
+            'https://www.google.com',
+            headers={'User-Agent': config.user_agent, 'Accept': 'text/html'},
+        )
+        resp = opener.open(req, timeout=10)
+        elapsed_ms = int((_time.monotonic() - started) * 1000)
+        size = len(resp.read() or b'')
+        resp.close()
+
+        return {
+            'ok': True,
+            'message': f'代理连接成功 — Google 返回 {size} 字节，耗时 {elapsed_ms}ms',
+            'elapsed_ms': elapsed_ms,
+            'proxy_url': proxy_url,
+        }
+    except urllib.error.HTTPError as e:
+        elapsed_ms = int((_time.monotonic() - started) * 1000)
+        return {
+            'ok': True,
+            'message': f'代理连通 — Google 返回 HTTP {e.code}，耗时 {elapsed_ms}ms',
+            'elapsed_ms': elapsed_ms,
+            'proxy_url': proxy_url,
+        }
+    except urllib.error.URLError as e:
+        elapsed_ms = int((_time.monotonic() - started) * 1000)
+        return {
+            'ok': False,
+            'error': f'代理连接失败: {e.reason}',
+            'elapsed_ms': elapsed_ms,
+        }
+    except Exception as e:
+        elapsed_ms = int((_time.monotonic() - started) * 1000)
+        return {
+            'ok': False,
+            'error': str(e)[:200],
+            'elapsed_ms': elapsed_ms,
+        }

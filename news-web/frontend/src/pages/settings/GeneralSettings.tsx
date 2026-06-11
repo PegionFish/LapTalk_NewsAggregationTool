@@ -1,4 +1,5 @@
-import type { Dispatch, SetStateAction } from 'react';
+import { useState, type Dispatch, type SetStateAction } from 'react';
+import { api } from '../../api/client';
 
 interface Props {
   dbPath: string; setDbPath: Dispatch<SetStateAction<string>>;
@@ -16,6 +17,23 @@ export default function GeneralSettings({
   pipelineEnabled, setPipelineEnabled, pipelineRunning, pipelineStatus, onTriggerPipeline,
   proxyEnabled, setProxyEnabled, proxyUrl, setProxyUrl,
 }: Props) {
+  const [testingProxy, setTestingProxy] = useState(false);
+  const [proxyTestResult, setProxyTestResult] = useState('');
+
+  const handleTestProxy = async () => {
+    setTestingProxy(true);
+    setProxyTestResult('');
+    try {
+      const r = await api.testProxy();
+      setProxyTestResult(r.ok
+        ? `✅ ${r.message || '连接成功'}`
+        : `❌ ${r.error || '连接失败'}`);
+    } catch (e) {
+      setProxyTestResult(`❌ 请求失败: ${(e as Error).message}`);
+    }
+    setTestingProxy(false);
+  };
+
   return (
     <div className="settings-container">
       {/* 数据库 */}
@@ -87,12 +105,28 @@ export default function GeneralSettings({
             </label>
           </div>
           {proxyEnabled && (
-            <div className="form-group" style={{ marginTop: 8 }}>
-              <label className="form-label"><i className="fas fa-network-wired" /> 代理地址</label>
-              <input className="form-control" value={proxyUrl} onChange={e => setProxyUrl(e.target.value)}
-                placeholder="http://127.0.0.1:7890" />
-              <div className="form-text">支持 HTTP 和 SOCKS5 代理协议（如 socks5://127.0.0.1:1080）。仅对 RSS 抓取和页面下载生效，AI 分析/翻译不走代理。SOCKS5 需要安装 pip install PySocks。</div>
-            </div>
+            <>
+              <div className="form-group" style={{ marginTop: 8 }}>
+                <label className="form-label"><i className="fas fa-network-wired" /> 代理地址</label>
+                <input className="form-control" value={proxyUrl} onChange={e => setProxyUrl(e.target.value)}
+                  placeholder="http://127.0.0.1:7890" />
+                <div className="form-text">支持 HTTP 和 SOCKS5 代理协议（如 socks5://127.0.0.1:1080）。仅对 RSS 抓取和页面下载生效，AI 分析/翻译不走代理。SOCKS5 需要安装 pip install PySocks。</div>
+              </div>
+              <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
+                <button className="btn btn-outline" onClick={handleTestProxy} disabled={testingProxy}
+                  style={{ padding: '6px 16px', fontSize: 12 }}>
+                  <i className={`fas fa-${testingProxy ? 'spinner fa-spin' : 'plug'}`} />
+                  {' '}{testingProxy ? '测试中...' : '测试代理 (访问 Google)'}
+                </button>
+                {proxyTestResult && (
+                  <span style={{
+                    fontSize: 11,
+                    color: proxyTestResult.startsWith('✅') ? 'var(--accent-tertiary)' : 'var(--accent-red)',
+                    fontWeight: 500,
+                  }}>{proxyTestResult}</span>
+                )}
+              </div>
+            </>
           )}
         </div>
       </div>
