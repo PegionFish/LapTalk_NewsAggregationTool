@@ -6,6 +6,7 @@ const ALL_ITEMS = [
   { path: '/', label: '仪表盘', icon: 'fa-chart-pie', adminOnly: false },
   { path: '/articles', label: '文章检索', icon: 'fa-newspaper', adminOnly: false },
   { path: '/hotlists', label: '实时热点', icon: 'fa-fire', adminOnly: false },
+  { path: '/fetch', label: '数据采集', icon: 'fa-satellite-dish', adminOnly: false },
   { path: '/chains', label: '逻辑链', icon: 'fa-diagram-project', adminOnly: false },
   { path: '/settings', label: '设置', icon: 'fa-sliders', adminOnly: true },
 ];
