@@ -84,7 +84,7 @@ def _batch_translate():
             return
 
         _translate_state["total"] = len(rows)
-        _log(_translate_state, f"待处理 {len(rows)} 篇 — 先提取文本再翻译")
+        _log(_translate_state, f"待处理 {len(rows)} 篇 — HTML 直传 LLM 翻译")
 
         from utils.text import extract_text_from_html, detect_language
         from translation_client import translate_to_chinese
@@ -117,37 +117,36 @@ def _batch_translate():
                 _translate_state["done"] += 1
                 continue
 
-            # 从 HTML 提取纯文本
-            text = extract_text_from_html(html, max_length=FULL_TEXT_MAX_LENGTH)
-            if len(text) < 50:
-                _log(_translate_state, f"#{aid} ⚠️ 提取文本过短 ({len(text)} 字)")
+            # 仅提取纯文本用于语言检测，翻译和存储均使用原始 HTML
+            text_for_lang = extract_text_from_html(html, max_length=5000)
+            if len(text_for_lang) < 50:
+                _log(_translate_state, f"#{aid} ⚠️ 文本内容过短 ({len(text_for_lang)} 字)")
                 _translate_state["failed"] += 1
                 _translate_state["done"] += 1
                 continue
 
-            # 语言检测
-            lang = detect_language(text)
-            _log(_translate_state, f"#{aid} 语言: {lang} | HTML {len(html)//1024}KB → 文本 {len(text)} 字")
+            lang = detect_language(text_for_lang)
+            _log(_translate_state, f"#{aid} 语言: {lang} | HTML {len(html)//1024}KB")
 
             if lang != 'en':
                 db2 = _conn()
                 db2.execute("UPDATE articles SET text_content=?, content_lang=? WHERE id=?",
-                           (text, lang, aid))
+                           (html, lang, aid))
                 db2.commit()
                 db2.close()
-                _log(_translate_state, f"#{aid} ⏭️ 非英文，仅提取文本")
+                _log(_translate_state, f"#{aid} ⏭️ 非英文，存入 HTML")
                 _translate_state["done"] += 1
                 continue
 
-            # 翻译文本（自动分段翻译长文，每段 ≤1800 字独立请求）
+            # HTML 直传 LLM 翻译，保留全部标签结构
             try:
-                _log(_translate_state, f"#{aid} 📡 翻译中... ({len(text)} 字, 1 次请求, 模型: {config.translation_model})")
-                translation = translate_to_chinese(text)
+                _log(_translate_state, f"#{aid} 📡 翻译中... (HTML {len(html)//1024}KB, 模型: {config.translation_model})")
+                translation = translate_to_chinese(html)
                 if translation and len(translation) > 20:
                     db2 = _conn()
                     db2.execute(
                         "UPDATE articles SET text_content=?, translated_content=?, content_status='translated', content_lang='en', translated_at=? WHERE id=?",
-                        (text, translation, datetime.now().isoformat(timespec='seconds'), aid)
+                        (html, translation, datetime.now().isoformat(timespec='seconds'), aid)
                     )
                     db2.commit()
                     db2.close()
@@ -161,7 +160,7 @@ def _batch_translate():
                 if _is_request_timeout_error(e) and _queue_timeout_retry(
                     _translate_state, aid, retry_counts
                 ):
-                    retry_queue.append((aid, title, text))
+                    retry_queue.append((aid, title, html))
                     continue
                 _log(_translate_state, f"#{aid} ❌ API 调用失败: {str(e)[:80]}")
                 _translate_state["failed"] += 1
@@ -171,18 +170,18 @@ def _batch_translate():
             _translate_state["done"] += 1
 
             if idx < len(rows):
-                time.sleep(3)  # 篇间延迟（文本翻译更快，减至 3 秒）
+                time.sleep(3)
 
-        for aid, title, text in retry_queue:
+        for aid, title, html in retry_queue:
             _translate_state["current"] = f"#{aid} {title[:50]}"
             _log(_translate_state, f"#{aid} 🔄 重试翻译请求...")
             try:
-                translation = translate_to_chinese(text)
+                translation = translate_to_chinese(html)
                 if translation and len(translation) > 20:
                     db2 = _conn()
                     db2.execute(
                         "UPDATE articles SET text_content=?, translated_content=?, content_status='translated', content_lang='en', translated_at=? WHERE id=?",
-                        (text, translation, datetime.now().isoformat(timespec='seconds'), aid)
+                        (html, translation, datetime.now().isoformat(timespec='seconds'), aid)
                     )
                     db2.commit()
                     db2.close()
@@ -312,134 +311,79 @@ def _batch_analyze():
 
 
 # ═════════════════════════════════════════════════════════
-# 自动构筑逻辑链
+# 全景图批处理 — 利用 160K 上下文做全局推理
 # ═════════════════════════════════════════════════════════
 
 _chain_state = {"running": False, "total_groups": 0, "chains_created": 0, "current": "", "log": []}
+_rank_state  = _new_state()
 
 
 def _build_logic_chains():
-    """基于 AI 摘要中的关键词/产品/公司实体，将事件分组并自动创建逻辑链。
-    每链仅发一次 AI 请求取名，上下文极短（只含事件标题）。"""
+    """基于全景图识别逻辑链分组，一次 API 调用替代逐组 Jaccard 聚类。"""
     global _chain_state
     _chain_state = {"running": True, "total_groups": 0, "chains_created": 0, "current": "", "log": []}
 
     try:
         db = _conn()
+        from ai_client import build_panoramic_context, build_chains_panoramic
 
-        # 获取所有已分析的事件及其关联文章关键词
-        events = db.execute("""
-            SELECT e.id, e.title, e.article_count
-            FROM events e
-            WHERE e.status = 'active' AND e.article_count >= 1
-            ORDER BY e.article_count DESC
-        """).fetchall()
+        context = build_panoramic_context(db)
+        _log(_chain_state, f"全景图已构建，请求 AI 识别逻辑链...")
 
-        if len(events) < 2:
+        groups = build_chains_panoramic(context)
+        if not groups or not isinstance(groups, list):
+            _log(_chain_state, "⚠️ AI 未返回有效的事件分组")
             db.close()
             _chain_state["running"] = False
             return
-
-        # 收集每个事件的关键词集合
-        event_kws = {}  # event_id -> set of keywords
-        import json
-        for evt_id, _, _ in events:
-            rows = db.execute("""
-                SELECT a.keywords FROM articles a
-                JOIN article_events ae ON ae.article_id = a.id
-                WHERE ae.event_id = ?
-            """, (evt_id,)).fetchall()
-            kws = set()
-            for (kj,) in rows:
-                try:
-                    for kw in json.loads(kj or '[]'):
-                        if len(kw) > 1 and kw.lower() not in ('news', 'rss_news', 'hotlist'):
-                            kws.add(kw.lower())
-                except (json.JSONDecodeError, TypeError):
-                    pass
-            if kws:
-                event_kws[evt_id] = kws
-
-        # 基于关键词 Jaccard 相似度聚类
-        grouped = set()  # event ids already assigned
-        groups = []      # list of (event_ids, merged_keywords)
-
-        for evt_id, kws in event_kws.items():
-            if evt_id in grouped:
-                continue
-            cluster = {evt_id}
-            merged = set(kws)
-            # 找重叠 ≥ 1 个关键词的其他事件
-            for other_id, other_kws in event_kws.items():
-                if other_id != evt_id and other_id not in grouped:
-                    if kws & other_kws:
-                        cluster.add(other_id)
-                        merged |= other_kws
-                        grouped.add(other_id)
-            grouped.add(evt_id)
-            if len(cluster) >= 2:
-                groups.append((sorted(cluster), merged))
 
         _chain_state["total_groups"] = len(groups)
-        _log(_chain_state, f"发现 {len(groups)} 个可构筑链的事件组")
+        _log(_chain_state, f"AI 识别出 {len(groups)} 个逻辑链分组")
 
-        if not groups:
-            db.close()
-            _chain_state["running"] = False
-            return
-
-        from ai_client import build_chain_title
         from datetime import datetime
 
-        for idx, (event_ids, _) in enumerate(groups, 1):
-            _chain_state["current"] = f"正在处理第 {idx}/{len(groups)} 组 ({len(event_ids)} 个事件)"
-            _log(_chain_state, f"第 {idx} 组: {len(event_ids)} 个事件 — 请求 AI 命名...")
+        for idx, group in enumerate(groups, 1):
+            event_ids = group.get("events", [])
+            chain_title = group.get("title", "")
+            reason = group.get("reason", "")
 
-            # 收集事件标题（极短上下文）
-            titles = db.execute(
-                f"SELECT title FROM events WHERE id IN ({','.join('?'*len(event_ids))})",
-                event_ids
-            ).fetchall()
-            title_block = "\n".join(f"- {t[0][:80]}" for t in titles)
-
-            # 检查事件是否已被分配链
-            already = db.execute(
-                f"SELECT event_id FROM chain_events WHERE event_id IN ({','.join('?'*len(event_ids))})",
-                event_ids
-            ).fetchall()
-            if already:
-                _chain_state["current"] = f"第 {idx}/{len(groups)} 组 — 已有链，跳过"
+            if len(event_ids) < 2 or not chain_title:
                 continue
 
-            # AI 命名（一次短调用）
-            chain_title = ""
-            try:
-                chain_title = build_chain_title(title_block)
-            except Exception:
-                chain_title = ""
+            _chain_state["current"] = f"第 {idx}/{len(groups)} 组: {chain_title}"
 
-            if not chain_title:
-                chain_title = db.execute(
-                    f"SELECT title FROM events WHERE id = ?", (event_ids[0],)
-                ).fetchone()[0][:30] + " 等相关事件"
+            # 验证事件 ID 存在
+            valid_ids = []
+            for eid in event_ids:
+                r = db.execute("SELECT id FROM events WHERE id=? AND status='active'", (eid,)).fetchone()
+                if r:
+                    valid_ids.append(eid)
+            if len(valid_ids) < 2:
+                continue
+
+            # 检查是否已有链覆盖这些事件
+            existing = db.execute(
+                f"SELECT DISTINCT chain_id FROM chain_events WHERE event_id IN ({','.join('?'*len(valid_ids))})",
+                valid_ids
+            ).fetchall()
+            if existing:
+                _log(_chain_state, f"第 {idx} 组已有链覆盖，跳过")
+                continue
 
             now = datetime.now().isoformat(timespec='seconds')
             cur = db.execute(
                 "INSERT INTO logic_chains (title, description, created_at, updated_at, created_by) VALUES (?, ?, ?, ?, 'auto')",
-                (chain_title[:100], f"自动生成 — {len(event_ids)} 个事件", now, now)
+                (chain_title[:100], f"AI 全景推理 — {reason}", now, now)
             )
             chain_id = cur.lastrowid
-            for pos, eid in enumerate(event_ids):
+            for pos, eid in enumerate(valid_ids):
                 db.execute(
                     "INSERT INTO chain_events (chain_id, event_id, position) VALUES (?, ?, ?)",
                     (chain_id, eid, pos)
                 )
 
             _chain_state["chains_created"] += 1
-            _log(_chain_state, f"✅ 创建链: {chain_title} ({len(event_ids)} 个事件)")
-            logger.info(f"Auto chain created: {chain_title} ({len(event_ids)} events)")
-
-            time.sleep(0.5)  # 链间微延迟
+            _log(_chain_state, f"✅ 创建链: {chain_title} ({len(valid_ids)} 个事件) — {reason}")
 
         db.commit()
         db.close()
@@ -448,6 +392,58 @@ def _build_logic_chains():
         logger.error(f"Build chains error: {e}")
     finally:
         _chain_state["running"] = False
+
+
+def _batch_ai_rank_events():
+    """基于全景图对所有事件做全局优先级排序。"""
+    global _rank_state
+    _rank_state = _new_state(); _rank_state["running"] = True
+    try:
+        db = _conn()
+        from ai_client import build_panoramic_context, rank_events_panoramic
+
+        context = build_panoramic_context(db)
+        _log(_rank_state, "全景图已构建，请求 AI 全局排序...")
+
+        result = rank_events_panoramic(context)
+        if not result or not isinstance(result, list):
+            _log(_rank_state, "⚠️ AI 未返回有效排序结果")
+            _rank_state["running"] = False
+            return
+
+        _rank_state["total"] = len(result)
+        _log(_rank_state, f"AI 返回 {len(result)} 个事件排序")
+
+        import json
+        for item in result:
+            eid = item.get("id")
+            rank = item.get("rank", 999)
+            reason = item.get("reason", "")
+            if not eid:
+                continue
+            # rank → priority_label: 前 20% high, 中间 50% medium, 后 30% low
+            total = len(result)
+            if total > 0:
+                pct = rank / total
+                if pct <= 0.2:
+                    label = "high"
+                elif pct <= 0.7:
+                    label = "medium"
+                else:
+                    label = "low"
+            else:
+                label = "medium"
+            db.execute("UPDATE events SET priority_label=? WHERE id=?", (label, eid))
+            _rank_state["done"] += 1
+            _log(_rank_state, f"#{eid} → {label} (排名 {rank}/{total}) — {reason}")
+
+        db.commit()
+        db.close()
+
+    except Exception as e:
+        logger.error(f"Batch rank events error: {e}")
+    finally:
+        _rank_state["running"] = False
 
 
 # ═════════════════════════════════════════════════════════
@@ -975,6 +971,17 @@ def get_batch_recluster_status(): return dict(_recluster_state)
 def get_batch_summarize_events_status(): return dict(_evt_sum_state)
 
 
+@router.post("/batch-rank-events")
+def start_batch_rank_events():
+    global _rank_state
+    if _rank_state.get("running"): return {"ok": False, "message": "事件排序已在运行中"}
+    threading.Thread(target=_batch_ai_rank_events, daemon=True).start()
+    return {"ok": True, "message": "启动全景图事件优先级排序"}
+
+@router.get("/batch-rank-events/status")
+def get_batch_rank_events_status(): return dict(_rank_state)
+
+
 # ═════════════════════════════════════════════════════════
 # 统一全流程 — 翻译 → 关键词 → 分类 → 评分 → 分析 → 聚类 → 摘要 → 链
 # ═════════════════════════════════════════════════════════
@@ -986,7 +993,7 @@ def _batch_ai_full():
     global _full_state
     _full_state = _new_state(); _full_state["running"] = True
     _full_state["steps"] = []
-    step_names = ["翻译", "AI 分析", "关键词提取", "智能分类", "优先级评分", "事件重聚类", "事件摘要", "构筑逻辑链"]
+    step_names = ["翻译", "AI 分析", "关键词提取", "智能分类", "优先级评分", "事件重聚类", "事件摘要", "全景图排序", "构筑逻辑链"]
     steps = [
         ("翻译", _batch_translate, _translate_state),
         ("AI 分析", _batch_analyze, _analyze_state),
@@ -995,6 +1002,7 @@ def _batch_ai_full():
         ("优先级评分", _batch_ai_score, _score_state),
         ("事件重聚类", _batch_ai_recluster, _recluster_state),
         ("事件摘要", _batch_ai_summarize_events, _evt_sum_state),
+        ("全景图排序", _batch_ai_rank_events, _rank_state),
         ("构筑逻辑链", _build_logic_chains, _chain_state),
     ]
     # 初始化所有步骤状态

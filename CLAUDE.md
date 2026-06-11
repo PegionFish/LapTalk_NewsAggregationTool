@@ -32,8 +32,8 @@ news-web/
 ├── backend/
 │   ├── main.py              # 入口: 生命周期 + 路由注册 + 静态托管 :8081
 │   ├── scheduler.py         # 定时抓取 10:00/17:00 + 备份 03:00
-│   ├── ai_client.py         # chat(), summarize_events(), analyze_article(), build_chain_title()
-│   ├── translation_client.py # translate_to_chinese() — 长文自动分段翻译
+│   ├── ai_client.py         # chat(), summarize_events(), analyze_article(), build_panoramic_context(), rank_events_panoramic(), build_chains_panoramic()
+│   ├── translation_client.py # translate_to_chinese() — HTML 直传 LLM 翻译
 │   ├── auth/auth.py         # hash_password, verify_password, create_token, get_current_user
 │   ├── api/                 # 12 个模块: settings, stats, articles, events, chains, relations,
 │   │                        #            auth, audit, notifications, logs, cache, pipeline
@@ -83,7 +83,7 @@ articles
 ├── title, source, url, category, published_date, fetched_at
 ├── priority_score, priority_label, keywords, human_tags
 ├── local_path              ← HTML 磁盘缓存路径
-├── text_content            ← 提取的纯文本（源文）
+├── text_content            ← 原始 HTML（直传 LLM，保留标签结构）
 ├── translated_content      ← AI 翻译后的中文（译文）
 ├── content_lang            ← 语言检测结果 (en/zh)
 ├── content_status          ← 缓存状态 (pending/fetched/translated/failed)
@@ -105,12 +105,14 @@ logic_chains
 
 | 端点 | 说明 |
 |------|------|
-| `POST /api/pipeline/batch-translate` | 遍历 HTML 缓存 → 提取文本 → 分段翻译 → 入库 |
+| `POST /api/pipeline/batch-translate` | 遍历 HTML 缓存 → HTML 直传 LLM 翻译 → 入库 |
 | `GET /api/pipeline/batch-translate/status` | 进度: running/total/done/log[] |
-| `POST /api/pipeline/batch-analyze` | 遍历已提取文本 → AI 分析摘要 → 入库 |
+| `POST /api/pipeline/batch-analyze` | 遍历 HTML 内容 → AI 分析摘要 → 入库 |
 | `GET /api/pipeline/batch-analyze/status` | 进度: running/total/done/log[] |
-| `POST /api/pipeline/build-chains` | 基于事件关键词分组 → AI 命名 → 创建逻辑链 |
+| `POST /api/pipeline/build-chains` | 全景图推理 → AI 识别逻辑链分组 → 创建逻辑链 |
 | `GET /api/pipeline/build-chains/status` | 进度: total_groups/chains_created/log[] |
+| `POST /api/pipeline/batch-rank-events` | 全景图推理 → AI 全局事件优先级排序 |
+| `GET /api/pipeline/batch-rank-events/status` | 进度: running/total/done/log[] |
 | `POST /api/articles/{id}/analyze` | 单篇分析（前端选中文章自动调用） |
 | `POST /api/settings/test-ai` | AI 分析连接测试 |
 | `POST /api/settings/test-translation` | 翻译连接测试 |
@@ -122,13 +124,14 @@ logic_chains
 1. **Pipeline 集成在 FastAPI 进程中** — APScheduler 触发子进程
 2. **SQLite WAL 模式** — 并发读写安全
 3. **批量 AI 处理为后台线程** — threading.Thread + 轮询 status 端点，DB 统计 ≈ 状态
-4. **翻译走纯文本而非 HTML** — `extract_text_from_html → translate_to_chinese(text)`，长文自动分段（≤4000 字/段，利用 DeepSeek V3.2 160K 上下文）
-5. **AI 分析走长上下文** — 分析截取 ≤8000 字正文，关键词/分类/评分截取 ≤6000 字（利用 DeepSeek V3.2 160K 上下文提升分析质量）
-6. **源文/译文独立存储** — `text_content` + `translated_content` 两列，对照阅读
+4. **翻译走 HTML 直传** — `translate_to_chinese(html)`，原始 HTML 直接传给 DeepSeek V3.2，保留全部标签结构
+5. **AI 分析走完整内容** — 所有 AI 函数（分析/关键词/分类/评分）直接传入完整 HTML/正文，无截断，充分利用 DeepSeek V3.2 160K 上下文
+6. **源文/译文独立存储** — `text_content`（原始 HTML）+ `translated_content`（AI 译文）两列，对照阅读
 7. **人工标注不覆写** — `human_processed=1` 时 `calculate_priority` 和 `extract_keywords_for` 跳过
 8. **事件日期使用 `published_date`** — 无发布日期时回退到 `fetched_at`
-9. **逻辑链自动构筑** — Jaccard 重叠分组 + AI 命名（利用 160K 上下文可使用更多事件标题）
+9. **逻辑链自动构筑** — 全景图推理（事件+关键词+关系一次性给 LLM），替代 Jaccard 机械匹配
 10. **事件关系批量检测** — 每批 15 对事件一次 API 调用，替代逐个配对的 O(n²) 调用
+11. **全景图事件排序** — 所有事件蒸馏数据一次性给 LLM，全局上下文推理优先级
 11. **前端鉴权门控** — `App.tsx` 在 AuthProvider 内检查令牌
 12. **API 密钥掩码** — `config.to_dict()` 返回 `"***"`；`settings.py` 忽略 `"***"` 回写
 13. **`config.json` 已 gitignore** — 含 API 密钥，不进入版本控制

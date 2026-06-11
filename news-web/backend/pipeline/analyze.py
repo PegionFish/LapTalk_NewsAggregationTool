@@ -93,22 +93,20 @@ def analyze_events(db_path: str) -> int:
 
                 try:
                     response = chat(
-                        f"For each pair below, determine if the two events are related. "
-                        f"If related, specify the relation type (before, after, update, spawn, or related). "
-                        f"If unrelated, write 'unrelated'.\n\n"
-                        f"Output one line per pair in this exact format:\n"
-                        f"  Pair N: relation_type - brief reason\n\n"
+                        f"请判断以下每对事件是否相关。如果相关，指定关系类型（before、after、update、spawn 或 related）。"
+                        f"如果不相关，写 'unrelated'。\n\n"
+                        f"每对输出一行，格式如下：\n"
+                        f"  Pair N: relation_type - 简要理由\n\n"
                         f"{pairs_text}",
                         system_prompt=(
-                            "You are a senior news event relationship analyst. "
-                            "For each event pair, determine the relationship:\n"
-                            "- 'before' = Event A happened before Event B (temporal order)\n"
-                            "- 'after' = Event A happened after Event B\n"
-                            "- 'update' = Event A provides new information / update to Event B\n"
-                            "- 'spawn' = Event A caused or led to Event B (causal)\n"
-                            "- 'related' = same general topic but no clear temporal/causal link\n"
-                            "- 'unrelated' = different topics, no meaningful connection\n"
-                            "Output ONLY one line per pair, no explanations beyond the reason phrase."
+                            "你是资深新闻事件关系分析专家。对每对事件判断关系：\n"
+                            "- 'before' = 事件 A 发生在事件 B 之前（时间先后）\n"
+                            "- 'after' = 事件 A 发生在事件 B 之后\n"
+                            "- 'update' = 事件 A 是事件 B 的更新/补充信息\n"
+                            "- 'spawn' = 事件 A 导致/催生了事件 B（因果关系）\n"
+                            "- 'related' = 同一大话题，但无明确时间/因果联系\n"
+                            "- 'unrelated' = 不同话题，无有意义的关联\n"
+                            "每对只输出一行，理由部分简明扼要。"
                         ),
                         max_tokens=2048,
                     )
