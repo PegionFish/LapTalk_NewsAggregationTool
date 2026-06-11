@@ -122,21 +122,23 @@ logic_chains
 1. **Pipeline 集成在 FastAPI 进程中** — APScheduler 触发子进程
 2. **SQLite WAL 模式** — 并发读写安全
 3. **批量 AI 处理为后台线程** — threading.Thread + 轮询 status 端点，DB 统计 ≈ 状态
-4. **翻译走纯文本而非 HTML** — `extract_text_from_html → translate_to_chinese(text)`，长文自动分段（≤1800 字/段）
-5. **AI 分析走单篇短上下文** — `analyze_article` 截取 2000 字正文
+4. **翻译走纯文本而非 HTML** — `extract_text_from_html → translate_to_chinese(text)`，长文自动分段（≤4000 字/段，利用 DeepSeek V3.2 160K 上下文）
+5. **AI 分析走长上下文** — 分析截取 ≤8000 字正文，关键词/分类/评分截取 ≤6000 字（利用 DeepSeek V3.2 160K 上下文提升分析质量）
 6. **源文/译文独立存储** — `text_content` + `translated_content` 两列，对照阅读
 7. **人工标注不覆写** — `human_processed=1` 时 `calculate_priority` 和 `extract_keywords_for` 跳过
 8. **事件日期使用 `published_date`** — 无发布日期时回退到 `fetched_at`
-9. **逻辑链自动构筑** — Jaccard 重叠分组 + AI 命名（极短上下文，仅含事件标题）
-10. **前端鉴权门控** — `App.tsx` 在 AuthProvider 内检查令牌
-11. **API 密钥掩码** — `config.to_dict()` 返回 `"***"`；`settings.py` 忽略 `"***"` 回写
-12. **`config.json` 已 gitignore** — 含 API 密钥，不进入版本控制
-13. **撤销/重做** — 自定义 hook，`onNodeDragStop` 触发快照
-14. **边重建** — from `event_relations` 按颜色/线型映射
-15. **前端路由** — `/chains` 列表 → `/chains/new` 新建工作台 / `/chains/:id` 编辑
-16. **HTML 安全** — `_sanitize_html` 切除 script/iframe/link/tracking，仅保留 rel="stylesheet"
-17. **OpenAI 客户端超时** — AI 30s / 翻译 120s，防止请求无限挂起
-18. **iframe 阅读** — `sandbox="allow-same-origin allow-popups"`（服务器已切除脚本）
+9. **逻辑链自动构筑** — Jaccard 重叠分组 + AI 命名（利用 160K 上下文可使用更多事件标题）
+10. **事件关系批量检测** — 每批 15 对事件一次 API 调用，替代逐个配对的 O(n²) 调用
+11. **前端鉴权门控** — `App.tsx` 在 AuthProvider 内检查令牌
+12. **API 密钥掩码** — `config.to_dict()` 返回 `"***"`；`settings.py` 忽略 `"***"` 回写
+13. **`config.json` 已 gitignore** — 含 API 密钥，不进入版本控制
+14. **撤销/重做** — 自定义 hook，`onNodeDragStop` 触发快照
+15. **边重建** — from `event_relations` 按颜色/线型映射
+16. **前端路由** — `/chains` 列表 → `/chains/new` 新建工作台 / `/chains/:id` 编辑
+17. **HTML 安全** — `_sanitize_html` 切除 script/iframe/link/tracking，仅保留 rel="stylesheet"
+18. **OpenAI 客户端超时** — AI 30s / 翻译 120s，防止请求无限挂起
+19. **iframe 阅读** — `sandbox="allow-same-origin allow-popups"`（服务器已切除脚本）
+20. **平台热搜采集** — 直连各平台官方 API（微博/知乎/抖音/头条 + B站），B站支持分页，与 RSS 并行入库
 
 ### 已知设计约束
 
@@ -311,7 +313,7 @@ logic_chains
 - 设计时必须评估时间复杂度、内存占用与 I/O 影响，避免无谓消耗。
 - 识别潜在瓶颈后应提供监测或优化建议，确保可持续迭代。
 - 禁止引入未经评估的昂贵依赖或阻塞操作。
-- **AI 调用必须控制上下文长度**：翻译分段 ≤1800 字/段，分析截取 ≤2000 字，链命名仅含事件标题。
+- **AI 调用利用大上下文**：翻译分段 ≤4000 字/段，分析截取 ≤8000 字，关键词/分类/评分截取 ≤6000 字。利用 DeepSeek V3.2 160K 上下文提升分析深度。事件关系检查已从逐个配对改为批量（每批 15 对一次调用）。
 
 ## 通用工作流程
 

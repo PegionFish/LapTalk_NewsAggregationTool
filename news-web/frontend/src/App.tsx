@@ -9,6 +9,7 @@ import ChainList from './pages/ChainList';
 import Settings from './pages/Settings';
 import Login from './pages/Login';
 import ArticleReader from './pages/ArticleReader';
+import HotTrends from './pages/HotTrends';
 
 // ── Workspace 路由适配器 — 将 /chains/:chainId 转为 Workspace 可识别的 search params ──
 function WorkspaceRoute() {
@@ -73,6 +74,7 @@ function AuthedApp() {
           <Route path="/workspace" element={<Workspace />} />
           <Route path="/articles/:id" element={<ArticleReader />} />
           <Route path="/articles" element={<ArticleSearch />} />
+          <Route path="/hotlists" element={<HotTrends />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

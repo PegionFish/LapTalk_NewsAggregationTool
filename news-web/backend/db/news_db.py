@@ -287,11 +287,13 @@ class NewsDB:
     # 保存
     # ═══════════════════════════════════════════════════════
 
-    def save_articles(self, category: str, articles: list) -> int:
+    def save_articles(self, category: str, articles: list) -> tuple:
+        """保存文章列表到数据库。返回 (saved: 新增数, skipped: 重复跳过数)。"""
         if not articles:
-            return 0
+            return (0, 0)
         now = datetime.now().isoformat(timespec='seconds')
         saved = 0
+        skipped = 0
         with self._conn() as conn:
             for art in articles:
                 title = art.get('title', '').strip()
@@ -319,10 +321,67 @@ class NewsDB:
                         ).fetchone()
                         if new_id:
                             self.calculate_priority(new_id[0], conn)
+                    else:
+                        skipped += 1
+                        # 记录跳过的重复文章标题（截取前 50 字）
+                        import logging
+                        logging.getLogger(__name__).debug(
+                            f"   ⏭️ 跳过重复: [{source}] {title[:60]}"
+                        )
                 except Exception:
                     continue
             conn.commit()
-        return saved
+        return (saved, skipped)
+
+    def fill_trend_text(self) -> int:
+        """为热榜/B站视频条目直接填充 text_content（标题+元数据），
+        无需走 fetch_content 下载 HTML。返回填充数量。"""
+        updated = 0
+        with self._conn() as conn:
+            rows = conn.execute("""
+                SELECT id, title, metadata, source
+                FROM articles
+                WHERE category IN ('platform_hotlists', 'bilibili_videos')
+                  AND (text_content IS NULL OR text_content = '')
+            """).fetchall()
+            for aid, title, meta_json, source in rows:
+                try:
+                    meta = json.loads(meta_json) if meta_json else {}
+                except (json.JSONDecodeError, TypeError):
+                    meta = {}
+                # 拼接标题和有用的元数据
+                parts = [f"标题：{title}"]
+                parts.append(f"来源：{source}")
+                if meta.get('rank') is not None:
+                    parts.append(f"排名：第{meta['rank']}位")
+                if meta.get('heat'):
+                    parts.append(f"热度：{meta['heat']}")
+                if meta.get('views'):
+                    parts.append(f"播放量：{meta['views']}")
+                if meta.get('author'):
+                    parts.append(f"作者：{meta['author']}")
+                if meta.get('answer_count'):
+                    parts.append(f"回答数：{meta['answer_count']}")
+                if meta.get('excerpt'):
+                    parts.append(f"摘要：{meta['excerpt']}")
+                if meta.get('description'):
+                    parts.append(f"描述：{meta['description']}")
+                if meta.get('video_count'):
+                    parts.append(f"相关视频：{meta['video_count']}个")
+                text = '\n'.join(parts)
+                from datetime import datetime
+                conn.execute("""
+                    UPDATE articles SET
+                        local_path='[N/A:trend]',
+                        content_fetched_at=?,
+                        text_content=?,
+                        content_lang='zh',
+                        content_status='metadata_only'
+                    WHERE id=?
+                """, (datetime.now().isoformat(timespec='seconds'), text, aid))
+                updated += 1
+            conn.commit()
+        return updated
 
     # ═══════════════════════════════════════════════════════
     # 关键词提取 + 优先级评分
@@ -1022,6 +1081,10 @@ class NewsDB:
             by_cat = conn.execute(
                 "SELECT category, COUNT(*) FROM articles GROUP BY category"
             ).fetchall()
+            # 来源分布 — 按实际媒体名统计（如 Ars Technica、36Kr、IT之家），不按 category 聚合
+            by_source = conn.execute(
+                "SELECT source, COUNT(*) FROM articles GROUP BY source ORDER BY COUNT(*) DESC"
+            ).fetchall()
             # 缓存状态统计 — 与 cache.py 保持一致的口径
             # HTML 已下载到磁盘（有 local_path 且非错误标记）
             cache_cached = conn.execute(
@@ -1048,6 +1111,7 @@ class NewsDB:
                 'active_events': active,
                 'human_verified': verified,
                 'by_category': dict(by_cat),
+                'by_source': dict(by_source),
                 'cache_cached': cache_cached,
                 'cache_text': cache_text,
                 'cache_translated': cache_translated,
@@ -1064,6 +1128,62 @@ class NewsDB:
             return [{'title': r[0], 'source': r[1], 'category': r[2],
                      'date': r[3], 'score': r[4], 'label': r[5], 'verified': r[6]}
                     for r in rows]
+
+    def get_hotlists(self, date: str = "", platforms: list = None) -> dict:
+        """获取热榜/B站热门数据，按平台分组。
+        date: 'YYYY-MM-DD'，为空时返回最新一批数据
+        platforms: 筛选指定平台列表，默认全部
+        返回 {platform_id: {count, items: [{title, url, rank, heat, ...}]}}
+        """
+        with self._conn() as conn:
+            # 未指定日期时，使用数据中最新日期
+            if not date:
+                latest = conn.execute(
+                    "SELECT date(fetched_at) FROM articles "
+                    "WHERE category IN ('platform_hotlists','bilibili_videos') "
+                    "ORDER BY fetched_at DESC LIMIT 1"
+                ).fetchone()
+                date = latest[0] if latest else datetime.now().strftime('%Y-%m-%d')
+
+            result = {}
+            category_map = {
+                'weibo': 'platform_hotlists', 'zhihu': 'platform_hotlists',
+                'douyin': 'platform_hotlists', 'toutiao': 'platform_hotlists',
+                'bilibili': 'bilibili_videos',
+            }
+            source_patterns = {
+                'weibo': 'weibo_%', 'zhihu': 'zhihu_%',
+                'douyin': 'douyin_%', 'toutiao': 'toutiao_%',
+                'bilibili': 'bilibili_%',
+            }
+            target = platforms or list(source_patterns.keys())
+            for pid in target:
+                cat = category_map.get(pid, 'platform_hotlists')
+                pattern = source_patterns.get(pid, f'{pid}_%')
+                rows = conn.execute("""
+                    SELECT id, title, url, source, metadata, fetched_at, priority_label
+                    FROM articles
+                    WHERE category = ? AND source LIKE ? AND date(fetched_at) = ?
+                    ORDER BY id ASC
+                """, (cat, pattern, date)).fetchall()
+                items = []
+                for r in rows:
+                    try:
+                        meta = json.loads(r[4]) if r[4] else {}
+                    except Exception:
+                        meta = {}
+                    items.append({
+                        'id': r[0], 'title': r[1], 'url': r[2],
+                        'source': r[3],
+                        'rank': meta.get('rank', 0),
+                        'heat': meta.get('heat', meta.get('views', '')),
+                        'author': meta.get('author', ''),
+                        'fetched_at': r[5],
+                        'priority_label': r[6],
+                    })
+                items.sort(key=lambda x: x['rank'])
+                result[pid] = {'count': len(items), 'items': items, 'date': date}
+            return result
 
 
 # ══════════════════════════════════════════════════════════════

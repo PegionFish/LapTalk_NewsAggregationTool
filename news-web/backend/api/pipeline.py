@@ -215,15 +215,6 @@ def _batch_analyze():
         logger.error(f"Batch analyze error: {e}")
     finally:
         _analyze_state["running"] = False
-        # 分析完成后自动串联全部后续 AI 步骤
-        if _analyze_state["done"] > 0 and _analyze_state["total"] > 0:
-            logger.info("Batch analyze done — auto-keywords → classify → score → recluster → summarize → chains")
-            _batch_ai_keywords()
-            _batch_ai_classify()
-            _batch_ai_score()
-            _batch_ai_recluster()
-            _batch_ai_summarize_events()
-            _build_logic_chains()
 
 
 # ═════════════════════════════════════════════════════════
@@ -495,7 +486,7 @@ def _batch_ai_keywords():
         for idx, (aid, title, text, source) in enumerate(rows, 1):
             _kw_state["current"] = f"#{aid} {title[:50]}"
             if _hp_check(aid): _log(_kw_state, f"#{aid} ⏭️ 人工已处理"); _kw_state["done"] += 1; continue
-            kws = extract_keywords_ai(title, text[:2000], source or "")
+            kws = extract_keywords_ai(title, text[:6000], source or "")
             if kws:
                 db2 = _conn()
                 db2.execute("UPDATE articles SET keywords=?, ai_keywords=? WHERE id=?", (_json.dumps(kws, ensure_ascii=False), _json.dumps(kws, ensure_ascii=False), aid))
@@ -523,7 +514,7 @@ def _batch_ai_classify():
         for idx, (aid, title, text) in enumerate(rows, 1):
             _cls_state["current"] = f"#{aid} {title[:50]}"
             if _hp_check(aid): _log(_cls_state, f"#{aid} ⏭️ 人工已处理"); _cls_state["done"] += 1; continue
-            r = classify_article_ai(title, text[:1800])
+            r = classify_article_ai(title, text[:6000])
             if r:
                 db2 = _conn()
                 db2.execute("UPDATE articles SET ai_category=?, ai_tags=? WHERE id=?", (r.get("category",""), _json.dumps(r.get("tags",[]), ensure_ascii=False), aid))
@@ -555,7 +546,7 @@ def _batch_ai_score():
                 days = max(0, (_dt.now() - _dt.fromisoformat(fetched_at)).days) if fetched_at else 0
             except Exception:
                 days = 0
-            r = score_priority_ai(title, text[:1800], source or "Unknown", days)
+            r = score_priority_ai(title, text[:6000], source or "Unknown", days)
             if r:
                 db2 = _conn()
                 db2.execute("UPDATE articles SET priority_score=?, priority_label=?, ai_priority_score=? WHERE id=?", (r["score"], r.get("label","medium"), r["score"], aid))

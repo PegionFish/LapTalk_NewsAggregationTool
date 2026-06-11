@@ -18,6 +18,9 @@ DEFAULT_CONFIG = {
     'translation_target_lang': 'zh-CN',
     # 内容缓存目录 — 默认为 DB 同级的 content/ 目录
     'content_cache_path': '',
+    # 平台热搜采集 — 微博/知乎/抖音/头条 + B站热门视频
+    'platform_hotlist_enabled': True,
+    'bilibili_max_pages': 7,
 }
 
 class AppConfig:
@@ -154,6 +157,25 @@ class AppConfig:
     @content_cache_path.setter
     def content_cache_path(self, val: str):
         self._data['content_cache_path'] = val
+        self.save()
+
+    # ── 平台热搜采集 ─────────────────────────────────────────
+    @property
+    def platform_hotlist_enabled(self) -> bool:
+        return self._data.get('platform_hotlist_enabled', True)
+
+    @platform_hotlist_enabled.setter
+    def platform_hotlist_enabled(self, val: bool):
+        self._data['platform_hotlist_enabled'] = val
+        self.save()
+
+    @property
+    def bilibili_max_pages(self) -> int:
+        return self._data.get('bilibili_max_pages', 7)
+
+    @bilibili_max_pages.setter
+    def bilibili_max_pages(self, val: int):
+        self._data['bilibili_max_pages'] = val
         self.save()
 
     def to_dict(self) -> dict:

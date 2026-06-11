@@ -7,6 +7,12 @@ import sys, os, json, re, time
 from datetime import datetime
 from collections import defaultdict
 
+# 确保 Windows 控制台输出 UTF-8
+try:
+    sys.stdout.reconfigure(encoding='utf-8')
+except Exception:
+    pass
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPORTS_DIR = os.path.join(SCRIPT_DIR, 'hot_reports')
 
@@ -235,9 +241,16 @@ def main():
         db = NewsDB(db_path)
         total = 0
         for cat in ('platform_hotlists', 'rss_news', 'bilibili_videos'):
-            n = db.save_articles(cat, sources[cat])
+            n, skipped = db.save_articles(cat, sources[cat])
             total += n
-            print(f"   DB ↑ {cat}: {n} 条新增")
+            msg = f"   DB ↑ {cat}: {n} 条新增"
+            if skipped:
+                msg += f", ⏭️ {skipped} 条跳过（已存在）"
+            print(msg)
+        # 热榜/B站视频直接填充 text_content — 无需走 fetch_content 下载 HTML
+        trend_filled = db.fill_trend_text()
+        if trend_filled:
+            print(f"   DB 📝 趋势文本回填: {trend_filled} 条")
         new_events = db.link_articles_to_events()
         print(f"   DB 🏷️ 事件关联: {new_events} 个新事件")
         stats = db.get_stats()

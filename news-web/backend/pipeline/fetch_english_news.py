@@ -16,6 +16,12 @@ import time
 import re
 from datetime import datetime, timedelta
 
+# 确保 Windows 控制台输出 UTF-8
+try:
+    sys.stdout.reconfigure(encoding='utf-8')
+except Exception:
+    pass
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ─── RSS 源配置 ────────────────────────────────────────

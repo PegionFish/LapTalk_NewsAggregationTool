@@ -24,6 +24,7 @@ def run_pipeline(db_path: str = "", user_agent: str = "", callback=None):
         callback: optional function(status, step) for progress reporting
     """
     env = os.environ.copy()
+    env['PYTHONIOENCODING'] = 'utf-8'  # 子进程 UTF-8 输出兼容
     if db_path:
         env['NEWS_DB_PATH'] = db_path
     if user_agent:
@@ -31,6 +32,15 @@ def run_pipeline(db_path: str = "", user_agent: str = "", callback=None):
 
     steps = [
         ('fetch_english_news.py', 'RSS 抓取'),
+    ]
+
+    # 平台热搜采集 — 可配置开关
+    from config import config as _cfg
+    if _cfg.platform_hotlist_enabled:
+        env['BILIBILI_MAX_PAGES'] = str(_cfg.bilibili_max_pages)
+        steps.append(('fetch_platform_hotlists.py', '平台热搜'))
+
+    steps += [
         ('collect_data.py', '去重聚类'),
         ('fetch_content.py', '页面归档'),
     ]
@@ -58,7 +68,7 @@ def run_pipeline(db_path: str = "", user_agent: str = "", callback=None):
 
         result = subprocess.run(
             [sys.executable, script_path],
-            env=env, capture_output=True, text=True, timeout=300,
+            env=env, capture_output=True, encoding='utf-8', errors='replace', timeout=300,
         )
 
         if result.returncode != 0:

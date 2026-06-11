@@ -164,4 +164,24 @@ export const api = {
   testAi: () => fetchJSON<{ ok: boolean; response?: string; error?: string; model?: string }>('/settings/test-ai', { method: 'POST' }),
 
   testTranslation: () => fetchJSON<{ ok: boolean; original?: string; translation?: string; error?: string; model?: string }>('/settings/test-translation', { method: 'POST' }),
+
+  // ── 实时热点 ──────────────────────────────────────────
+  getHotlists: (params?: { date?: string; platform?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.date) qs.set('date', params.date);
+    if (params?.platform) qs.set('platform', params.platform);
+    const query = qs.toString();
+    return fetchJSON<Record<string, { count: number; items: import('../types').HotlistItem[]; date?: string }>>(
+      `/hotlists${query ? `?${query}` : ''}`
+    );
+  },
+  getHotlistsSummary: (date?: string) => {
+    const qs = date ? `?date=${encodeURIComponent(date)}` : '';
+    return fetchJSON<import('../types').HotlistsSummary>(`/hotlists/summary${qs}`);
+  },
+  getHotlistsTop: (limit = 50, date?: string) => {
+    const qs = new URLSearchParams({ limit: String(limit) });
+    if (date) qs.set('date', date);
+    return fetchJSON<{ total: number; items: import('../types').HotlistItem[] }>(`/hotlists/top?${qs}`);
+  },
 };

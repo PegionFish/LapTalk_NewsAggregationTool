@@ -12,6 +12,9 @@ const emptyChain: ChainState = { running: false, total_groups: 0, chains_created
 export default function Dashboard() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [toast, setToast] = useState('');
+
+  const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 3000); };
   const [translating, setTranslating] = useState(false);
   const [transState, setTransState] = useState<BatchState>(emptyBatch);
   const [analyzing, setAnalyzing] = useState(false);
@@ -55,7 +58,17 @@ export default function Dashboard() {
 
   const startPoll = (starter: () => Promise<unknown>, poller: () => void, timer: ReturnType<typeof useRef<ReturnType<typeof setInterval>>>, setRunning: (v: boolean) => void) => async () => {
     setRunning(true);
-    try { await starter(); poller(); timer.current = setInterval(poller, 2000); } catch { setRunning(false); }
+    try {
+      const res = await starter() as { ok?: boolean; message?: string };
+      if (res && res.ok === false) {
+        // 后端拒绝请求（如任务已在运行中），显示提示后重置
+        setRunning(false);
+        showToast(res.message || '操作被拒绝');
+        return;
+      }
+      poller();
+      timer.current = setInterval(poller, 2000);
+    } catch { setRunning(false); }
   };
 
   const handleTranslate = startPoll(api.startBatchTranslate, pollTranslate, transTimer, setTranslating);
@@ -84,6 +97,12 @@ export default function Dashboard() {
   return (
     <div style={{ padding: 24, overflow: 'auto', flex: 1 }}>
       <h2 style={{ marginBottom: 20 }}>📊 仪表盘</h2>
+      {toast && (
+        <div style={{ marginBottom: 16, padding: '10px 16px', background: 'rgba(255,193,7,0.12)', border: '1px solid rgba(255,193,7,0.3)', borderRadius: 8, color: '#ffc107', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <i className="fas fa-exclamation-triangle" />
+          {toast}
+        </div>
+      )}
       <DashboardCards stats={stats} loading={loading} />
 
       {stats && (
@@ -167,18 +186,40 @@ export default function Dashboard() {
       )}
 
       {stats && (
-        <div style={{ marginTop: 24, background: 'var(--bg-secondary)', borderRadius: 10, padding: 20 }}>
-          <h3 style={{ fontSize: 15, marginBottom: 12 }}>来源分布</h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {Object.entries(stats.by_category).map(([cat, count]) => (
-              <div key={cat} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
-                <span style={{ width: 100, color: 'var(--text-secondary)' }}>{cat}</span>
-                <div style={{ flex: 1, background: 'var(--bg-card)', borderRadius: 4, height: 16, overflow: 'hidden' }}>
-                  <div style={{ width: `${(count / stats.articles) * 100}%`, height: '100%', background: 'var(--accent)', borderRadius: 4, minWidth: 4 }} />
+        <div style={{ marginTop: 24, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 16 }}>
+          {/* 分类概览 */}
+          <div style={{ background: 'var(--bg-secondary)', borderRadius: 10, padding: 20 }}>
+            <h3 style={{ fontSize: 14, margin: '0 0 12px 0' }}>数据分类</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+              {Object.entries(stats.by_category).map(([cat, count]) => (
+                <div key={cat} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                  <span style={{ width: 90, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cat}</span>
+                  <div style={{ flex: 1, background: 'var(--bg-card)', borderRadius: 4, height: 14, overflow: 'hidden' }}>
+                    <div style={{ width: `${Math.min((count / stats.articles) * 100, 100)}%`, height: '100%', background: 'var(--accent-tertiary)', borderRadius: 4, minWidth: 3 }} />
+                  </div>
+                  <span style={{ width: 32, textAlign: 'right', fontSize: 11 }}>{count}</span>
                 </div>
-                <span style={{ width: 40, textAlign: 'right' }}>{count}</span>
-              </div>
-            ))}
+              ))}
+            </div>
+          </div>
+
+          {/* 来源分布 — 按实际媒体名 */}
+          <div style={{ background: 'var(--bg-secondary)', borderRadius: 10, padding: 20 }}>
+            <h3 style={{ fontSize: 14, margin: '0 0 12px 0' }}>媒体来源 TOP15</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {Object.entries(stats.by_source || {})
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 15)
+                .map(([source, count]) => (
+                  <div key={source} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                    <span style={{ width: 100, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={source}>{source}</span>
+                    <div style={{ flex: 1, background: 'var(--bg-card)', borderRadius: 4, height: 12, overflow: 'hidden' }}>
+                      <div style={{ width: `${Math.min((count / stats.articles) * 100, 100)}%`, height: '100%', background: 'var(--accent)', borderRadius: 4, minWidth: 3 }} />
+                    </div>
+                    <span style={{ width: 32, textAlign: 'right', fontSize: 11 }}>{count}</span>
+                  </div>
+              ))}
+            </div>
           </div>
         </div>
       )}

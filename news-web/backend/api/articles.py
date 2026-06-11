@@ -27,7 +27,8 @@ def list_articles(
     """Search articles with multi-dimensional filtering."""
     db = get_db()
     with db._conn() as conn:
-        clauses = []
+        # 默认排除热榜/视频趋势数据（有独立展示页面）
+        clauses = ["a.category NOT IN ('platform_hotlists', 'bilibili_videos')"]
         params = []
         if q:
             clauses.append("(a.title LIKE ? OR a.keywords LIKE ?)")

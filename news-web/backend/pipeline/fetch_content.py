@@ -131,8 +131,11 @@ def archive_pages(db_path: str, limit: int = 0, source: str = None, recent: int 
     content_dir = config.content_cache_path
     os.makedirs(content_dir, exist_ok=True)
 
-    # ── 查询未存档文章 ──
-    where = ["(local_path IS NULL OR local_path = '')"]
+    # ── 查询未存档文章（排除热榜/视频趋势数据，它们没有可缓存的内容页）──
+    where = [
+        "(local_path IS NULL OR local_path = '')",
+        "category NOT IN ('platform_hotlists', 'bilibili_videos')",
+    ]
     params = []
     if source:
         where.append("source = ?")

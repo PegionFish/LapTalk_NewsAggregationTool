@@ -28,11 +28,11 @@ def translate_html(html: str) -> str:
     - 技术名词、产品名、公司名保留英文原文
     - 人名使用中文通用译名
     - temperature=0.05 确保翻译一致
-    - 最长 50000 字符（DeepSeek V3.2 128K 上下文充裕）
+    - 最长 60000 字符（DeepSeek V3.2 160K 上下文充裕）
     """
     if not config.translation_api_key:
         return ""
-    html = html[:25000]
+    html = html[:60000]
     try:
         client = get_client()
         resp = client.chat.completions.create(
@@ -73,12 +73,12 @@ def translate_to_chinese(text: str) -> str:
     if not text or len(text.strip()) < 10:
         return ""
 
-    # 短文本直接翻译
-    if len(text) <= 2500:
+    # 短文本（4000 字以内）直接翻译，充分利用上下文
+    if len(text) <= 6000:
         return _translate_chunk(text)
 
-    # 长文本按段落边界分段，每段 ≤ 2000 字符
-    chunks = _split_text(text, 1800)
+    # 长文本按段落边界分段，每段 ≤ 4000 字符（利用 160K 上下文减少分段碎片化）
+    chunks = _split_text(text, 4000)
     results = []
     for i, chunk in enumerate(chunks):
         try:
@@ -90,7 +90,7 @@ def translate_to_chinese(text: str) -> str:
     return "\n\n".join(results)
 
 
-def _split_text(text: str, max_len: int = 1800) -> list:
+def _split_text(text: str, max_len: int = 4000) -> list:
     """在自然断句处切分文本，每段不超过 max_len 字符。"""
     if len(text) <= max_len:
         return [text]
@@ -129,7 +129,7 @@ def _translate_chunk(text: str) -> str:
             {"role": "user", "content": text},
         ],
         temperature=0.05,
-        max_tokens=2048,
+        max_tokens=4096,
         top_p=0.95,
     )
     return resp.choices[0].message.content or ""

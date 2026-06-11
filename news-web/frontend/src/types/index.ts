@@ -88,6 +88,7 @@ export interface Stats {
   active_events: number;
   human_verified: number;
   by_category: Record<string, number>;
+  by_source: Record<string, number>;  // 按实际媒体来源分布
   cache_cached: number;      // 已缓存 HTML (local_path 有效)
   cache_text: number;        // 文本已提取 (text_content)
   cache_translated: number;  // 翻译已完成
@@ -101,4 +102,29 @@ export interface PaginatedResponse<T> {
   limit: number;
   articles?: T[];
   events?: T[];
+}
+
+export interface HotlistItem {
+  id: number;
+  title: string;
+  url: string;
+  source: string;
+  rank: number;
+  heat: string;
+  author: string;
+  fetched_at: string;
+  priority_label: string;
+  platform?: string;
+}
+
+export interface HotlistPlatform {
+  count: number;
+  items: HotlistItem[];
+  date?: string;
+}
+
+export interface HotlistsSummary {
+  date: string;
+  platforms: Record<string, number>;
+  total: number;
 }

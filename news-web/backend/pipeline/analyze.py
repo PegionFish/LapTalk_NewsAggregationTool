@@ -3,7 +3,7 @@
 AI 分析脚本 — 使用 OpenAI 兼容 API 增强事件分析和关系推荐
 由 run_all.py 编排调用，环境变量 NEWS_DB_PATH 指定数据库路径
 """
-import os, sys, sqlite3, logging
+import os, sys, re, sqlite3, logging
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PARENT_DIR = os.path.dirname(SCRIPT_DIR)
@@ -58,7 +58,7 @@ def analyze_events(db_path: str) -> int:
             except Exception as e:
                 logger.warning(f"  summarize_events failed for #{evt_id}: {e}")
 
-        # ── 2. Generate event relation suggestions ────────────
+        # ── 2. Generate event relation suggestions (BATCHED) ────
         recent_events = conn.execute("""
             SELECT e.id, e.title FROM events e
             WHERE e.status = 'active' AND e.article_count >= 1
@@ -66,51 +66,69 @@ def analyze_events(db_path: str) -> int:
         """).fetchall()
 
         if len(recent_events) >= 2:
-            event_text = "\n".join(
-                f"[{e[0]}] {e[1]} (first_seen: {row[2] if len(row)>2 else '?'})"
-                for e, row in zip(recent_events, conn.execute("""
-                    SELECT id, title, first_seen FROM events
-                    WHERE status='active' ORDER BY last_seen DESC LIMIT 20
-                """).fetchall())
-            )
-
+            # 收集所有候选配对（无已有关系），批量发送 AI 请求
+            candidate_pairs = []
             for i, evt1 in enumerate(recent_events):
                 for j, evt2 in enumerate(recent_events):
                     if i >= j:
                         continue
-                    # Check if relation already exists
                     existing = conn.execute(
                         "SELECT COUNT(*) FROM event_relations WHERE from_event_id=? AND to_event_id=?",
                         (evt1[0], evt2[0])
                     ).fetchone()[0]
-                    if existing > 0:
-                        continue
+                    if existing == 0:
+                        candidate_pairs.append((evt1, evt2))
 
-                    try:
-                        prompt = (
-                            f"Event A: {evt1[1]}\n"
-                            f"Event B: {evt2[1]}\n\n"
-                            f"Are these two events related? If yes, reply with the relation type "
-                            f"(before, after, update, spawn, or related) and a one-line explanation. "
-                            f"If not related, reply 'unrelated'."
-                        )
-                        response = chat(prompt, system_prompt=(
-                            "You are a news event analysis assistant. "
-                            "Determine if two events are causally, temporally, or topically related. "
-                            "Output only the relation type or 'unrelated'."
-                        ))
-                        if response and 'unrelated' not in response.lower():
-                            for rel_type in ['before', 'after', 'update', 'spawn', 'related']:
-                                if rel_type in response.lower():
+            # 每批最多 15 个配对，一次 API 调用处理一批
+            BATCH_SIZE = 15
+            for batch_start in range(0, len(candidate_pairs), BATCH_SIZE):
+                batch = candidate_pairs[batch_start:batch_start + BATCH_SIZE]
+                if not batch:
+                    break
+
+                # 构造批量 prompt
+                pairs_text = ""
+                for idx, (evt1, evt2) in enumerate(batch, 1):
+                    pairs_text += f"  Pair {idx}: A=[{evt1[1]}] B=[{evt2[1]}]\n"
+
+                try:
+                    response = chat(
+                        f"For each pair below, determine if the two events are related. "
+                        f"If related, specify the relation type (before, after, update, spawn, or related). "
+                        f"If unrelated, write 'unrelated'.\n\n"
+                        f"Output one line per pair in this exact format:\n"
+                        f"  Pair N: relation_type - brief reason\n\n"
+                        f"{pairs_text}",
+                        system_prompt=(
+                            "You are a senior news event relationship analyst. "
+                            "For each event pair, determine the relationship:\n"
+                            "- 'before' = Event A happened before Event B (temporal order)\n"
+                            "- 'after' = Event A happened after Event B\n"
+                            "- 'update' = Event A provides new information / update to Event B\n"
+                            "- 'spawn' = Event A caused or led to Event B (causal)\n"
+                            "- 'related' = same general topic but no clear temporal/causal link\n"
+                            "- 'unrelated' = different topics, no meaningful connection\n"
+                            "Output ONLY one line per pair, no explanations beyond the reason phrase."
+                        ),
+                        max_tokens=2048,
+                    )
+                    if response:
+                        # 解析批量结果
+                        for idx, (evt1, evt2) in enumerate(batch, 1):
+                            # 查找 Pair N 对应的行
+                            pattern = rf'Pair\s*{idx}\s*:\s*(\w+)\s*[-–—]\s*(.+)'
+                            match = re.search(pattern, response, re.IGNORECASE)
+                            if match:
+                                rel_type = match.group(1).lower()
+                                if rel_type in ('before', 'after', 'update', 'spawn', 'related'):
                                     conn.execute("""
                                         INSERT OR IGNORE INTO event_relations
                                             (from_event_id, to_event_id, relation, created_by, created_at)
                                         VALUES (?, ?, ?, 'auto', datetime('now'))
                                     """, (evt1[0], evt2[0], rel_type))
                                     logger.info(f"  AI relation: #{evt1[0]} --{rel_type}--> #{evt2[0]}")
-                                    break
-                    except Exception as e:
-                        logger.warning(f"  AI relation check failed for #{evt1[0]}↔#{evt2[0]}: {e}")
+                except Exception as e:
+                    logger.warning(f"  AI batch relation check failed: {e}")
 
         conn.commit()
     except Exception as e:
