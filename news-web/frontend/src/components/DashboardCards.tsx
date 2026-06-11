@@ -1,27 +1,22 @@
 import type { Stats } from '../types';
+import { StatCard } from './ui';
 
 interface Props {
   stats: Stats | null;
   loading: boolean;
 }
 
-const CARD_STYLE: React.CSSProperties = {
-  background: 'var(--bg-secondary)', padding: 20, borderRadius: 10, textAlign: 'center',
-};
-
 export default function DashboardCards({ stats, loading }: Props) {
-  if (loading) return <div style={{ color: 'var(--text-secondary)' }}>加载中...</div>;
-  if (!stats) return <div style={{ color: 'var(--accent-red)' }}>数据库未配置</div>;
+  if (loading) return <div style={{ color: 'var(--text-secondary)', padding: '20px 0' }}>加载中...</div>;
+  if (!stats) return <div style={{ color: 'var(--accent-red)', padding: '20px 0' }}>数据库未配置</div>;
 
-  // 核心统计卡片
   const cards = [
-    { label: '总文章数', value: stats.articles, color: 'var(--accent)' },
-    { label: '活跃事件', value: stats.active_events, color: 'var(--accent-green)' },
-    { label: '待审核', value: stats.articles - stats.human_verified, color: 'var(--accent-orange)' },
-    { label: '已审核', value: stats.human_verified, color: 'var(--accent-purple)' },
+    { label: '总文章数', value: stats.articles, color: 'var(--accent)', icon: 'fa-newspaper' },
+    { label: '活跃事件', value: stats.active_events, color: 'var(--accent-green)', icon: 'fa-bolt' },
+    { label: '待审核', value: stats.articles - stats.human_verified, color: 'var(--accent-orange)', icon: 'fa-clock' },
+    { label: '已审核', value: stats.human_verified, color: 'var(--accent-purple)', icon: 'fa-check-circle' },
   ];
 
-  // 缓存统计卡片 — 与设置页缓存健康检查口径一致
   const cacheCards = [
     { label: 'HTML 已缓存', value: stats.cache_cached, color: 'var(--accent-green)', icon: 'fa-database' },
     { label: '文本已提取', value: stats.cache_text, color: 'var(--accent)', icon: 'fa-file-alt' },
@@ -29,57 +24,118 @@ export default function DashboardCards({ stats, loading }: Props) {
     { label: '待下载', value: stats.cache_pending, color: 'var(--accent-orange)', icon: 'fa-download' },
   ];
 
-  // 覆盖率 = HTML 缓存 / 总文章（与缓存健康检查页一致）
   const cacheCoverage = stats.articles > 0 ? Math.round((stats.cache_cached / stats.articles) * 100) : 0;
   const textCoverage = stats.articles > 0 ? Math.round((stats.cache_text / stats.articles) * 100) : 0;
 
+  const getCoverageColor = (pct: number, thresholds: [number, number]) => {
+    if (pct > thresholds[0]) return 'var(--accent-tertiary)';
+    if (pct > thresholds[1]) return 'var(--accent-orange)';
+    return 'var(--accent-red)';
+  };
+
+  const getCoverageGradient = (pct: number, thresholds: [number, number]) => {
+    if (pct > thresholds[0]) return 'var(--gradient-accent)';
+    if (pct > thresholds[1]) return 'linear-gradient(90deg, #ffb74d, #00d4ff)';
+    return 'var(--gradient-secondary)';
+  };
+
   return (
-    <div>
+    <div className="ui-fade-in">
       {/* 核心统计 */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 16, marginBottom: 16 }}>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+        gap: 16,
+        marginBottom: 16,
+      }}>
         {cards.map(c => (
-          <div key={c.label} style={CARD_STYLE}>
-            <div style={{ fontSize: 32, fontWeight: 'bold', color: c.color }}>{c.value}</div>
-            <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 4 }}>{c.label}</div>
-          </div>
+          <StatCard key={c.label} icon={c.icon} label={c.label} value={c.value} color={c.color} />
         ))}
       </div>
 
       {/* 缓存统计 */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 16 }}>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+        gap: 16,
+      }}>
         {cacheCards.map(c => (
-          <div key={c.label} style={{ ...CARD_STYLE, display: 'flex', alignItems: 'center', gap: 14, textAlign: 'left', padding: '16px 20px' }}>
-            <i className={`fas ${c.icon}`} style={{ color: c.color, fontSize: 24, width: 32, textAlign: 'center' }} />
-            <div>
-              <div style={{ fontSize: 28, fontWeight: 'bold', color: c.color }}>{c.value}</div>
-              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>{c.label}</div>
-            </div>
-          </div>
+          <StatCard key={c.label} icon={c.icon} label={c.label} value={c.value} color={c.color} />
         ))}
       </div>
 
       {/* 缓存覆盖率进度条 */}
-      <div style={{ background: 'var(--bg-secondary)', borderRadius: 10, padding: '14px 20px', marginTop: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{
+        background: 'var(--bg-secondary)',
+        borderRadius: 'var(--radius-lg)',
+        padding: '16px 20px',
+        marginTop: 16,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 14,
+      }}>
         {/* HTML 缓存 */}
         <div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            fontSize: 12,
+            color: 'var(--text-secondary)',
+            marginBottom: 6,
+          }}>
             <span><i className="fas fa-archive" style={{ marginRight: 6 }} />HTML 缓存</span>
-            <span style={{ fontWeight: 600, color: cacheCoverage > 70 ? 'var(--accent-tertiary)' : cacheCoverage > 40 ? 'var(--accent-orange)' : 'var(--accent-red)' }}>{cacheCoverage}% · {stats.cache_cached}/{stats.articles}</span>
+            <span style={{
+              fontWeight: 600,
+              color: getCoverageColor(cacheCoverage, [70, 40]),
+            }}>
+              {cacheCoverage}% · {stats.cache_cached}/{stats.articles}
+            </span>
           </div>
-          <div style={{ height: 5, background: 'var(--bg-primary)', borderRadius: 3, overflow: 'hidden' }}>
-            <div style={{ height: '100%', borderRadius: 3, transition: 'width 0.6s ease', width: `${cacheCoverage}%`,
-              background: cacheCoverage > 70 ? 'var(--gradient-accent)' : cacheCoverage > 40 ? 'linear-gradient(90deg, #ffb74d, #00d4ff)' : 'var(--gradient-secondary)' }} />
+          <div style={{
+            height: 6,
+            background: 'var(--bg-primary)',
+            borderRadius: 3,
+            overflow: 'hidden',
+          }}>
+            <div style={{
+              height: '100%',
+              borderRadius: 3,
+              transition: 'width 0.6s ease',
+              width: `${cacheCoverage}%`,
+              background: getCoverageGradient(cacheCoverage, [70, 40]),
+            }} />
           </div>
         </div>
         {/* 文本提取 */}
         <div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            fontSize: 12,
+            color: 'var(--text-secondary)',
+            marginBottom: 6,
+          }}>
             <span><i className="fas fa-file-alt" style={{ marginRight: 6 }} />文本提取</span>
-            <span style={{ fontWeight: 600, color: textCoverage > 50 ? 'var(--accent-tertiary)' : textCoverage > 20 ? 'var(--accent-orange)' : 'var(--accent-red)' }}>{textCoverage}% · {stats.cache_text}/{stats.articles}</span>
+            <span style={{
+              fontWeight: 600,
+              color: getCoverageColor(textCoverage, [50, 20]),
+            }}>
+              {textCoverage}% · {stats.cache_text}/{stats.articles}
+            </span>
           </div>
-          <div style={{ height: 5, background: 'var(--bg-primary)', borderRadius: 3, overflow: 'hidden' }}>
-            <div style={{ height: '100%', borderRadius: 3, transition: 'width 0.6s ease', width: `${textCoverage}%`,
-              background: textCoverage > 50 ? 'var(--gradient-accent)' : textCoverage > 20 ? 'linear-gradient(90deg, #ffb74d, #00d4ff)' : 'var(--gradient-secondary)' }} />
+          <div style={{
+            height: 6,
+            background: 'var(--bg-primary)',
+            borderRadius: 3,
+            overflow: 'hidden',
+          }}>
+            <div style={{
+              height: '100%',
+              borderRadius: 3,
+              transition: 'width 0.6s ease',
+              width: `${textCoverage}%`,
+              background: getCoverageGradient(textCoverage, [50, 20]),
+            }} />
           </div>
         </div>
       </div>

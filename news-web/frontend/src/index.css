@@ -1,10 +1,15 @@
+/* ═══════════════════════════════════════════════════════════
+   全局样式 — 科幻主题精修版
+   ═══════════════════════════════════════════════════════════ */
+
 * { margin: 0; padding: 0; box-sizing: border-box; }
+
 :root {
   /* 基础色板 */
   --bg-primary: #0f0f1a;
   --bg-secondary: #1a1a2e;
   --bg-card: #2a2a3e;
-  --bg-card-hover: rgba(255,255,255,0.06);
+  --bg-card-hover: rgba(255, 255, 255, 0.05);
   --text-primary: #e0e0e0;
   --text-secondary: #a0a0b0;
   --text-muted: #707080;
@@ -17,37 +22,136 @@
   --accent-red: #e57373;
   --accent-purple: #ce93d8;
   /* 边框 */
-  --border: rgba(0,212,255,0.15);
-  --border-hover: rgba(0,212,255,0.4);
+  --border: rgba(0, 212, 255, 0.12);
+  --border-hover: rgba(0, 212, 255, 0.35);
   /* 渐变 */
   --gradient-primary: linear-gradient(135deg, #00d4ff 0%, #0099cc 100%);
   --gradient-secondary: linear-gradient(135deg, #ff0080 0%, #cc0066 100%);
   --gradient-accent: linear-gradient(135deg, #00ff88 0%, #00cc6a 100%);
   /* 阴影 */
-  --shadow-sm: 0 2px 8px rgba(0,0,0,0.2);
-  --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
-  --shadow-glow: 0 0 15px rgba(0,212,255,0.2);
-  --shadow-hover: 0 8px 24px rgba(0,212,255,0.25);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --shadow-glow: 0 0 12px rgba(0, 212, 255, 0.15);
+  --shadow-hover: 0 8px 24px rgba(0, 212, 255, 0.2);
   /* 圆角 & 过渡 */
-  --radius-sm: 4px; --radius-md: 8px; --radius-lg: 12px;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
   --transition-fast: 150ms ease;
-  --transition-base: 300ms ease;
+  --transition-base: 250ms ease;
   /* 字体 */
   --font-mono: 'Consolas', 'Courier New', monospace;
 }
+
 body {
   font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
   background: var(--bg-primary);
   color: var(--text-primary);
   min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
-a { color: var(--accent); text-decoration: none; }
-::-webkit-scrollbar { width: 6px; }
-::-webkit-scrollbar-track { background: var(--bg-primary); }
-::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 3px; opacity: 0.3; }
 
-/* 侧边面板滑入动画 */
+a {
+  color: var(--accent);
+  text-decoration: none;
+  transition: color var(--transition-fast);
+}
+a:hover {
+  color: #33ddff;
+}
+
+/* 滚动条 */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-primary); }
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 212, 255, 0.3);
+  border-radius: 3px;
+  transition: background var(--transition-fast);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 212, 255, 0.5);
+}
+
+/* 选中文本 */
+::selection {
+  background: rgba(0, 212, 255, 0.3);
+  color: #fff;
+}
+
+/* 页面切换动画 */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideInRight {
+  from { transform: translateX(100%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes slideInLeft {
+  from { transform: translateX(-20px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+/* 响应式工具类 */
+@media (max-width: 768px) {
+  :root {
+    --radius-lg: 8px;
+  }
+}
+
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+body {
+  font-family: var(--font-sans);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  letter-spacing: -0.01em;
+}
+
+a { color: var(--accent); text-decoration: none; transition: color var(--transition-fast); }
+a:hover { color: #7dd3fc; }
+
+/* 滚动条 */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.18); }
+
+/* 选中文本 */
+::selection { background: rgba(56,189,248,0.25); color: #fff; }
+
+/* 动画 */
 @keyframes slideInRight {
   from { transform: translateX(100%); opacity: 0; }
   to   { transform: translateX(0);    opacity: 1; }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* 加载骨架屏 */
+.skeleton {
+  background: linear-gradient(90deg, var(--bg-card) 25%, var(--bg-elevated) 50%, var(--bg-card) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: var(--radius-md);
 }

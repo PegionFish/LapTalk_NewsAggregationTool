@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import type { Article } from '../types';
+import { Input, Select, Button, Badge, Loading } from '../components/ui';
 
 const PER_PAGE = 50;
 
@@ -36,13 +37,11 @@ export default function ArticleSearch() {
 
   useEffect(() => { fetchArticles(); }, [fetchArticles]);
 
-  // 选中文章 → 自动触发 AI 分析（后端有缓存，已分析直接返回）
   useEffect(() => {
     if (!selected) { setAiAnalysis(''); setAnalysisMeta({}); return; }
     setAiAnalysis('');
     setAnalyzing(true);
     setAnalysisMeta({});
-    // 先查 content 端点获取已有摘要和标注状态
     api.getArticleContent(selected.id).then(c => {
       setAnalysisMeta({
         ai_analyzed: c?.ai_analyzed,
@@ -54,20 +53,18 @@ export default function ArticleSearch() {
         setAnalyzing(false);
       }
     }).catch(() => {});
-    // 调用分析端点（后端有缓存则立即返回，无缓存则异步生成）
     api.analyzeArticle(selected.id).then(r => {
       if (r.ok && r.analysis) setAiAnalysis(r.analysis);
     }).catch(() => {}).finally(() => setAnalyzing(false));
   }, [selected?.id]);
 
-  // 缓存状态 → 图标/颜色/提示
-  const cacheBadge = (status: string): { icon: string; color: string; tooltip: string } => {
+  const cacheBadge = (status: string): { icon: string; variant: 'green' | 'blue' | 'red' | 'muted'; tooltip: string } => {
     switch (status) {
-      case 'translated': return { icon: 'fa-check-circle', color: 'var(--accent-tertiary)', tooltip: '翻译已就绪' };
-      case 'fetched': return { icon: 'fa-check-circle', color: 'var(--accent-green)', tooltip: '内容已缓存' };
-      case 'failed': return { icon: 'fa-exclamation-triangle', color: 'var(--accent-red)', tooltip: '下载失败' };
-      case 'file': return { icon: 'fa-file-alt', color: 'var(--accent-blue)', tooltip: 'HTML 磁盘缓存' };
-      default: return { icon: 'fa-hourglass-half', color: 'var(--text-muted)', tooltip: '尚未下载内容' };
+      case 'translated': return { icon: 'fa-check-circle', variant: 'green', tooltip: '翻译已就绪' };
+      case 'fetched': return { icon: 'fa-check-circle', variant: 'green', tooltip: '内容已缓存' };
+      case 'failed': return { icon: 'fa-exclamation-triangle', variant: 'red', tooltip: '下载失败' };
+      case 'file': return { icon: 'fa-file-alt', variant: 'blue', tooltip: 'HTML 磁盘缓存' };
+      default: return { icon: 'fa-hourglass-half', variant: 'muted', tooltip: '尚未下载内容' };
     }
   };
 
@@ -78,82 +75,129 @@ export default function ArticleSearch() {
       {/* 中：文章列表 */}
       <div style={{ flex: 1, overflow: 'auto', padding: 24 }}>
         {/* 工具栏 */}
-        <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
-          <input
+        <div style={{
+          display: 'flex',
+          gap: 10,
+          marginBottom: 20,
+          flexWrap: 'wrap',
+          alignItems: 'center',
+        }}>
+          <Input
             placeholder="搜索标题或关键词..."
             value={search}
             onChange={e => { setSearch(e.target.value); setPage(1); }}
-            style={inputStyle}
+            style={{ flex: 1, minWidth: 200 }}
           />
-          <select value={priority} onChange={e => { setPriority(e.target.value); setPage(1); }} style={selectStyle}>
+          <Select value={priority} onChange={e => { setPriority(e.target.value); setPage(1); }}>
             <option value="">全部优先级</option>
             <option value="high">高</option>
             <option value="medium">中</option>
             <option value="low">低</option>
-          </select>
-          <select value={verified} onChange={e => { setVerified(e.target.value); setPage(1); }} style={selectStyle}>
+          </Select>
+          <Select value={verified} onChange={e => { setVerified(e.target.value); setPage(1); }}>
             <option value="">全部状态</option>
             <option value="yes">已审核</option>
             <option value="no">待审核</option>
-          </select>
-          {loading && <i className="fas fa-spinner fa-spin" style={{ color: 'var(--accent)', fontSize: 13 }} />}
+          </Select>
+          {loading && <i className="fas fa-spinner fa-spin" style={{ color: 'var(--accent)', fontSize: 14 }} />}
         </div>
 
         {/* 表格 */}
-        <div style={{ background: 'var(--bg-secondary)', borderRadius: 10, border: '1px solid var(--border)', overflow: 'hidden' }}>
+        <div style={{
+          background: 'var(--bg-secondary)',
+          borderRadius: 'var(--radius-lg)',
+          border: '1px solid var(--border)',
+          overflow: 'hidden',
+        }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
-              <tr style={{ borderBottom: '1px solid var(--border)', background: 'rgba(0,0,0,0.1)' }}>
+              <tr style={{
+                borderBottom: '1px solid var(--border)',
+                background: 'rgba(0, 0, 0, 0.15)',
+              }}>
                 <th style={thStyle}>标题</th>
-                <th style={{ ...thStyle, width: 70 }}>来源</th>
-                <th style={{ ...thStyle, width: 42 }}>语言</th>
-                <th style={{ ...thStyle, width: 50 }}>评分</th>
-                <th style={{ ...thStyle, width: 36 }}>缓存</th>
-                <th style={{ ...thStyle, width: 36 }}>翻译</th>
-                <th style={{ ...thStyle, width: 36 }}>分析</th>
-                <th style={{ ...thStyle, width: 42 }}>审核</th>
-                <th style={{ ...thStyle, width: 55 }}>日期</th>
+                <th style={{ ...thStyle, width: 80 }}>来源</th>
+                <th style={{ ...thStyle, width: 48 }}>语言</th>
+                <th style={{ ...thStyle, width: 56 }}>评分</th>
+                <th style={{ ...thStyle, width: 40 }}>缓存</th>
+                <th style={{ ...thStyle, width: 40 }}>翻译</th>
+                <th style={{ ...thStyle, width: 40 }}>分析</th>
+                <th style={{ ...thStyle, width: 48 }}>审核</th>
+                <th style={{ ...thStyle, width: 60 }}>日期</th>
               </tr>
             </thead>
             <tbody>
               {articles.map(a => (
-                <tr key={a.id}
+                <tr
+                  key={a.id}
                   onClick={() => setSelected(a)}
                   style={{
-                    cursor: 'pointer', borderBottom: '1px solid var(--border)',
-                    background: selected?.id === a.id ? 'rgba(0,212,255,0.06)' : 'transparent',
-                    transition: 'var(--transition-fast)',
+                    cursor: 'pointer',
+                    borderBottom: '1px solid var(--border)',
+                    background: selected?.id === a.id ? 'rgba(0, 212, 255, 0.06)' : 'transparent',
+                    transition: 'background var(--transition-fast)',
+                  }}
+                  onMouseEnter={e => {
+                    if (selected?.id !== a.id) {
+                      e.currentTarget.style.background = 'var(--bg-card-hover)';
+                    }
+                  }}
+                  onMouseLeave={e => {
+                    if (selected?.id !== a.id) {
+                      e.currentTarget.style.background = 'transparent';
+                    }
+                  }}
+                >
+                  <td style={{
+                    padding: '10px 12px',
+                    fontWeight: selected?.id === a.id ? 600 : 400,
+                    maxWidth: 350,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
                   }}>
-                  <td style={{ padding: '6px 10px', fontWeight: selected?.id === a.id ? 600 : 400, maxWidth: 350, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.title}</td>
-                  <td style={{ padding: '6px 10px', color: 'var(--text-secondary)', fontSize: 10 }}>{a.source}</td>
-                  <td style={{ padding: '6px 10px', textAlign: 'center', fontSize: 10 }}>
-                    <span style={{ color: a.content_lang === 'en' ? '#81c784' : a.content_lang === 'zh' ? '#ce93d8' : 'var(--text-muted)', fontWeight: 600 }}>
-                      {a.content_lang?.toUpperCase() || '?'}
-                    </span>
+                    {a.title}
                   </td>
-                  <td style={{ padding: '6px 10px', textAlign: 'center', color: a.score > 0.7 ? 'var(--accent-tertiary)' : a.score > 0.4 ? 'var(--accent-orange)' : 'var(--text-muted)', fontWeight: 600, fontSize: 11 }}>
+                  <td style={{ padding: '10px 12px', color: 'var(--text-secondary)', fontSize: 11 }}>{a.source}</td>
+                  <td style={{ padding: '10px 12px', textAlign: 'center', fontSize: 11 }}>
+                    <Badge
+                      variant={a.content_lang === 'en' ? 'green' : a.content_lang === 'zh' ? 'purple' : 'muted'}
+                    >
+                      {a.content_lang?.toUpperCase() || '?'}
+                    </Badge>
+                  </td>
+                  <td style={{
+                    padding: '10px 12px',
+                    textAlign: 'center',
+                    color: a.score > 0.7 ? 'var(--accent-tertiary)' : a.score > 0.4 ? 'var(--accent-orange)' : 'var(--text-muted)',
+                    fontWeight: 600,
+                    fontSize: 12,
+                  }}>
                     {a.score.toFixed(2)}
                   </td>
-                  <td style={{ padding: '6px 10px', textAlign: 'center', fontSize: 11 }}>
-                    {(() => { const b = cacheBadge(a.content_status); return <i className={`fas ${b.icon}`} style={{ color: b.color }} title={b.tooltip} />; })()}
+                  <td style={{ padding: '10px 12px', textAlign: 'center', fontSize: 12 }}>
+                    {(() => { const b = cacheBadge(a.content_status); return <i className={`fas ${b.icon}`} style={{ color: `var(--accent-${b.variant === 'green' ? 'tertiary' : b.variant === 'red' ? 'red' : b.variant === 'blue' ? '' : 'muted'})` }} title={b.tooltip} />; })()}
                   </td>
-                  <td style={{ padding: '6px 10px', textAlign: 'center', fontSize: 11 }}>
+                  <td style={{ padding: '10px 12px', textAlign: 'center', fontSize: 12 }}>
                     <i className={`fas ${a.has_translation ? 'fa-check-circle' : 'fa-minus-circle'}`}
-                       style={{ color: a.has_translation ? 'var(--accent-tertiary)' : 'var(--text-muted)', fontSize: 10 }}
+                       style={{ color: a.has_translation ? 'var(--accent-tertiary)' : 'var(--text-muted)', fontSize: 11 }}
                        title={a.has_translation ? '已翻译' : '未翻译'} />
                   </td>
-                  <td style={{ padding: '6px 10px', textAlign: 'center', fontSize: 11 }}>
+                  <td style={{ padding: '10px 12px', textAlign: 'center', fontSize: 12 }}>
                     <i className={`fas ${a.ai_analyzed ? 'fa-check-circle' : 'fa-minus-circle'}`}
-                       style={{ color: a.ai_analyzed ? 'var(--accent)' : 'var(--text-muted)', fontSize: 10 }}
+                       style={{ color: a.ai_analyzed ? 'var(--accent)' : 'var(--text-muted)', fontSize: 11 }}
                        title={a.ai_analyzed ? '已分析' : '未分析'} />
                   </td>
-                  <td style={{ padding: '6px 10px', textAlign: 'center', fontSize: 10 }}>
-                    <span style={{ color: a.human_processed ? 'var(--accent)' : a.verified ? 'var(--accent-tertiary)' : 'var(--text-muted)' }}
-                      title={a.human_processed ? '人工已处理' : a.verified ? '已审核' : '待审核'}>
+                  <td style={{ padding: '10px 12px', textAlign: 'center', fontSize: 11 }}>
+                    <Badge
+                      variant={a.human_processed ? 'blue' : a.verified ? 'green' : 'muted'}
+                    >
                       {a.human_processed ? '人工' : a.verified ? '已审' : '待审'}
-                    </span>
+                    </Badge>
                   </td>
-                  <td style={{ padding: '6px 10px', color: 'var(--text-muted)', fontSize: 10 }}>{a.published?.slice(5, 10) || a.fetched?.slice(5, 10)}</td>
+                  <td style={{ padding: '10px 12px', color: 'var(--text-muted)', fontSize: 11 }}>
+                    {a.published?.slice(5, 10) || a.fetched?.slice(5, 10)}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -162,119 +206,276 @@ export default function ArticleSearch() {
 
         {/* 分页 */}
         {totalPages > 1 && (
-          <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginTop: 16 }}>
-            <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} style={pageBtnStyle}>
-              <i className="fas fa-chevron-left" /> 上一页
-            </button>
-            <span style={{ fontSize: 12, color: 'var(--text-secondary)', padding: '6px 12px' }}>
+          <div style={{
+            display: 'flex',
+            justifyContent: 'center',
+            gap: 10,
+            marginTop: 20,
+          }}>
+            <Button
+              variant="ghost"
+              size="sm"
+              icon="fa-chevron-left"
+              onClick={() => setPage(p => Math.max(1, p - 1))}
+              disabled={page === 1}
+            >
+              上一页
+            </Button>
+            <span style={{
+              fontSize: 12,
+              color: 'var(--text-secondary)',
+              padding: '6px 12px',
+              display: 'flex',
+              alignItems: 'center',
+            }}>
               {page} / {totalPages} · 共 {total} 条
             </span>
-            <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page >= totalPages} style={pageBtnStyle}>
-              下一页 <i className="fas fa-chevron-right" />
-            </button>
+            <Button
+              variant="ghost"
+              size="sm"
+              icon="fa-chevron-right"
+              onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+              disabled={page >= totalPages}
+            >
+              下一页
+            </Button>
           </div>
         )}
       </div>
 
       {/* 右：详情面板 */}
       {selected && (
-        <div style={{ width: 380, minWidth: 380, background: 'var(--bg-secondary)', borderLeft: '1px solid var(--border)',
-          overflow: 'auto', padding: 20, display: 'flex', flexDirection: 'column' }}>
-          <button onClick={() => setSelected(null)}
-            style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 13, alignSelf: 'flex-end', padding: 4 }}>
-            <i className="fas fa-times" />
-          </button>
-
-          <h3 style={{ fontSize: 15, marginTop: 0, lineHeight: 1.4 }}>{selected.title}</h3>
-
-          <div style={{ display: 'flex', gap: 12, marginTop: 12, flexWrap: 'wrap', fontSize: 12 }}>
-            <span style={{ color: 'var(--text-secondary)' }}>📰 {selected.source}</span>
-            <span style={{ color: 'var(--text-secondary)' }}>📅 {selected.fetched?.slice(0, 10)}</span>
-            <span style={{ color: selected.score > 0.7 ? 'var(--accent-tertiary)' : 'var(--accent-orange)' }}>⭐ {selected.score.toFixed(2)}</span>
-            <span style={{ color: selected.verified ? 'var(--accent-tertiary)' : 'var(--text-muted)' }}>{selected.verified ? '✓ 已审核' : '待审核'}</span>
+        <div style={{
+          width: 400,
+          minWidth: 400,
+          background: 'var(--bg-secondary)',
+          borderLeft: '1px solid var(--border)',
+          overflow: 'auto',
+          padding: 24,
+          display: 'flex',
+          flexDirection: 'column',
+          animation: 'slideInRight 0.2s ease',
+        }}>
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'flex-start',
+            marginBottom: 16,
+          }}>
+            <h3 style={{
+              fontSize: 16,
+              fontWeight: 600,
+              lineHeight: 1.4,
+              margin: 0,
+              flex: 1,
+              paddingRight: 12,
+            }}>
+              {selected.title}
+            </h3>
+            <button
+              onClick={() => setSelected(null)}
+              style={{
+                background: 'var(--bg-card)',
+                border: '1px solid var(--border)',
+                borderRadius: 6,
+                color: 'var(--text-muted)',
+                cursor: 'pointer',
+                padding: '6px 8px',
+                fontSize: 12,
+                transition: 'all var(--transition-fast)',
+              }}
+              onMouseEnter={e => {
+                e.currentTarget.style.background = 'var(--bg-card-hover)';
+                e.currentTarget.style.color = 'var(--text-primary)';
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.background = 'var(--bg-card)';
+                e.currentTarget.style.color = 'var(--text-muted)';
+              }}
+            >
+              <i className="fas fa-times" />
+            </button>
           </div>
 
-          {/* 缓存状态行 */}
+          {/* 元信息 */}
+          <div style={{
+            display: 'flex',
+            gap: 14,
+            marginBottom: 14,
+            flexWrap: 'wrap',
+            fontSize: 12,
+            color: 'var(--text-secondary)',
+          }}>
+            <span><i className="fas fa-newspaper" style={{ marginRight: 4 }} />{selected.source}</span>
+            <span><i className="fas fa-calendar" style={{ marginRight: 4 }} />{selected.fetched?.slice(0, 10)}</span>
+            <span style={{
+              color: selected.score > 0.7 ? 'var(--accent-tertiary)' : 'var(--accent-orange)',
+              fontWeight: 600,
+            }}>
+              <i className="fas fa-star" style={{ marginRight: 4 }} />
+              {selected.score.toFixed(2)}
+            </span>
+          </div>
+
+          {/* 缓存状态 */}
           {(() => { const b = cacheBadge(selected.content_status); return (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: 12 }}>
-              <i className={`fas ${b.icon}`} style={{ color: b.color, fontSize: 14 }} />
-              <span style={{ color: b.color, fontWeight: 500 }}>{b.tooltip}</span>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              marginBottom: 14,
+              fontSize: 12,
+            }}>
+              <Badge variant={b.variant} icon={b.icon}>
+                {b.tooltip}
+              </Badge>
               {selected.content_fetched_at && (
                 <span style={{ color: 'var(--text-muted)', marginLeft: 'auto', fontSize: 11 }}>
-                  🕐 {selected.content_fetched_at.slice(0, 10)}
+                  <i className="fas fa-clock" style={{ marginRight: 4 }} />
+                  {selected.content_fetched_at.slice(0, 10)}
                 </span>
               )}
             </div>
           ); })()}
 
+          {/* 关键词 */}
           {selected.keywords?.length > 0 && (
-            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 12 }}>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
               {selected.keywords.map(k => (
-                <span key={k} style={kwStyle}>{k}</span>
+                <span key={k} className="ui-tag">{k}</span>
               ))}
             </div>
           )}
 
-          <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
-            <button onClick={() => navigate(`/articles/${selected.id}`)} style={actionBtnStyle}>
-              <i className="fas fa-book-open" /> 阅读全文
-            </button>
-            <a href={selected.url} target="_blank" rel="noopener noreferrer" style={{ ...actionBtnStyle, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-secondary)', textDecoration: 'none' }}>
-              <i className="fas fa-external-link-alt" /> 原文
-            </a>
+          {/* 操作按钮 */}
+          <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
+            <Button
+              variant="primary"
+              size="sm"
+              icon="fa-book-open"
+              onClick={() => navigate(`/articles/${selected.id}`)}
+            >
+              阅读全文
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              icon="fa-external-link-alt"
+              onClick={() => window.open(selected.url, '_blank')}
+            >
+              原文
+            </Button>
           </div>
 
+          {/* 事件链接 */}
           {selected.event && (
-            <a href={`/workspace?event=${selected.event.id}`} style={{
-              marginTop: 10, display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12,
-              color: 'var(--accent)', textDecoration: 'none',
-            }}>
-              <i className="fas fa-diagram-project" /> 查看所属事件: {selected.event.title}
+            <a
+              href={`/workspace?event=${selected.event.id}`}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                fontSize: 12,
+                color: 'var(--accent)',
+                textDecoration: 'none',
+                marginBottom: 14,
+                padding: '8px 12px',
+                background: 'rgba(0, 212, 255, 0.06)',
+                borderRadius: 8,
+                border: '1px solid rgba(0, 212, 255, 0.15)',
+                transition: 'all var(--transition-fast)',
+              }}
+              onMouseEnter={e => {
+                e.currentTarget.style.background = 'rgba(0, 212, 255, 0.12)';
+                e.currentTarget.style.borderColor = 'rgba(0, 212, 255, 0.3)';
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.background = 'rgba(0, 212, 255, 0.06)';
+                e.currentTarget.style.borderColor = 'rgba(0, 212, 255, 0.15)';
+              }}
+            >
+              <i className="fas fa-diagram-project" />
+              查看所属事件: {selected.event.title}
             </a>
           )}
 
-          <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '16px 0' }} />
+          <div style={{
+            borderTop: '1px solid var(--border)',
+            margin: '16px 0',
+          }} />
 
           {/* 标注状态徽章 */}
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
             {analysisMeta.ai_analyzed ? (
-              <span style={badgeDone}><i className="fas fa-brain" /> 已分析</span>
+              <Badge variant="blue" icon="fa-brain">已分析</Badge>
             ) : analyzing ? (
-              <span style={badgePending}><i className="fas fa-spinner fa-spin" /> 分析中</span>
+              <Badge variant="orange" icon="fa-spinner">分析中</Badge>
             ) : (
-              <span style={badgeNone}><i className="fas fa-brain" /> 未分析</span>
+              <Badge variant="muted" icon="fa-brain">未分析</Badge>
             )}
             {analysisMeta.translated ? (
-              <span style={badgeDone}><i className="fas fa-language" /> 已翻译</span>
+              <Badge variant="green" icon="fa-language">已翻译</Badge>
             ) : (
-              <span style={badgeNone}><i className="fas fa-language" /> 未翻译</span>
+              <Badge variant="muted" icon="fa-language">未翻译</Badge>
             )}
             {analysisMeta.human_processed ? (
-              <span style={badgeHuman}><i className="fas fa-user-check" /> 人工已处理</span>
+              <Badge variant="blue" icon="fa-user-check">人工已处理</Badge>
             ) : (
-              <span style={badgeNone}><i className="fas fa-user-edit" /> 待审核</span>
+              <Badge variant="muted" icon="fa-user-edit">待审核</Badge>
             )}
           </div>
 
           {/* AI 分析摘要 */}
-          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>
-            <i className="fas fa-robot" style={{ marginRight: 4, color: 'var(--accent)' }} />AI 分析解读
+          <div style={{
+            fontSize: 12,
+            color: 'var(--text-muted)',
+            marginBottom: 8,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+          }}>
+            <i className="fas fa-robot" style={{ color: 'var(--accent)' }} />
+            AI 分析解读
           </div>
           {analyzing && !aiAnalysis ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 16, color: 'var(--text-muted)', fontSize: 12, background: 'var(--bg-card)', borderRadius: 8 }}>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              padding: 16,
+              color: 'var(--text-muted)',
+              fontSize: 12,
+              background: 'var(--bg-card)',
+              borderRadius: 8,
+              border: '1px solid var(--border)',
+            }}>
               <i className="fas fa-spinner fa-spin" style={{ color: 'var(--accent)' }} />
               正在分析文章内容...
             </div>
           ) : aiAnalysis ? (
             <div style={{
-              fontSize: 12, lineHeight: 1.8, color: 'var(--text-secondary)', whiteSpace: 'pre-wrap',
-              flex: 1, overflow: 'auto', background: 'var(--bg-card)', borderRadius: 8, padding: 12,
+              fontSize: 12,
+              lineHeight: 1.8,
+              color: 'var(--text-secondary)',
+              whiteSpace: 'pre-wrap',
+              flex: 1,
+              overflow: 'auto',
+              background: 'var(--bg-card)',
+              borderRadius: 8,
+              padding: 14,
               border: '1px solid var(--border)',
             }}>
               {aiAnalysis}
             </div>
           ) : (
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', padding: 8, background: 'var(--bg-card)', borderRadius: 8 }}>
+            <div style={{
+              fontSize: 12,
+              color: 'var(--text-muted)',
+              padding: 12,
+              background: 'var(--bg-card)',
+              borderRadius: 8,
+              border: '1px solid var(--border)',
+            }}>
               该文章暂无法分析（可能尚未完成内容提取）。
             </div>
           )}
@@ -284,36 +485,12 @@ export default function ArticleSearch() {
   );
 }
 
-const inputStyle: React.CSSProperties = {
-  background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 6,
-  padding: '7px 12px', color: 'var(--text-primary)', fontSize: 13, outline: 'none',
-  flex: 1, minWidth: 200,
-};
-const selectStyle: React.CSSProperties = {
-  background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 6,
-  padding: '6px 10px', color: 'var(--text-primary)', fontSize: 12, outline: 'none', cursor: 'pointer',
-};
 const thStyle: React.CSSProperties = {
-  textAlign: 'left', padding: '9px 12px', fontWeight: 600, fontSize: 11, color: 'var(--text-muted)',
-  textTransform: 'uppercase', letterSpacing: 0.5,
-};
-const pageBtnStyle: React.CSSProperties = {
-  background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 6,
-  padding: '6px 14px', color: 'var(--text-primary)', fontSize: 12, cursor: 'pointer',
-  display: 'flex', alignItems: 'center', gap: 6,
-};
-const kwStyle: React.CSSProperties = {
-  background: 'rgba(0,212,255,0.08)', padding: '2px 8px', borderRadius: 10, fontSize: 10,
-  color: 'var(--text-secondary)', border: '1px solid var(--border)',
-};
-const badgeStyle: React.CSSProperties = { fontSize: 10, padding: '2px 8px', borderRadius: 10, fontWeight: 500, display: 'inline-flex', alignItems: 'center', gap: 4 };
-const badgeDone: React.CSSProperties   = { ...badgeStyle, background: 'rgba(129,199,132,0.12)', color: '#81c784', border: '1px solid rgba(129,199,132,0.25)' };
-const badgeNone: React.CSSProperties   = { ...badgeStyle, background: 'transparent', color: 'var(--text-muted)', border: '1px solid var(--border)' };
-const badgePending: React.CSSProperties = { ...badgeStyle, background: 'rgba(255,183,77,0.12)', color: '#ffb74d', border: '1px solid rgba(255,183,77,0.25)' };
-const badgeHuman: React.CSSProperties   = { ...badgeStyle, background: 'rgba(0,212,255,0.1)', color: 'var(--accent)', border: '1px solid rgba(0,212,255,0.25)' };
-
-const actionBtnStyle: React.CSSProperties = {
-  background: 'var(--accent)', border: 'none', borderRadius: 6, padding: '7px 16px',
-  color: '#000', fontWeight: 600, fontSize: 12, cursor: 'pointer',
-  display: 'flex', alignItems: 'center', gap: 6,
+  textAlign: 'left',
+  padding: '10px 12px',
+  fontWeight: 600,
+  fontSize: 11,
+  color: 'var(--text-muted)',
+  textTransform: 'uppercase',
+  letterSpacing: 0.5,
 };

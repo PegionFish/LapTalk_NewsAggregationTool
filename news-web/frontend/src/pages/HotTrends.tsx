@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { api } from '../api/client';
 import type { HotlistItem } from '../types';
+import { Card, Button, Tabs, Tab, EmptyState, Loading } from '../components/ui';
 
 const PLATFORM_META: Record<string, { label: string; icon: string; color: string }> = {
   weibo:    { label: '微博热搜', icon: 'fa-fire', color: '#ff3852' },
@@ -33,7 +34,6 @@ export default function HotTrends() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  // 确定当前活跃 tab（选第一个有数据的平台）
   useEffect(() => {
     if (!loading && data) {
       const first = PLATFORM_ORDER.find(p => data[p]?.count > 0);
@@ -47,100 +47,130 @@ export default function HotTrends() {
   return (
     <div style={{ padding: 24, overflow: 'auto', flex: 1 }}>
       {/* 标题栏 */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+      <div style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 24,
+      }}>
         <div>
-          <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>
-            <i className="fas fa-chart-line" style={{ marginRight: 10, color: 'var(--accent)' }} />
+          <h2 style={{
+            fontSize: 20,
+            fontWeight: 700,
+            margin: 0,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+          }}>
+            <i className="fas fa-chart-line" style={{ color: 'var(--accent)' }} />
             实时热点
-          </h1>
-          <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '4px 0 0 0' }}>
-            来自微博/知乎/抖音/头条热搜 + B站热门视频 · 共 {totalCount} 条
+          </h2>
+          <p style={{
+            fontSize: 12,
+            color: 'var(--text-muted)',
+            margin: '4px 0 0 30px',
+          }}>
+            来自微博/知乎/抖音/头条 + B站热门 · 共 {totalCount} 条
           </p>
         </div>
-        <button
+        <Button
+          variant="primary"
+          icon="fa-sync-alt"
+          loading={loading}
           onClick={fetchData}
-          disabled={loading}
-          style={{
-            background: 'var(--accent)', color: '#000', border: 'none', borderRadius: 6,
-            padding: '7px 16px', fontSize: 12, cursor: 'pointer', fontWeight: 600,
-            opacity: loading ? 0.5 : 1, transition: 'opacity 0.2s',
-          }}
         >
-          <i className={`fas fa-sync-alt${loading ? ' fa-spin' : ''}`} style={{ marginRight: 6 }} />
           刷新
-        </button>
+        </Button>
       </div>
 
       {error && (
-        <div style={{ padding: 12, marginBottom: 16, background: 'rgba(255,56,82,0.1)', borderRadius: 6, color: '#ff3852', fontSize: 13 }}>
+        <div style={{
+          padding: 12,
+          marginBottom: 16,
+          background: 'rgba(255, 56, 82, 0.1)',
+          borderRadius: 8,
+          color: '#ff3852',
+          fontSize: 13,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+        }}>
+          <i className="fas fa-exclamation-circle" />
           {error}
         </div>
       )}
 
       {/* 平台 Tab */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
+      <Tabs>
         {PLATFORM_ORDER.map(pid => {
           const meta = PLATFORM_META[pid];
           const count = data[pid]?.count || 0;
-          const isActive = activeTab === pid;
           return (
-            <button
+            <Tab
               key={pid}
+              active={activeTab === pid}
+              icon={meta.icon}
+              count={count}
+              color={meta.color}
               onClick={() => setActiveTab(pid)}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 6,
-                padding: '8px 14px', borderRadius: 8, border: `1px solid ${isActive ? meta.color : 'var(--border)'}`,
-                background: isActive ? `${meta.color}10` : 'var(--bg-secondary)',
-                color: isActive ? meta.color : 'var(--text-secondary)',
-                fontSize: 13, cursor: 'pointer', fontWeight: isActive ? 600 : 400,
-                transition: 'var(--transition-fast)',
-                opacity: count === 0 && !isActive ? 0.4 : 1,
-              }}
+              disabled={count === 0 && activeTab !== pid}
             >
-              <i className={`fas ${meta.icon}`} />
-              <span>{meta.label}</span>
-              <span style={{
-                fontSize: 11, padding: '1px 6px', borderRadius: 10,
-                background: isActive ? `${meta.color}20` : 'var(--bg-primary)',
-                color: isActive ? meta.color : 'var(--text-secondary)',
-              }}>
-                {count}
-              </span>
-            </button>
+              {meta.label}
+            </Tab>
           );
         })}
-      </div>
+      </Tabs>
 
       {/* 榜单内容 */}
       {loading ? (
-        <div style={{ textAlign: 'center', padding: 60, color: 'var(--text-muted)' }}>
-          <i className="fas fa-spinner fa-spin" style={{ fontSize: 24 }} />
-          <p style={{ marginTop: 12 }}>加载中...</p>
-        </div>
+        <Loading text="加载热点数据..." />
       ) : (
-        <div style={{
-          background: 'var(--bg-secondary)', borderRadius: 10, border: '1px solid var(--border)',
-          overflow: 'hidden',
-        }}>
+        <Card flat style={{ padding: 0 }}>
+          {/* 列表头 */}
           <div style={{
-            padding: '10px 16px', borderBottom: '1px solid var(--border)',
-            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            padding: '12px 20px',
+            borderBottom: '1px solid var(--border)',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
           }}>
-            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
-              <i className={`fas ${PLATFORM_META[activeTab]?.icon || 'fa-list'}`} style={{ marginRight: 8, color: PLATFORM_META[activeTab]?.color }} />
-              {PLATFORM_META[activeTab]?.label} · {currentItems.length} 条
+            <span style={{
+              fontSize: 14,
+              fontWeight: 600,
+              color: 'var(--text-primary)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+            }}>
+              <i
+                className={`fas ${PLATFORM_META[activeTab]?.icon || 'fa-list'}`}
+                style={{ color: PLATFORM_META[activeTab]?.color }}
+              />
+              {PLATFORM_META[activeTab]?.label}
+            </span>
+            <span style={{
+              fontSize: 12,
+              color: 'var(--text-muted)',
+            }}>
+              {currentItems.length} 条
             </span>
           </div>
 
           {currentItems.length === 0 ? (
-            <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
-              暂无数据 · 请等待 pipeline 执行后自动填充
-            </div>
+            <EmptyState icon="fa-inbox">
+              <p>暂无数据</p>
+              <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                请等待 pipeline 执行后自动填充
+              </p>
+            </EmptyState>
           ) : (
-            <div style={{ maxHeight: 'calc(100vh - 260px)', overflow: 'auto' }}>
+            <div style={{
+              maxHeight: 'calc(100vh - 300px)',
+              overflow: 'auto',
+            }}>
               {currentItems.map((item, idx) => {
                 const meta = PLATFORM_META[activeTab];
-                const rankColor = item.rank && item.rank <= 3 ? meta.color : 'var(--text-muted)';
+                const isTop3 = item.rank && item.rank <= 3;
                 return (
                   <a
                     key={item.id || idx}
@@ -148,52 +178,83 @@ export default function HotTrends() {
                     target="_blank"
                     rel="noopener noreferrer"
                     style={{
-                      display: 'flex', alignItems: 'flex-start', gap: 12, padding: '10px 16px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 14,
+                      padding: '12px 20px',
                       borderBottom: '1px solid var(--border)',
-                      textDecoration: 'none', color: 'inherit',
-                      transition: 'background 0.15s',
+                      textDecoration: 'none',
+                      color: 'inherit',
+                      transition: 'background var(--transition-fast)',
                     }}
-                    onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
+                    onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-card-hover)')}
                     onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
                   >
                     {/* 排名 */}
                     <span style={{
-                      width: 24, height: 24, borderRadius: 6,
-                      background: item.rank && item.rank <= 3 ? `${meta.color}20` : 'var(--bg-primary)',
-                      color: rankColor, fontSize: 13, fontWeight: 700,
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      width: 28,
+                      height: 28,
+                      borderRadius: 8,
+                      background: isTop3 ? `${meta.color}20` : 'var(--bg-primary)',
+                      color: isTop3 ? meta.color : 'var(--text-muted)',
+                      fontSize: 13,
+                      fontWeight: 700,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
                       flexShrink: 0,
+                      border: isTop3 ? `1px solid ${meta.color}30` : '1px solid transparent',
                     }}>
                       {item.rank || '-'}
                     </span>
 
                     {/* 标题 */}
                     <span style={{
-                      flex: 1, fontSize: 13, color: 'var(--text-primary)',
-                      lineHeight: 1.5, overflow: 'hidden', textOverflow: 'ellipsis',
+                      flex: 1,
+                      fontSize: 13,
+                      color: 'var(--text-primary)',
+                      lineHeight: 1.5,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
                       whiteSpace: 'nowrap',
                     }}>
                       {item.title}
                     </span>
 
-                    {/* 热度 / 作者 */}
+                    {/* 热度 */}
                     {item.heat && (
                       <span style={{
-                        fontSize: 11, color: 'var(--text-muted)',
-                        whiteSpace: 'nowrap', flexShrink: 0, marginLeft: 8,
+                        fontSize: 11,
+                        color: 'var(--text-muted)',
+                        whiteSpace: 'nowrap',
+                        flexShrink: 0,
+                        marginLeft: 8,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 4,
                       }}>
+                        <i className="fas fa-fire" style={{ fontSize: 9, color: 'var(--accent-orange)' }} />
                         {Number(item.heat) > 9999
                           ? `${(Number(item.heat) / 10000).toFixed(1)}万`
                           : item.heat}
                       </span>
                     )}
+
+                    {/* 作者 */}
                     {item.author && (
                       <span style={{
-                        fontSize: 11, color: 'var(--text-muted)',
-                        whiteSpace: 'nowrap', flexShrink: 0, maxWidth: 100,
-                        overflow: 'hidden', textOverflow: 'ellipsis',
+                        fontSize: 11,
+                        color: 'var(--text-muted)',
+                        whiteSpace: 'nowrap',
+                        flexShrink: 0,
+                        maxWidth: 100,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 4,
                       }}>
-                        <i className="fas fa-user" style={{ marginRight: 4, fontSize: 9 }} />
+                        <i className="fas fa-user" style={{ fontSize: 9 }} />
                         {item.author}
                       </span>
                     )}
@@ -202,7 +263,7 @@ export default function HotTrends() {
               })}
             </div>
           )}
-        </div>
+        </Card>
       )}
     </div>
   );

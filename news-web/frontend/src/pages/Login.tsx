@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { Input, Button } from '../components/ui';
 
 export default function Login() {
   const { login, register } = useAuth();
@@ -28,74 +29,167 @@ export default function Login() {
 
   return (
     <div style={{
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      minHeight: '100vh', background: 'var(--bg-primary)',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      minHeight: '100vh',
+      background: 'var(--bg-primary)',
+      padding: 20,
     }}>
-      <form onSubmit={handleSubmit} style={{
-        background: 'var(--bg-secondary)', borderRadius: 12, padding: 32,
-        width: 360, display: 'flex', flexDirection: 'column', gap: 16,
+      <div style={{
+        width: '100%',
+        maxWidth: 380,
       }}>
-        <h2 style={{ fontSize: 18, textAlign: 'center', color: 'var(--accent)' }}>
-          {isRegister ? '注册账户' : '登录'}
-        </h2>
-        <div style={{ fontSize: 13, color: 'var(--text-secondary)', textAlign: 'center' }}>
-          新闻知识聚合中心
+        {/* Logo */}
+        <div style={{
+          textAlign: 'center',
+          marginBottom: 32,
+        }}>
+          <div style={{
+            width: 64,
+            height: 64,
+            margin: '0 auto 16px',
+            background: 'linear-gradient(135deg, rgba(0, 212, 255, 0.15), rgba(0, 255, 136, 0.1))',
+            borderRadius: 16,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            border: '1px solid rgba(0, 212, 255, 0.2)',
+          }}>
+            <i className="fas fa-newspaper" style={{
+              fontSize: 28,
+              color: 'var(--accent)',
+            }} />
+          </div>
+          <h1 style={{
+            fontSize: 22,
+            fontWeight: 700,
+            color: 'var(--text-primary)',
+            marginBottom: 8,
+          }}>
+            新闻知识聚合中心
+          </h1>
+          <p style={{
+            fontSize: 13,
+            color: 'var(--text-muted)',
+          }}>
+            {isRegister ? '创建新账户' : '登录以继续'}
+          </p>
         </div>
 
-        {error && (
-          <div style={{ background: 'rgba(229,115,115,0.15)', color: 'var(--accent-red)', padding: '8px 12px', borderRadius: 6, fontSize: 12 }}>
-            {error}
+        {/* 表单卡片 */}
+        <form onSubmit={handleSubmit} style={{
+          background: 'var(--bg-secondary)',
+          borderRadius: 16,
+          padding: 28,
+          border: '1px solid var(--border)',
+        }}>
+          {error && (
+            <div style={{
+              background: 'rgba(229, 115, 115, 0.12)',
+              color: 'var(--accent-red)',
+              padding: '10px 14px',
+              borderRadius: 8,
+              fontSize: 12,
+              marginBottom: 16,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+            }}>
+              <i className="fas fa-exclamation-circle" />
+              {error}
+            </div>
+          )}
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            {isRegister && (
+              <div>
+                <label style={{
+                  display: 'block',
+                  fontSize: 12,
+                  color: 'var(--text-secondary)',
+                  marginBottom: 6,
+                }}>
+                  显示名称（可选）
+                </label>
+                <Input
+                  placeholder="输入显示名称"
+                  value={displayName}
+                  onChange={e => setDisplayName(e.target.value)}
+                />
+              </div>
+            )}
+
+            <div>
+              <label style={{
+                display: 'block',
+                fontSize: 12,
+                color: 'var(--text-secondary)',
+                marginBottom: 6,
+              }}>
+                用户名
+              </label>
+              <Input
+                placeholder="输入用户名"
+                value={username}
+                onChange={e => setUsername(e.target.value)}
+                required
+                minLength={3}
+              />
+            </div>
+
+            <div>
+              <label style={{
+                display: 'block',
+                fontSize: 12,
+                color: 'var(--text-secondary)',
+                marginBottom: 6,
+              }}>
+                密码
+              </label>
+              <Input
+                type="password"
+                placeholder="输入密码"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                required
+                minLength={6}
+              />
+            </div>
           </div>
-        )}
 
-        {isRegister && (
-          <input
-            placeholder="显示名称（可选）"
-            value={displayName}
-            onChange={e => setDisplayName(e.target.value)}
-            style={inputStyle}
-          />
-        )}
+          <Button
+            type="submit"
+            variant="primary"
+            loading={submitting}
+            style={{ width: '100%', marginTop: 20, padding: '12px 20px' }}
+          >
+            {isRegister ? '注册' : '登录'}
+          </Button>
 
-        <input
-          placeholder="用户名"
-          value={username}
-          onChange={e => setUsername(e.target.value)}
-          required
-          minLength={3}
-          style={inputStyle}
-        />
-
-        <input
-          type="password"
-          placeholder="密码"
-          value={password}
-          onChange={e => setPassword(e.target.value)}
-          required
-          minLength={6}
-          style={inputStyle}
-        />
-
-        <button type="submit" disabled={submitting} style={{
-          background: 'var(--accent)', border: 'none', borderRadius: 6,
-          padding: '10px', color: '#000', fontWeight: 'bold', fontSize: 14,
-          cursor: 'pointer', marginTop: 4,
-        }}>
-          {submitting ? '处理中...' : isRegister ? '注册' : '登录'}
-        </button>
-
-        <button type="button" onClick={() => setIsRegister(!isRegister)} style={{
-          background: 'none', border: 'none', color: 'var(--accent)', fontSize: 12,
-          cursor: 'pointer', textAlign: 'center',
-        }}>
-          {isRegister ? '已有账户？去登录' : '没有账户？去注册'}
-        </button>
-      </form>
+          <button
+            type="button"
+            onClick={() => {
+              setIsRegister(!isRegister);
+              setError('');
+            }}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: 'var(--accent)',
+              fontSize: 12,
+              cursor: 'pointer',
+              textAlign: 'center',
+              width: '100%',
+              marginTop: 16,
+              padding: 8,
+              transition: 'color var(--transition-fast)',
+            }}
+          >
+            {isRegister ? '已有账户？去登录' : '没有账户？去注册'}
+          </button>
+        </form>
+      </div>
     </div>
   );
 }
-
-const inputStyle: React.CSSProperties = {
-  background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 6,
-  padding: '10px 12px', color: 'var(--text-primary)', fontSize: 14, outline: 'none', width: '100%',
-};
