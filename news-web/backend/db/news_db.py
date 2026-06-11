@@ -1185,6 +1185,233 @@ class NewsDB:
                 result[pid] = {'count': len(items), 'items': items, 'date': date}
             return result
 
+    # ═══════════════════════════════════════════════════════
+    # 抓取日志 (fetch_logs)
+    # ═══════════════════════════════════════════════════════
+
+    def log_fetch(self, source_name: str, source_type: str,
+                  articles_fetched: int = 0, articles_new: int = 0,
+                  status: str = 'ok', error_msg: str = '',
+                  duration_ms: int = 0, run_type: str = 'scheduled') -> int:
+        """写入一条抓取日志，返回 log id。"""
+        now = datetime.now().isoformat(timespec='seconds')
+        with self._conn() as conn:
+            cur = conn.execute("""
+                INSERT INTO fetch_logs
+                    (source_name, source_type, articles_fetched, articles_new,
+                     status, error_msg, duration_ms, started_at, finished_at, run_type)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (source_name, source_type, articles_fetched, articles_new,
+                  status, error_msg, duration_ms, now, now, run_type))
+            conn.commit()
+        return cur.lastrowid
+
+    def get_fetch_overview(self) -> dict:
+        """总览统计 — 按源类型汇总最新状态 + 缓存覆盖。"""
+        today = datetime.now().strftime('%Y-%m-%d')
+        with self._conn() as conn:
+            # RSS 统计
+            rss_stats = conn.execute("""
+                SELECT
+                    COUNT(DISTINCT source_name) as total,
+                    COUNT(DISTINCT CASE WHEN status='ok' THEN source_name END) as ok_sources,
+                    MAX(started_at) as last_run,
+                    SUM(CASE WHEN date(started_at)=? THEN articles_new ELSE 0 END) as today_new
+                FROM fetch_logs WHERE source_type='rss'
+            """, (today,)).fetchone()
+            rss_health = self._compute_source_health(conn, 'rss')
+
+            # 平台热榜统计
+            hl_stats = conn.execute("""
+                SELECT
+                    COUNT(DISTINCT source_name) as total,
+                    MAX(started_at) as last_run,
+                    SUM(CASE WHEN date(started_at)=? THEN articles_new ELSE 0 END) as today_new
+                FROM fetch_logs WHERE source_type='hotlist'
+            """, (today,)).fetchone()
+            hl_health = self._compute_source_health(conn, 'hotlist')
+
+            # 缓存统计
+            total = conn.execute("SELECT COUNT(*) FROM articles").fetchone()[0]
+            cached = conn.execute(
+                "SELECT COUNT(*) FROM articles WHERE local_path != '' AND local_path NOT LIKE '[ERR:%'"
+            ).fetchone()[0]
+            failed = conn.execute(
+                "SELECT COUNT(*) FROM articles WHERE local_path LIKE '[ERR:%'"
+            ).fetchone()[0]
+            pending = total - cached - failed
+            cached_pct = round(cached / total * 100, 1) if total > 0 else 0.0
+
+        return {
+            'rss': {
+                'total_sources': rss_stats[0] or 0,
+                'healthy': rss_health.get('healthy', 0),
+                'degraded': rss_health.get('degraded', 0),
+                'failing': rss_health.get('failing', 0),
+                'last_run': rss_stats[2],
+                'articles_today': rss_stats[3] or 0,
+            },
+            'hotlist': {
+                'total_sources': hl_stats[0] or 0,
+                'healthy': hl_health.get('healthy', 0),
+                'degraded': hl_health.get('degraded', 0),
+                'failing': hl_health.get('failing', 0),
+                'last_run': hl_stats[1],
+                'articles_today': hl_stats[2] or 0,
+            },
+            'cache': {
+                'total_articles': total,
+                'cached': cached,
+                'pending': pending,
+                'failed': failed,
+                'cached_pct': cached_pct,
+            },
+        }
+
+    def _compute_source_health(self, conn: sqlite3.Connection,
+                               source_type: str) -> dict:
+        """按源类型计算健康度统计。"""
+        sources = conn.execute("""
+            SELECT source_name FROM fetch_logs
+            WHERE source_type=?
+            GROUP BY source_name
+        """, (source_type,)).fetchall()
+        healthy = degraded = failing = 0
+        for (name,) in sources:
+            recent = conn.execute("""
+                SELECT status FROM fetch_logs
+                WHERE source_name=? AND source_type=?
+                ORDER BY started_at DESC LIMIT 5
+            """, (name, source_type)).fetchall()
+            if not recent:
+                healthy += 1
+                continue
+            ok_count = sum(1 for (s,) in recent if s == 'ok')
+            success_rate = ok_count / len(recent)
+            consecutive_fails = 0
+            for (s,) in recent:
+                if s == 'failed':
+                    consecutive_fails += 1
+                else:
+                    break
+            if success_rate == 1.0:
+                healthy += 1
+            elif success_rate >= 0.6 and consecutive_fails < 3:
+                degraded += 1
+            else:
+                failing += 1
+        return {'healthy': healthy, 'degraded': degraded, 'failing': failing}
+
+    def get_fetch_sources(self, source_type: str = '') -> list:
+        """返回所有源的详情列表（含健康状态、缓存覆盖率）。"""
+        with self._conn() as conn:
+            where = "WHERE 1=1"
+            params = []
+            if source_type:
+                cat_map = {'rss': 'rss_news', 'hotlist': 'platform_hotlists', 'bilibili': 'bilibili_videos'}
+                if source_type in cat_map:
+                    where = "WHERE category=?"
+                    params = [cat_map[source_type]]
+            sources = conn.execute(f"""
+                SELECT DISTINCT source, category FROM articles {where}
+                ORDER BY source
+            """, params).fetchall()
+            result = []
+            for src_name, category in sources:
+                if category == 'rss_news':
+                    stype = 'rss'
+                elif category == 'bilibili_videos':
+                    stype = 'bilibili'
+                else:
+                    stype = 'hotlist'
+                recent_logs = conn.execute("""
+                    SELECT status, articles_fetched, articles_new, started_at, error_msg
+                    FROM fetch_logs WHERE source_name=?
+                    ORDER BY started_at DESC LIMIT 5
+                """, (src_name,)).fetchall()
+                ok_count = sum(1 for r in recent_logs if r[0] == 'ok')
+                success_rate = round(ok_count / len(recent_logs), 2) if recent_logs else 1.0
+                consecutive_fails = 0
+                for r in recent_logs:
+                    if r[0] == 'failed': consecutive_fails += 1
+                    else: break
+                if not recent_logs:
+                    health = 'healthy'
+                elif success_rate == 1.0:
+                    health = 'healthy'
+                elif success_rate >= 0.6 and consecutive_fails < 3:
+                    health = 'degraded'
+                else:
+                    health = 'failing'
+                total = conn.execute(
+                    "SELECT COUNT(*) FROM articles WHERE source=?", (src_name,)
+                ).fetchone()[0]
+                cached = conn.execute(
+                    "SELECT COUNT(*) FROM articles WHERE source=? AND local_path!='' AND local_path NOT LIKE '[ERR:%'",
+                    (src_name,)
+                ).fetchone()[0]
+                failed = conn.execute(
+                    "SELECT COUNT(*) FROM articles WHERE source=? AND local_path LIKE '[ERR:%'",
+                    (src_name,)
+                ).fetchone()[0]
+                result.append({
+                    'name': src_name,
+                    'type': stype,
+                    'health': health,
+                    'last_fetch': recent_logs[0][3] if recent_logs else None,
+                    'last_status': recent_logs[0][0] if recent_logs else 'unknown',
+                    'last_error': recent_logs[0][4] if recent_logs and recent_logs[0][4] else '',
+                    'total_articles': total,
+                    'cached_articles': cached,
+                    'failed_articles': failed,
+                    'success_rate_5': success_rate,
+                })
+        return result
+
+    def get_fetch_source_history(self, source_name: str, days: int = 7) -> list:
+        """获取单源抓取历史。"""
+        from datetime import timedelta
+        cutoff = (datetime.now() - timedelta(days=days)).isoformat(timespec='seconds')
+        with self._conn() as conn:
+            rows = conn.execute("""
+                SELECT id, source_name, source_type, articles_fetched, articles_new,
+                       status, error_msg, duration_ms, started_at, finished_at, run_type
+                FROM fetch_logs
+                WHERE source_name=? AND started_at >= ?
+                ORDER BY started_at DESC
+                LIMIT 50
+            """, (source_name, cutoff)).fetchall()
+        return [
+            {
+                'id': r[0], 'source_name': r[1], 'source_type': r[2],
+                'articles_fetched': r[3], 'articles_new': r[4],
+                'status': r[5], 'error_msg': r[6] or '',
+                'duration_ms': r[7], 'started_at': r[8], 'finished_at': r[9],
+                'run_type': r[10],
+            }
+            for r in rows
+        ]
+
+    def get_fetch_recent_logs(self, limit: int = 50) -> list:
+        """获取全量最近抓取日志（供前端日志面板）。"""
+        with self._conn() as conn:
+            rows = conn.execute("""
+                SELECT source_name, source_type, articles_fetched, articles_new,
+                       status, error_msg, duration_ms, started_at, run_type
+                FROM fetch_logs
+                ORDER BY started_at DESC
+                LIMIT ?
+            """, (limit,)).fetchall()
+        return [
+            {
+                'source_name': r[0], 'source_type': r[1],
+                'articles_fetched': r[2], 'articles_new': r[3],
+                'status': r[4], 'error_msg': r[5] or '',
+                'duration_ms': r[6], 'started_at': r[7], 'run_type': r[8],
+            }
+            for r in rows
+        ]
+
 
 # ══════════════════════════════════════════════════════════════
 # CLI 自测
