@@ -110,3 +110,93 @@ def test_settings(client):
     resp = client.put("/api/settings", json={"user_agent": "test-agent"})
     assert resp.status_code == 200
     assert resp.json()["user_agent"] == "test-agent"
+
+
+# ══════════════════════════════════════════════════════════════
+# 数据采集监控 API 测试 (api/fetch.py)
+# ══════════════════════════════════════════════════════════════
+
+def test_fetch_overview(client, news_db):
+    """overview 返回正确四级统计结构 + 缓存维度"""
+    news_db.log_fetch('Guru3D', 'rss', 10, 3, 'ok', '', 1200, 'scheduled')
+    resp = client.get("/api/fetch/overview")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "rss" in data
+    assert "hotlist" in data
+    assert "cache" in data
+    assert isinstance(data["rss"]["healthy"], int)
+    assert isinstance(data["cache"]["cached_pct"], float)
+    assert data["rss"]["articles_today"] >= 0
+
+
+def test_fetch_sources(client, news_db):
+    """sources 列表返回所有源及健康状态"""
+    resp = client.get("/api/fetch/sources")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "sources" in data
+    assert isinstance(data["sources"], list)
+    assert len(data["sources"]) >= 1
+    src = data["sources"][0]
+    assert "name" in src
+    assert "type" in src
+    assert "health" in src
+    assert src["health"] in ("healthy", "degraded", "failing")
+
+
+def test_fetch_source_history(client, news_db):
+    """单源历史按 days 参数正确筛选"""
+    news_db.log_fetch('Guru3D', 'rss', 5, 2, 'ok', '', 1000, 'scheduled')
+    news_db.log_fetch('Guru3D', 'rss', 3, 0, 'failed', 'Timeout', 8000, 'scheduled')
+    resp = client.get("/api/fetch/sources/Guru3D/history?days=7")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["source"] == "Guru3D"
+    assert len(data["history"]) >= 2
+
+
+def test_fetch_source_retry_unknown(client, news_db):
+    """重试不存在的源应返回错误"""
+    resp = client.post("/api/fetch/sources/NonExistentSource/retry")
+    assert resp.status_code in (404, 200)
+    if resp.status_code == 200:
+        assert resp.json().get("ok") is False
+
+
+def test_fetch_source_articles(client, news_db):
+    """源文章列表筛选 + 分页正确"""
+    resp = client.get("/api/fetch/sources/Guru3D/articles?page=1&limit=10")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "articles" in data
+    assert data["source"] == "Guru3D"
+    assert data["total"] >= 1
+    assert len(data["articles"]) >= 1
+    art = data["articles"][0]
+    assert "content_status" in art
+
+
+def test_fetch_retry_article_cache(client, news_db):
+    """单篇缓存重试返回 ok"""
+    resp = client.post("/api/fetch/articles/1/retry-cache")
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+
+
+def test_fetch_batch_retry_limit(client, news_db):
+    """批量重试超过 50 篇应返回错误"""
+    resp = client.post("/api/fetch/articles/batch-retry", json={"ids": list(range(1, 60))})
+    assert resp.status_code == 400
+    data = resp.json()
+    assert "detail" in data or "error" in data
+
+
+def test_fetch_failed_articles(client, news_db):
+    """失败文章列表分页正确"""
+    resp = client.get("/api/fetch/articles/failed?page=1&limit=20")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "articles" in data
+    assert "total" in data
+    assert "page" in data
