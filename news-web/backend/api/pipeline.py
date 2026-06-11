@@ -7,6 +7,7 @@ from datetime import datetime
 from fastapi import APIRouter
 
 from config import config
+from utils.text import FULL_TEXT_MAX_LENGTH
 
 router = APIRouter(prefix="/api/pipeline", tags=["pipeline"])
 logger = logging.getLogger(__name__)
@@ -94,7 +95,7 @@ def _batch_translate():
                 continue
 
             # 从 HTML 提取纯文本
-            text = extract_text_from_html(html, max_length=6000)
+            text = extract_text_from_html(html, max_length=FULL_TEXT_MAX_LENGTH)
             if len(text) < 50:
                 _log(_translate_state, f"#{aid} ⚠️ 提取文本过短 ({len(text)} 字)")
                 _translate_state["failed"] += 1
@@ -182,7 +183,7 @@ def _batch_analyze():
 
         for idx, (aid, title, text) in enumerate(rows, 1):
             _analyze_state["current"] = f"#{aid} {title[:50]}"
-            _log(_analyze_state, f"#{aid} 📡 发送分析请求... ({len(text)//1024}KB 正文)")
+            _log(_analyze_state, f"#{aid} 📡 发送分析请求... ({len(text)} 字，{len(text)/1024:.1f}KB 正文)")
 
             try:
                 analysis = ai_analyze(title, text)
@@ -486,7 +487,7 @@ def _batch_ai_keywords():
         for idx, (aid, title, text, source) in enumerate(rows, 1):
             _kw_state["current"] = f"#{aid} {title[:50]}"
             if _hp_check(aid): _log(_kw_state, f"#{aid} ⏭️ 人工已处理"); _kw_state["done"] += 1; continue
-            kws = extract_keywords_ai(title, text[:6000], source or "")
+            kws = extract_keywords_ai(title, text, source or "")
             if kws:
                 db2 = _conn()
                 db2.execute("UPDATE articles SET keywords=?, ai_keywords=? WHERE id=?", (_json.dumps(kws, ensure_ascii=False), _json.dumps(kws, ensure_ascii=False), aid))
@@ -514,7 +515,7 @@ def _batch_ai_classify():
         for idx, (aid, title, text) in enumerate(rows, 1):
             _cls_state["current"] = f"#{aid} {title[:50]}"
             if _hp_check(aid): _log(_cls_state, f"#{aid} ⏭️ 人工已处理"); _cls_state["done"] += 1; continue
-            r = classify_article_ai(title, text[:6000])
+            r = classify_article_ai(title, text)
             if r:
                 db2 = _conn()
                 db2.execute("UPDATE articles SET ai_category=?, ai_tags=? WHERE id=?", (r.get("category",""), _json.dumps(r.get("tags",[]), ensure_ascii=False), aid))
@@ -546,7 +547,7 @@ def _batch_ai_score():
                 days = max(0, (_dt.now() - _dt.fromisoformat(fetched_at)).days) if fetched_at else 0
             except Exception:
                 days = 0
-            r = score_priority_ai(title, text[:6000], source or "Unknown", days)
+            r = score_priority_ai(title, text, source or "Unknown", days)
             if r:
                 db2 = _conn()
                 db2.execute("UPDATE articles SET priority_score=?, priority_label=?, ai_priority_score=? WHERE id=?", (r["score"], r.get("label","medium"), r["score"], aid))

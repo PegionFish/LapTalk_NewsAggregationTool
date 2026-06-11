@@ -4,8 +4,11 @@
 import re
 import html as html_mod
 
+# DeepSeek V3.2 160K 上下文下，正文提取默认保留更完整内容；极端页面仍保留上限防止异常请求。
+FULL_TEXT_MAX_LENGTH = 120000
 
-def extract_text_from_html(html: str, max_length: int = 50000) -> str:
+
+def extract_text_from_html(html: str, max_length: int = FULL_TEXT_MAX_LENGTH) -> str:
     """从 HTML 中提取纯文本 — 去除脚本、样式、导航等噪音块。"""
     if not html:
         return ""

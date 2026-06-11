@@ -23,7 +23,7 @@ PARENT_DIR = os.path.dirname(SCRIPT_DIR)
 sys.path.insert(0, PARENT_DIR)
 
 from config import config
-from utils.text import extract_text_from_html, detect_language
+from utils.text import FULL_TEXT_MAX_LENGTH, extract_text_from_html, detect_language
 
 # ── 境外代理 — 如已配置代理则启用 ──────────────────────
 try:
@@ -202,7 +202,7 @@ def archive_pages(db_path: str, limit: int = 0, source: str = None, recent: int 
                 f.write(html)
             size = len(html.encode('utf-8'))
             # 提取纯文本 + 语言检测
-            text = extract_text_from_html(html)
+            text = extract_text_from_html(html, max_length=FULL_TEXT_MAX_LENGTH)
             lang = detect_language(text)
             now = datetime.now().isoformat(timespec='seconds')
             rel_path = f'{os.path.basename(content_dir)}/{aid}.html'

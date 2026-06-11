@@ -1,5 +1,6 @@
 import pytest, json, os
 from fastapi.testclient import TestClient
+from types import SimpleNamespace
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../backend'))
 
@@ -8,6 +9,8 @@ os.environ['NEWS_WEB_TESTING'] = '1'
 
 from main import app
 from config import config
+from utils.text import extract_text_from_html
+from ai_client import analyze_article, extract_keywords_ai
 
 @pytest.fixture
 def client(test_db_path):
@@ -112,6 +115,59 @@ def test_settings(client):
     resp = client.put("/api/settings", json={"user_agent": "test-agent"})
     assert resp.status_code == 200
     assert resp.json()["user_agent"] == "test-agent"
+
+
+def test_extract_text_keeps_full_text_for_deepseek_context():
+    """正文提取应保留 DeepSeek 160K 上下文所需的长正文。"""
+    body = " ".join(["word"] * 15000)
+    html = f"<html><body><article>{body}</article></body></html>"
+
+    text = extract_text_from_html(html)
+
+    assert len(text) > 50000
+    assert text.endswith("word word")
+
+
+def test_analyze_article_sends_full_text(monkeypatch):
+    """单篇分析应把完整正文放入分析请求，而不是只截取前 8000 字。"""
+    captured = {}
+    text = "A" * 9000
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            captured["messages"] = kwargs["messages"]
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="分析完成"))])
+
+    class FakeClient:
+        chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setattr("ai_client.get_client", lambda: FakeClient())
+
+    result = analyze_article("测试标题", text)
+
+    assert result == "分析完成"
+    assert "正文：" in captured["messages"][1]["content"]
+    assert len(captured["messages"][1]["content"]) > 9000
+
+
+def test_extract_keywords_ai_sends_full_text(monkeypatch):
+    """关键词提取应把完整正文放入关键词请求，而不是只截取前 6000 字。"""
+    captured = {}
+    text = "B" * 7000
+
+    def fake_ai_json(prompt, system_prompt, max_tokens=1024):
+        captured["prompt"] = prompt
+        captured["system_prompt"] = system_prompt
+        captured["max_tokens"] = max_tokens
+        return ["GPU"]
+
+    monkeypatch.setattr("ai_client._ai_json", fake_ai_json)
+
+    result = extract_keywords_ai("测试标题", text, "Guru3D")
+
+    assert result == ["GPU"]
+    assert "正文：" in captured["prompt"]
+    assert len(captured["prompt"]) > 7000
 
 
 # ══════════════════════════════════════════════════════════════

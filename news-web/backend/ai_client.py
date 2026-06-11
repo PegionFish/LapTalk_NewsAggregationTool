@@ -4,6 +4,7 @@ Supports OpenAI, DeepSeek, Ollama, or any compatible endpoint.
 """
 from openai import OpenAI
 from config import config
+from utils.text import FULL_TEXT_MAX_LENGTH
 
 
 def get_client() -> OpenAI:
@@ -12,6 +13,11 @@ def get_client() -> OpenAI:
         api_key=config.openai_api_key or 'sk-placeholder',
         timeout=30.0,  # 30 秒超时，防止请求挂起
     )
+
+
+def _full_text_snippet(text: str, max_length: int = FULL_TEXT_MAX_LENGTH) -> str:
+    """保留完整正文；仅在极端长文本时做安全上限截断。"""
+    return text if len(text) <= max_length else text[:max_length]
 
 
 def chat(prompt: str, system_prompt: str = "You are a helpful assistant.", max_tokens: int = 4096) -> str:
@@ -63,8 +69,8 @@ def build_chain_title(events_text: str) -> str:
 
 
 def analyze_article(title: str, text: str) -> str:
-    """对单篇科技新闻文章生成中文分析摘要。使用更多上下文提升分析深度。"""
-    snippet = text[:8000]  # 利用 DeepSeek 160K 上下文，提供更完整正文
+    """对单篇科技新闻文章生成中文分析摘要。优先使用完整正文提升分析深度。"""
+    snippet = _full_text_snippet(text)
     return chat(
         f"请深入分析以下科技新闻，输出结构化摘要（300 字以内）：\n\n"
         f"标题：{title}\n"
@@ -115,7 +121,7 @@ def _ai_json(prompt: str, system_prompt: str, max_tokens: int = 1024) -> dict | 
 
 def extract_keywords_ai(title: str, text: str, source: str = "") -> list[str]:
     """AI 从标题+正文中提取技术关键词。返回关键词列表，失败返回 None。"""
-    snippet = text[:6000]  # 利用 160K 上下文，更充分的正文
+    snippet = _full_text_snippet(text)
     result = _ai_json(
         f"标题：{title}\n来源：{source}\n正文：{snippet}\n\n"
         f"提取 5-15 个技术关键词，返回 JSON 数组。关键词应覆盖：产品名、公司名、技术名、核心概念。",
@@ -130,7 +136,7 @@ def extract_keywords_ai(title: str, text: str, source: str = "") -> list[str]:
 
 def classify_article_ai(title: str, text: str) -> dict | None:
     """AI 分类文章主题。返回 {category, tags, score}，失败返回 None。"""
-    snippet = text[:6000]  # 更多正文提供更好分类依据
+    snippet = _full_text_snippet(text)
     result = _ai_json(
         f"标题：{title}\n正文：{snippet}\n\n请输出 JSON："
         f'{{"category":"细分领域（AI/LLM, PC/Hardware, Mobile, Gaming, Security, Semiconductors, Enterprise, Automotive, Space, Chip/Wafer, OpenSource, Regulation, Other）",'
@@ -146,7 +152,7 @@ def classify_article_ai(title: str, text: str) -> dict | None:
 
 def score_priority_ai(title: str, text: str, source: str, days_old: int = 0) -> dict | None:
     """AI 评估文章优先级。返回 {score, label, reason}。"""
-    snippet = text[:6000]
+    snippet = _full_text_snippet(text)
     result = _ai_json(
         f"标题：{title}\n来源：{source}\n发布天数：{days_old}\n正文：{snippet}\n\n"
         f"请输出 JSON：{{"
