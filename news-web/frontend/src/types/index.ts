@@ -128,3 +128,88 @@ export interface HotlistsSummary {
   platforms: Record<string, number>;
   total: number;
 }
+
+// ── 数据采集监控 ──────────────────────────────────────
+
+export interface FetchOverview {
+  rss: {
+    total_sources: number;
+    healthy: number;
+    degraded: number;
+    failing: number;
+    last_run: string | null;
+    articles_today: number;
+  };
+  hotlist: {
+    total_sources: number;
+    healthy: number;
+    degraded: number;
+    failing: number;
+    last_run: string | null;
+    articles_today: number;
+  };
+  cache: {
+    total_articles: number;
+    cached: number;
+    pending: number;
+    failed: number;
+    cached_pct: number;
+  };
+}
+
+export interface FetchSource {
+  name: string;
+  type: 'rss' | 'hotlist' | 'bilibili';
+  health: 'healthy' | 'degraded' | 'failing';
+  last_fetch: string | null;
+  last_status: string;
+  last_error: string;
+  total_articles: number;
+  cached_articles: number;
+  failed_articles: number;
+  success_rate_5: number;
+}
+
+export interface FetchLog {
+  id?: number;
+  source_name: string;
+  source_type: string;
+  articles_fetched: number;
+  articles_new: number;
+  status: string;
+  error_msg: string;
+  duration_ms: number;
+  started_at: string;
+  finished_at?: string;
+  run_type: string;
+}
+
+export interface FetchArticleItem {
+  id: number;
+  title: string;
+  url: string;
+  source: string;
+  content_status: string;
+  local_path: string;
+  content_fetched_at: string | null;
+  content_lang: string;
+  has_translation: boolean;
+}
+
+export interface FailedArticle {
+  id: number;
+  title: string;
+  url: string;
+  source: string;
+  error: string;
+  content_fetched_at: string | null;
+}
+
+export interface BatchRetryState {
+  running: boolean;
+  total: number;
+  done: number;
+  failed: number;
+  current: string;
+  log: string[];
+}
