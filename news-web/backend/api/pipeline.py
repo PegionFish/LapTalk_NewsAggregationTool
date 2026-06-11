@@ -24,6 +24,26 @@ def _log(state, msg: str):
     if len(state["log"]) > LOG_MAX:
         state["log"] = state["log"][-LOG_MAX:]
 
+
+def _is_request_timeout_error(exc: Exception) -> bool:
+    """识别 OpenAI 兼容客户端抛出的请求超时异常。"""
+    return "request timed out" in str(exc).lower()
+
+
+def _queue_timeout_retry(
+    state: dict,
+    item_id: int,
+    retry_counts: dict[int, int],
+    max_retries: int = 1,
+) -> bool:
+    """判断当前超时任务是否仍可进入队尾重试；每轮最多重试一次。"""
+    count = retry_counts.get(item_id, 0) + 1
+    retry_counts[item_id] = count
+    if count <= max_retries:
+        _log(state, f"#{item_id} ⏳ Request Timed Out，已排到队列末尾重试 ({count}/{max_retries + 1})")
+        return True
+    return False
+
 # 模块级状态初始化
 _translate_state = _new_state()
 _analyze_state  = _new_state()
@@ -68,6 +88,9 @@ def _batch_translate():
 
         from utils.text import extract_text_from_html, detect_language
         from translation_client import translate_to_chinese
+
+        retry_counts: dict[int, int] = {}
+        retry_queue: list[tuple[int, str, str]] = []
 
         for idx, (aid, title, local_path) in enumerate(rows, 1):
             html_path = os.path.join(cache_dir, os.path.basename(local_path))
@@ -135,6 +158,11 @@ def _batch_translate():
                     _translate_state["done"] += 1
                     continue
             except Exception as e:
+                if _is_request_timeout_error(e) and _queue_timeout_retry(
+                    _translate_state, aid, retry_counts
+                ):
+                    retry_queue.append((aid, title, text))
+                    continue
                 _log(_translate_state, f"#{aid} ❌ API 调用失败: {str(e)[:80]}")
                 _translate_state["failed"] += 1
                 _translate_state["done"] += 1
@@ -144,6 +172,35 @@ def _batch_translate():
 
             if idx < len(rows):
                 time.sleep(3)  # 篇间延迟（文本翻译更快，减至 3 秒）
+
+        for aid, title, text in retry_queue:
+            _translate_state["current"] = f"#{aid} {title[:50]}"
+            _log(_translate_state, f"#{aid} 🔄 重试翻译请求...")
+            try:
+                translation = translate_to_chinese(text)
+                if translation and len(translation) > 20:
+                    db2 = _conn()
+                    db2.execute(
+                        "UPDATE articles SET text_content=?, translated_content=?, content_status='translated', content_lang='en', translated_at=? WHERE id=?",
+                        (text, translation, datetime.now().isoformat(timespec='seconds'), aid)
+                    )
+                    db2.commit()
+                    db2.close()
+                    _log(_translate_state, f"#{aid} ✅ 翻译完成 ({len(translation)} 字)")
+                else:
+                    _log(_translate_state, f"#{aid} ⚠️ API 返回空结果")
+                    _translate_state["failed"] += 1
+                    _translate_state["done"] += 1
+                    continue
+            except Exception as e:
+                if _is_request_timeout_error(e):
+                    _log(_translate_state, f"#{aid} ❌ API 调用失败: Request Timed Out（重试后仍超时）")
+                else:
+                    _log(_translate_state, f"#{aid} ❌ API 调用失败: {str(e)[:80]}")
+                _translate_state["failed"] += 1
+                _translate_state["done"] += 1
+                continue
+            _translate_state["done"] += 1
 
     except Exception as e:
         logger.error(f"Batch translate error: {e}")
@@ -180,6 +237,9 @@ def _batch_analyze():
 
         from ai_client import analyze_article as ai_analyze
 
+        retry_counts: dict[int, int] = {}
+        retry_queue: list[tuple[int, str, str]] = []
+
         for idx, (aid, title, text) in enumerate(rows, 1):
             _analyze_state["current"] = f"#{aid} {title[:50]}"
             _log(_analyze_state, f"#{aid} 📡 发送分析请求... ({len(text)} 字，{len(text)/1024:.1f}KB 正文)")
@@ -201,6 +261,11 @@ def _batch_analyze():
                     _analyze_state["done"] += 1
                     continue
             except Exception as e:
+                if _is_request_timeout_error(e) and _queue_timeout_retry(
+                    _analyze_state, aid, retry_counts
+                ):
+                    retry_queue.append((aid, title, text))
+                    continue
                 _log(_analyze_state, f"#{aid} ❌ API 调用失败: {str(e)[:80]}")
                 _analyze_state["failed"] += 1
                 _analyze_state["done"] += 1
@@ -210,6 +275,35 @@ def _batch_analyze():
 
             if idx < len(rows):
                 time.sleep(1)  # 篇间短暂延迟
+
+        for aid, title, text in retry_queue:
+            _analyze_state["current"] = f"#{aid} {title[:50]}"
+            _log(_analyze_state, f"#{aid} 🔄 重试分析请求...")
+            try:
+                analysis = ai_analyze(title, text)
+                if analysis:
+                    db2 = _conn()
+                    db2.execute(
+                        "UPDATE articles SET ai_summary=?, ai_analyzed=1 WHERE id=?",
+                        (analysis, aid)
+                    )
+                    db2.commit()
+                    db2.close()
+                    _log(_analyze_state, f"#{aid} ✅ 分析完成 ({len(analysis)} 字)")
+                else:
+                    _log(_analyze_state, f"#{aid} ⚠️ AI 返回空结果")
+                    _analyze_state["failed"] += 1
+                    _analyze_state["done"] += 1
+                    continue
+            except Exception as e:
+                if _is_request_timeout_error(e):
+                    _log(_analyze_state, f"#{aid} ❌ API 调用失败: Request Timed Out（重试后仍超时）")
+                else:
+                    _log(_analyze_state, f"#{aid} ❌ API 调用失败: {str(e)[:80]}")
+                _analyze_state["failed"] += 1
+                _analyze_state["done"] += 1
+                continue
+            _analyze_state["done"] += 1
 
     except Exception as e:
         logger.error(f"Batch analyze error: {e}")
@@ -483,10 +577,22 @@ def _batch_ai_keywords():
         _log(_kw_state, f"待提取关键词 {len(rows)} 篇")
         from ai_client import extract_keywords_ai
         import json as _json
+
+        retry_counts: dict[int, int] = {}
+        retry_queue: list[tuple[int, str, str, str]] = []
+
         for idx, (aid, title, text, source) in enumerate(rows, 1):
             _kw_state["current"] = f"#{aid} {title[:50]}"
             if _hp_check(aid): _log(_kw_state, f"#{aid} ⏭️ 人工已处理"); _kw_state["done"] += 1; continue
-            kws = extract_keywords_ai(title, text, source or "")
+            try:
+                kws = extract_keywords_ai(title, text, source or "")
+            except Exception as e:
+                if _is_request_timeout_error(e) and _queue_timeout_retry(_kw_state, aid, retry_counts):
+                    retry_queue.append((aid, title, text, source or ""))
+                    continue
+                _log(_kw_state, f"#{aid} ❌ API 调用失败: {str(e)[:80]}")
+                _kw_state["failed"] += 1; _kw_state["done"] += 1
+                continue
             if kws:
                 db2 = _conn()
                 db2.execute("UPDATE articles SET keywords=?, ai_keywords=? WHERE id=?", (_json.dumps(kws, ensure_ascii=False), _json.dumps(kws, ensure_ascii=False), aid))
@@ -496,6 +602,26 @@ def _batch_ai_keywords():
                 _log(_kw_state, f"#{aid} ⚠️ AI 返回空"); _kw_state["failed"] += 1
             _kw_state["done"] += 1
             time.sleep(0.8) if idx < len(rows) else None
+
+        for aid, title, text, source in retry_queue:
+            _kw_state["current"] = f"#{aid} {title[:50]}"
+            _log(_kw_state, f"#{aid} 🔄 重试关键词提取...")
+            try:
+                kws = extract_keywords_ai(title, text, source)
+                if kws:
+                    db2 = _conn()
+                    db2.execute("UPDATE articles SET keywords=?, ai_keywords=? WHERE id=?", (_json.dumps(kws, ensure_ascii=False), _json.dumps(kws, ensure_ascii=False), aid))
+                    db2.commit(); db2.close()
+                    _log(_kw_state, f"#{aid} ✅ {len(kws)} 个关键词: {', '.join(kws[:5])}")
+                else:
+                    _log(_kw_state, f"#{aid} ⚠️ AI 返回空"); _kw_state["failed"] += 1
+            except Exception as e:
+                if _is_request_timeout_error(e):
+                    _log(_kw_state, f"#{aid} ❌ API 调用失败: Request Timed Out（重试后仍超时）")
+                else:
+                    _log(_kw_state, f"#{aid} ❌ API 调用失败: {str(e)[:80]}")
+                _kw_state["failed"] += 1
+            _kw_state["done"] += 1
     except Exception as e: logger.error(f"batch-keywords: {e}")
     finally: _kw_state["running"] = False
 
@@ -511,10 +637,22 @@ def _batch_ai_classify():
         _log(_cls_state, f"待分类 {len(rows)} 篇")
         from ai_client import classify_article_ai
         import json as _json
+
+        retry_counts: dict[int, int] = {}
+        retry_queue: list[tuple[int, str, str]] = []
+
         for idx, (aid, title, text) in enumerate(rows, 1):
             _cls_state["current"] = f"#{aid} {title[:50]}"
             if _hp_check(aid): _log(_cls_state, f"#{aid} ⏭️ 人工已处理"); _cls_state["done"] += 1; continue
-            r = classify_article_ai(title, text)
+            try:
+                r = classify_article_ai(title, text)
+            except Exception as e:
+                if _is_request_timeout_error(e) and _queue_timeout_retry(_cls_state, aid, retry_counts):
+                    retry_queue.append((aid, title, text))
+                    continue
+                _log(_cls_state, f"#{aid} ❌ API 调用失败: {str(e)[:80]}")
+                _cls_state["failed"] += 1; _cls_state["done"] += 1
+                continue
             if r:
                 db2 = _conn()
                 db2.execute("UPDATE articles SET ai_category=?, ai_tags=? WHERE id=?", (r.get("category",""), _json.dumps(r.get("tags",[]), ensure_ascii=False), aid))
@@ -524,6 +662,26 @@ def _batch_ai_classify():
                 _log(_cls_state, f"#{aid} ⚠️ AI 返回空"); _cls_state["failed"] += 1
             _cls_state["done"] += 1
             time.sleep(0.8) if idx < len(rows) else None
+
+        for aid, title, text in retry_queue:
+            _cls_state["current"] = f"#{aid} {title[:50]}"
+            _log(_cls_state, f"#{aid} 🔄 重试分类...")
+            try:
+                r = classify_article_ai(title, text)
+                if r:
+                    db2 = _conn()
+                    db2.execute("UPDATE articles SET ai_category=?, ai_tags=? WHERE id=?", (r.get("category",""), _json.dumps(r.get("tags",[]), ensure_ascii=False), aid))
+                    db2.commit(); db2.close()
+                    _log(_cls_state, f"#{aid} ✅ {r.get('category','?')} — {', '.join(r.get('tags',[])[:3])}")
+                else:
+                    _log(_cls_state, f"#{aid} ⚠️ AI 返回空"); _cls_state["failed"] += 1
+            except Exception as e:
+                if _is_request_timeout_error(e):
+                    _log(_cls_state, f"#{aid} ❌ API 调用失败: Request Timed Out（重试后仍超时）")
+                else:
+                    _log(_cls_state, f"#{aid} ❌ API 调用失败: {str(e)[:80]}")
+                _cls_state["failed"] += 1
+            _cls_state["done"] += 1
     except Exception as e: logger.error(f"batch-classify: {e}")
     finally: _cls_state["running"] = False
 
@@ -539,6 +697,10 @@ def _batch_ai_score():
         _log(_score_state, f"待评分 {len(rows)} 篇")
         from ai_client import score_priority_ai
         from datetime import datetime as _dt
+
+        retry_counts: dict[int, int] = {}
+        retry_queue: list[tuple[int, str, str, str, str]] = []
+
         for idx, (aid, title, text, source, fetched_at) in enumerate(rows, 1):
             _score_state["current"] = f"#{aid} {title[:50]}"
             if _hp_check(aid): _log(_score_state, f"#{aid} ⏭️ 人工已处理"); _score_state["done"] += 1; continue
@@ -546,7 +708,15 @@ def _batch_ai_score():
                 days = max(0, (_dt.now() - _dt.fromisoformat(fetched_at)).days) if fetched_at else 0
             except Exception:
                 days = 0
-            r = score_priority_ai(title, text, source or "Unknown", days)
+            try:
+                r = score_priority_ai(title, text, source or "Unknown", days)
+            except Exception as e:
+                if _is_request_timeout_error(e) and _queue_timeout_retry(_score_state, aid, retry_counts):
+                    retry_queue.append((aid, title, text, source or "Unknown", fetched_at or ""))
+                    continue
+                _log(_score_state, f"#{aid} ❌ API 调用失败: {str(e)[:80]}")
+                _score_state["failed"] += 1; _score_state["done"] += 1
+                continue
             if r:
                 db2 = _conn()
                 db2.execute("UPDATE articles SET priority_score=?, priority_label=?, ai_priority_score=? WHERE id=?", (r["score"], r.get("label","medium"), r["score"], aid))
@@ -556,6 +726,30 @@ def _batch_ai_score():
                 _log(_score_state, f"#{aid} ⚠️ AI 返回空"); _score_state["failed"] += 1
             _score_state["done"] += 1
             time.sleep(0.8) if idx < len(rows) else None
+
+        for aid, title, text, source, fetched_at in retry_queue:
+            _score_state["current"] = f"#{aid} {title[:50]}"
+            _log(_score_state, f"#{aid} 🔄 重试评分...")
+            try:
+                days = max(0, (_dt.now() - _dt.fromisoformat(fetched_at)).days) if fetched_at else 0
+            except Exception:
+                days = 0
+            try:
+                r = score_priority_ai(title, text, source, days)
+                if r:
+                    db2 = _conn()
+                    db2.execute("UPDATE articles SET priority_score=?, priority_label=?, ai_priority_score=? WHERE id=?", (r["score"], r.get("label","medium"), r["score"], aid))
+                    db2.commit(); db2.close()
+                    _log(_score_state, f"#{aid} ✅ {r.get('label','medium')}({r['score']:.2f}) — {r.get('reason','')}")
+                else:
+                    _log(_score_state, f"#{aid} ⚠️ AI 返回空"); _score_state["failed"] += 1
+            except Exception as e:
+                if _is_request_timeout_error(e):
+                    _log(_score_state, f"#{aid} ❌ API 调用失败: Request Timed Out（重试后仍超时）")
+                else:
+                    _log(_score_state, f"#{aid} ❌ API 调用失败: {str(e)[:80]}")
+                _score_state["failed"] += 1
+            _score_state["done"] += 1
     except Exception as e: logger.error(f"batch-score: {e}")
     finally: _score_state["running"] = False
 
@@ -572,16 +766,27 @@ def _batch_ai_recluster():
         _recluster_state["total"] = len(unlinked)
         _log(_recluster_state, f"待聚类 {len(unlinked)} 篇 → {len(events)} 个活跃事件")
         from ai_client import assess_event_similarity_ai
+
+        retry_counts: dict[int, int] = {}
+        retry_queue: list[tuple[int, str]] = []
+
         for idx, (aid, art_title) in enumerate(unlinked, 1):
             _recluster_state["current"] = f"#{aid} {art_title[:50]}"
             best_id, best_conf = None, 0
+            timed_out = False
             for evt_id, evt_title in events:
                 try:
                     r = assess_event_similarity_ai(art_title, evt_title)
                     if r and r.get("similar") and r.get("confidence", 0) > best_conf:
                         best_conf = r["confidence"]; best_id = evt_id
                 except Exception as cmp_err:
+                    if _is_request_timeout_error(cmp_err):
+                        timed_out = True
+                        break
                     _log(_recluster_state, f"#{aid} ⚠️ 与事件#{evt_id}比对失败: {str(cmp_err)[:60]}")
+            if timed_out and _queue_timeout_retry(_recluster_state, aid, retry_counts):
+                retry_queue.append((aid, art_title))
+                continue
             if best_id and best_conf > 0.5:
                 db2 = _conn()
                 db2.execute("INSERT OR IGNORE INTO article_events (article_id, event_id, relevance) VALUES (?, ?, ?)", (aid, best_id, round(best_conf, 2)))
@@ -598,6 +803,40 @@ def _batch_ai_recluster():
                 db2.commit(); db2.close()
             _recluster_state["done"] += 1
             time.sleep(1.0) if idx < len(unlinked) else None
+
+        for aid, art_title in retry_queue:
+            _recluster_state["current"] = f"#{aid} {art_title[:50]}"
+            _log(_recluster_state, f"#{aid} 🔄 重试聚类...")
+            best_id, best_conf = None, 0
+            try:
+                for evt_id, evt_title in events:
+                    try:
+                        r = assess_event_similarity_ai(art_title, evt_title)
+                        if r and r.get("similar") and r.get("confidence", 0) > best_conf:
+                            best_conf = r["confidence"]; best_id = evt_id
+                    except Exception:
+                        pass
+                if best_id and best_conf > 0.5:
+                    db2 = _conn()
+                    db2.execute("INSERT OR IGNORE INTO article_events (article_id, event_id, relevance) VALUES (?, ?, ?)", (aid, best_id, round(best_conf, 2)))
+                    db2.execute("UPDATE events SET article_count=article_count+1 WHERE id=?", (best_id,))
+                    db2.commit(); db2.close()
+                    _log(_recluster_state, f"#{aid} ✅ -> 事件#{best_id} (置信度 {best_conf:.2f})")
+                else:
+                    _log(_recluster_state, f"#{aid} ➕ 创建新事件")
+                    from datetime import datetime as _dt
+                    now = _dt.now().isoformat(timespec='seconds')
+                    db2 = _conn()
+                    cur = db2.execute("INSERT INTO events (title, first_seen, last_seen, status) VALUES (?,?,?,'active')", (art_title[:80], now[:10], now[:10]))
+                    db2.execute("INSERT INTO article_events (article_id, event_id) VALUES (?,?)", (aid, cur.lastrowid))
+                    db2.commit(); db2.close()
+            except Exception as e:
+                if _is_request_timeout_error(e):
+                    _log(_recluster_state, f"#{aid} ❌ API 调用失败: Request Timed Out（重试后仍超时）")
+                else:
+                    _log(_recluster_state, f"#{aid} ❌ API 调用失败: {str(e)[:80]}")
+                _recluster_state["failed"] += 1
+            _recluster_state["done"] += 1
     except Exception as e: logger.error(f"batch-recluster: {e}")
     finally: _recluster_state["running"] = False
 
@@ -612,6 +851,10 @@ def _batch_ai_summarize_events():
         _evt_sum_state["total"] = len(events)
         _log(_evt_sum_state, f"待生成摘要 {len(events)} 个事件")
         from ai_client import generate_event_summary_ai
+
+        retry_counts: dict[int, int] = {}
+        retry_queue: list[int] = []
+
         for idx, (evt_id, _) in enumerate(events, 1):
             _evt_sum_state["current"] = f"事件#{evt_id}"
             db2 = _conn()
@@ -619,7 +862,15 @@ def _batch_ai_summarize_events():
             db2.close()
             if len(titles) < 2: _evt_sum_state["done"] += 1; continue
             block = "\n".join(f"- {t}" for t in titles[:15])
-            summary = generate_event_summary_ai(block)
+            try:
+                summary = generate_event_summary_ai(block)
+            except Exception as e:
+                if _is_request_timeout_error(e) and _queue_timeout_retry(_evt_sum_state, evt_id, retry_counts):
+                    retry_queue.append(evt_id)
+                    continue
+                _log(_evt_sum_state, f"#{evt_id} ❌ API 调用失败: {str(e)[:80]}")
+                _evt_sum_state["failed"] += 1; _evt_sum_state["done"] += 1
+                continue
             if summary:
                 db2 = _conn()
                 db2.execute("UPDATE events SET ai_summary=? WHERE id=?", (summary, evt_id))
@@ -629,6 +880,31 @@ def _batch_ai_summarize_events():
                 _log(_evt_sum_state, f"#{evt_id} ⚠️ AI 返回空"); _evt_sum_state["failed"] += 1
             _evt_sum_state["done"] += 1
             time.sleep(0.8) if idx < len(events) else None
+
+        for evt_id in retry_queue:
+            _evt_sum_state["current"] = f"事件#{evt_id}"
+            _log(_evt_sum_state, f"#{evt_id} 🔄 重试摘要生成...")
+            db2 = _conn()
+            titles = [r[0] for r in db2.execute("SELECT a.title FROM articles a JOIN article_events ae ON ae.article_id=a.id WHERE ae.event_id=?", (evt_id,)).fetchall()]
+            db2.close()
+            if len(titles) < 2: _evt_sum_state["done"] += 1; continue
+            block = "\n".join(f"- {t}" for t in titles[:15])
+            try:
+                summary = generate_event_summary_ai(block)
+                if summary:
+                    db2 = _conn()
+                    db2.execute("UPDATE events SET ai_summary=? WHERE id=?", (summary, evt_id))
+                    db2.commit(); db2.close()
+                    _log(_evt_sum_state, f"#{evt_id} ✅ {len(summary)} 字")
+                else:
+                    _log(_evt_sum_state, f"#{evt_id} ⚠️ AI 返回空"); _evt_sum_state["failed"] += 1
+            except Exception as e:
+                if _is_request_timeout_error(e):
+                    _log(_evt_sum_state, f"#{evt_id} ❌ API 调用失败: Request Timed Out（重试后仍超时）")
+                else:
+                    _log(_evt_sum_state, f"#{evt_id} ❌ API 调用失败: {str(e)[:80]}")
+                _evt_sum_state["failed"] += 1
+            _evt_sum_state["done"] += 1
     except Exception as e: logger.error(f"batch-summarize-events: {e}")
     finally: _evt_sum_state["running"] = False
 
