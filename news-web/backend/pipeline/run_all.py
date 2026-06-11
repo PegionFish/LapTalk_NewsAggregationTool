@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 PIPELINE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-def run_pipeline(db_path: str = "", user_agent: str = "", callback=None):
+def run_pipeline(db_path: str = "", user_agent: str = "", callback=None, run_type: str = 'scheduled'):
     """
     Execute the full pipeline sequence:
     1. fetch_english_news.py — RSS feeds
@@ -70,6 +70,24 @@ def run_pipeline(db_path: str = "", user_agent: str = "", callback=None):
             [sys.executable, script_path],
             env=env, capture_output=True, encoding='utf-8', errors='replace', timeout=300,
         )
+
+        # ── 记录 fetch_logs（仅抓取类步骤） ─────────────
+        if script in ('fetch_english_news.py', 'fetch_platform_hotlists.py') and db_path:
+            try:
+                from datetime import datetime as _dt
+                from db.news_db import NewsDB as _NDB_
+                _ndb2 = _NDB_(db_path)
+                status = 'ok' if result.returncode == 0 else 'failed'
+                error_msg = result.stderr[:200] if result.returncode != 0 else ''
+                out = result.stdout or ''
+                import re as _re3
+                fm = _re3.search(r'总条目[：:]\s*(\d+)', out)
+                fetched = int(fm.group(1)) if fm else 0
+                source_name = 'RSS' if script == 'fetch_english_news.py' else '平台热搜'
+                source_type = 'rss' if script == 'fetch_english_news.py' else 'hotlist'
+                _ndb2.log_fetch(source_name, source_type, fetched, 0, status, error_msg, 0, run_type)
+            except Exception as _fe:
+                logger.warning(f"fetch_logs write failed: {_fe}")
 
         if result.returncode != 0:
             logger.error(f"[Pipeline] {label} 失败: {result.stderr[:200]}")

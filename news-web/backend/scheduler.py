@@ -27,6 +27,7 @@ _pipeline_state = {
     'last_status': None,
     'current_step': None,
     'steps': [],
+    'run_type': 'scheduled',
 }
 
 
@@ -49,6 +50,7 @@ async def _run_pipeline_job():
             db_path=config.db_path,
             user_agent=config.user_agent,
             callback=progress_callback,
+            run_type=_pipeline_state.get('run_type', 'scheduled'),
         )
         _pipeline_state['last_status'] = 'success' if success else 'failed'
         if success:
@@ -60,6 +62,7 @@ async def _run_pipeline_job():
         logger.exception(f"Scheduled pipeline error: {e}")
     finally:
         _pipeline_state['running'] = False
+        _pipeline_state['run_type'] = 'scheduled'
         _pipeline_state['last_run'] = datetime.now().isoformat(timespec='seconds')
 
 
@@ -115,5 +118,7 @@ def stop_scheduler():
 
 async def trigger_pipeline_manual():
     """Manually trigger a pipeline run (via API)."""
+    global _pipeline_state
+    _pipeline_state['run_type'] = 'manual'
     asyncio.create_task(_run_pipeline_job())
     return {'status': 'pipeline_started'}
