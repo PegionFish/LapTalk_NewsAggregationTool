@@ -313,9 +313,9 @@ def retry_article_cache(article_id: int):
                         conn2.commit(); conn2.close()
                         _log_retry(f"#{aid} ✅ 翻译完成")
                 except Exception as e:
-                    _log_retry(f"#{aid} ⚠️ 翻译失败: {str(e)[:60]}")
+                    _log_retry(f"#{aid} ⚠️ 翻译失败: {str(e)[:300]}")
         except Exception as e:
-            _log_retry(f"#{aid} ❌ {str(e)[:80]}")
+            _log_retry(f"#{aid} ❌ {str(e)[:300]}")
 
     threading.Thread(target=_do_one, daemon=True).start()
     return {"ok": True, "message": f"开始重试文章 #{article_id} 的缓存下载"}
@@ -327,91 +327,122 @@ def retry_article_cache(article_id: int):
 
 @router.post("/articles/batch-retry")
 def retry_articles_batch(body: dict):
-    """批量缓存重试 — 最多 50 篇。"""
+    """批量缓存重试 — 支持指定 ID 列表或重试所有失败文章。"""
     if not config.db_path:
         return {"error": "database_not_configured"}
-
-    ids = body.get('ids', [])
-    if not isinstance(ids, list) or not ids:
-        raise HTTPException(400, "请提供文章 ID 列表")
-
-    if len(ids) > 50:
-        raise HTTPException(400, f"单次最多重试 50 篇，当前 {len(ids)} 篇")
 
     global _retry_state
     if _retry_state.get("running"):
         return {"ok": False, "message": "批量重试任务已在运行中"}
 
-    _retry_state = {"running": True, "total": len(ids), "done": 0, "failed": 0, "current": "", "log": []}
+    retry_all = body.get('retry_all', False)
+    ids = body.get('ids', [])
+
+    if retry_all:
+        # 获取所有失败文章
+        conn = _conn()
+        rows = conn.execute(
+            "SELECT id FROM articles WHERE local_path LIKE '[ERR:%' "
+            "AND category NOT IN ('platform_hotlists', 'bilibili_videos')"
+        ).fetchall()
+        conn.close()
+        ids = [r[0] for r in rows]
+    elif not isinstance(ids, list) or not ids:
+        raise HTTPException(400, "请提供文章 ID 列表或设置 retry_all=true")
+
+    if not ids:
+        return {"ok": True, "total": 0, "message": "没有需要重试的文章"}
+
+    _retry_state = {"running": True, "total": len(ids), "done": 0, "failed": 0, "current": "", "log": [], "source_delay": True}
 
     def _batch_retry():
         global _retry_state
         from pipeline.fetch_content import download_page, sanitize_html
         from utils.text import extract_text_from_html, detect_language
         from datetime import datetime as _dt
+        import random
 
-        for idx, aid in enumerate(ids, 1):
-            _retry_state["current"] = f"#{aid}"
-            conn = _conn()
-            row = conn.execute("SELECT id, title, url FROM articles WHERE id=?", (aid,)).fetchone()
-            conn.close()
-            if not row:
-                _log_retry(f"#{aid} ⚠️ 文章不存在")
-                _retry_state["failed"] += 1
-                _retry_state["done"] += 1
-                continue
+        # 按来源分组，同源文章之间延迟 5-10 秒
+        conn = _conn()
+        articles = []
+        for aid in ids:
+            row = conn.execute("SELECT id, title, url, source FROM articles WHERE id=?", (aid,)).fetchone()
+            if row:
+                articles.append(row)
+        conn.close()
 
-            _, title, url = row
-            if not url or not url.startswith('http'):
-                _log_retry(f"#{aid} ⚠️ 无有效 URL")
-                _retry_state["failed"] += 1
-                _retry_state["done"] += 1
-                continue
+        # 按 source 分组
+        by_source = {}
+        for aid, title, url, source in articles:
+            by_source.setdefault(source, []).append((aid, title, url))
 
-            try:
-                res = download_page(url)
-                if res['error']:
-                    conn2 = _conn()
-                    conn2.execute(
-                        "UPDATE articles SET local_path=?, content_fetched_at=? WHERE id=?",
-                        (f"[ERR:{res['error']}]", _dt.now().isoformat(timespec='seconds'), aid)
-                    )
-                    conn2.commit(); conn2.close()
-                    _log_retry(f"#{aid} ❌ {res['error']}")
-                    _retry_state["failed"] += 1; _retry_state["done"] += 1
+        done_count = 0
+        for source, items in by_source.items():
+            for idx, (aid, title, url) in enumerate(items):
+                _retry_state["current"] = f"#{aid} {title[:40]}"
+                if not url or not url.startswith('http'):
+                    _log_retry(f"#{aid} ⚠️ 无有效 URL")
+                    _retry_state["failed"] += 1
+                    _retry_state["done"] += 1
+                    done_count += 1
                     continue
 
-                html = sanitize_html(res['html'])
-                content_dir = config.content_cache_path
-                os.makedirs(content_dir, exist_ok=True)
-                file_path = os.path.join(content_dir, f'{aid}.html')
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(html)
+                try:
+                    res = download_page(url)
+                    if res['error']:
+                        conn2 = _conn()
+                        conn2.execute(
+                            "UPDATE articles SET local_path=?, content_fetched_at=? WHERE id=?",
+                            (f"[ERR:{res['error']}]", _dt.now().isoformat(timespec='seconds'), aid)
+                        )
+                        conn2.commit(); conn2.close()
+                        _log_retry(f"#{aid} ❌ {res['error']}")
+                        _retry_state["failed"] += 1
+                    else:
+                        html = sanitize_html(res['html'])
+                        content_dir = config.content_cache_path
+                        os.makedirs(content_dir, exist_ok=True)
+                        file_path = os.path.join(content_dir, f'{aid}.html')
+                        with open(file_path, 'w', encoding='utf-8') as f:
+                            f.write(html)
 
-                text = extract_text_from_html(html)
-                lang = detect_language(text)
-                now = _dt.now().isoformat(timespec='seconds')
-                rel_path = f'{os.path.basename(content_dir)}/{aid}.html'
-                conn2 = _conn()
-                conn2.execute("""
-                    UPDATE articles SET
-                        local_path=?, content_fetched_at=?,
-                        text_content=?, content_lang=?, content_status='fetched'
-                    WHERE id=?
-                """, (rel_path, now, text, lang, aid))
-                conn2.commit(); conn2.close()
-                _log_retry(f"#{aid} ✅ 缓存成功 [{lang}]")
-                _retry_state["done"] += 1
-                time.sleep(0.5)
-            except Exception as e:
-                _log_retry(f"#{aid} ❌ {str(e)[:80]}")
-                _retry_state["failed"] += 1; _retry_state["done"] += 1
+                        text = extract_text_from_html(html)
+                        lang = detect_language(text)
+                        now = _dt.now().isoformat(timespec='seconds')
+                        rel_path = f'{os.path.basename(content_dir)}/{aid}.html'
+                        conn2 = _conn()
+                        conn2.execute("""
+                            UPDATE articles SET
+                                local_path=?, content_fetched_at=?,
+                                text_content=?, content_lang=?, content_status='fetched'
+                            WHERE id=?
+                        """, (rel_path, now, text, lang, aid))
+                        conn2.commit(); conn2.close()
+                        _log_retry(f"#{aid} ✅ 缓存成功 [{lang}]")
+
+                    _retry_state["done"] += 1
+                    done_count += 1
+
+                    # 同源文章之间延迟 5-10 秒，避免触发风控
+                    if idx < len(items) - 1:
+                        delay = random.uniform(5, 10)
+                        _log_retry(f"⏳ 等待 {delay:.1f}s 后继续抓取 {source}...")
+                        time.sleep(delay)
+                    elif done_count < len(ids):
+                        # 切换源时也短暂延迟
+                        time.sleep(2)
+
+                except Exception as e:
+                    _log_retry(f"#{aid} ❌ {str(e)[:300]}")
+                    _retry_state["failed"] += 1
+                    _retry_state["done"] += 1
+                    done_count += 1
 
         _retry_state["running"] = False
         _retry_state["current"] = "完成"
 
     threading.Thread(target=_batch_retry, daemon=True).start()
-    return {"ok": True, "total": len(ids), "message": f"开始批量重试 {len(ids)} 篇缓存"}
+    return {"ok": True, "total": len(ids), "message": f"开始批量重试 {len(ids)} 篇缓存（同源间隔 5-10 秒）"}
 
 
 @router.get("/articles/batch-retry/status")

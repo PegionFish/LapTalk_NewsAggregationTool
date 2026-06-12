@@ -227,9 +227,14 @@ export const api = {
   retryArticleCache: (id: number) =>
     fetchJSON<{ ok: boolean; message: string }>(`/fetch/articles/${id}/retry-cache`, { method: 'POST' }),
 
-  retryArticlesBatch: (ids: number[]) =>
+  retryArticlesBatch: (idsOrOptions: number[] | { retry_all: boolean }) =>
     fetchJSON<{ ok: boolean; total: number; message: string }>(
-      '/fetch/articles/batch-retry', { method: 'POST', body: JSON.stringify({ ids }) }
+      '/fetch/articles/batch-retry', {
+        method: 'POST',
+        body: JSON.stringify(
+          Array.isArray(idsOrOptions) ? { ids: idsOrOptions } : idsOrOptions
+        )
+      }
     ),
 
   getBatchRetryStatus: () =>

@@ -122,16 +122,30 @@ export default function FetchMonitor() {
   const toggleSelect = (id: number) => {
     const next = new Set(selectedIds);
     next.has(id) ? next.delete(id) : next.add(id);
-    if (next.size > 50) return;
     setSelectedIds(next);
   };
 
-  const toggleSelectAll = (ids: number[]) => {
-    if (selectedIds.size === Math.min(ids.length, 50)) {
+  const toggleSelectAll = () => {
+    if (selectedIds.size === failedArticles.length) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(ids.slice(0, 50)));
+      setSelectedIds(new Set(failedArticles.map(a => a.id)));
     }
+  };
+
+  // 重试所有失败文章
+  const handleRetryAll = async () => {
+    if (!confirm(`确定重试所有 ${failedTotal} 篇失败文章？同源文章间隔 5-10 秒。`)) return;
+    setBatchSubmitting(true);
+    try {
+      const res = await api.retryArticlesBatch({ retry_all: true } as any);
+      if (res.ok) {
+        setSelectedIds(new Set());
+        setBatchState({ running: true, total: res.total, done: 0, failed: 0, current: '', log: [] });
+        batchTimer.current = setInterval(pollBatch, 2000);
+      }
+    } catch { /* ignore */ }
+    finally { setBatchSubmitting(false); }
   };
 
   if (loading) {
@@ -427,9 +441,9 @@ export default function FetchMonitor() {
           <Button
             variant="ghost"
             size="xs"
-            onClick={() => toggleSelectAll(failedArticles.map(a => a.id))}
+            onClick={toggleSelectAll}
           >
-            {selectedIds.size > 0 ? `取消全选 (${selectedIds.size})` : '全选'}
+            {selectedIds.size > 0 ? `取消全选 (${selectedIds.size})` : '全选当前页'}
           </Button>
           <Button
             variant={selectedIds.size > 0 ? 'primary' : 'ghost'}
@@ -440,7 +454,16 @@ export default function FetchMonitor() {
           >
             批量重试 ({selectedIds.size} 篇)
           </Button>
-          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>最多 50 篇</span>
+          <Button
+            variant="orange"
+            size="xs"
+            icon="fa-redo"
+            onClick={handleRetryAll}
+            disabled={batchSubmitting || batchState.running}
+            loading={batchSubmitting}
+          >
+            重试所有失败 ({failedTotal} 篇)
+          </Button>
         </div>
 
         <Card flat style={{ padding: 0 }}>
@@ -450,8 +473,8 @@ export default function FetchMonitor() {
                 <th style={{ width: 32 }}>
                   <input
                     type="checkbox"
-                    onChange={() => toggleSelectAll(failedArticles.map(a => a.id))}
-                    checked={selectedIds.size > 0 && selectedIds.size === Math.min(failedArticles.length, 50)}
+                    onChange={toggleSelectAll}
+                    checked={selectedIds.size > 0 && selectedIds.size === failedArticles.length}
                     style={{ accentColor: 'var(--accent)' }}
                   />
                 </th>
