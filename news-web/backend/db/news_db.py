@@ -1074,36 +1074,42 @@ class NewsDB:
 
     def get_stats(self) -> dict:
         with self._conn() as conn:
-            articles = conn.execute("SELECT COUNT(*) FROM articles").fetchone()[0]
+            articles = conn.execute(
+                "SELECT COUNT(*) FROM articles WHERE category NOT IN ('platform_hotlists', 'bilibili_videos')"
+            ).fetchone()[0]
             events = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
             active = conn.execute("SELECT COUNT(*) FROM events WHERE status='active'").fetchone()[0]
-            verified = conn.execute("SELECT COUNT(*) FROM articles WHERE human_verified!=0").fetchone()[0]
+            verified = conn.execute(
+                "SELECT COUNT(*) FROM articles WHERE human_verified!=0 AND category NOT IN ('platform_hotlists', 'bilibili_videos')"
+            ).fetchone()[0]
             by_cat = conn.execute(
-                "SELECT category, COUNT(*) FROM articles GROUP BY category"
+                "SELECT category, COUNT(*) FROM articles WHERE category NOT IN ('platform_hotlists', 'bilibili_videos') GROUP BY category"
             ).fetchall()
             # 来源分布 — 按实际媒体名统计（如 Ars Technica、36Kr、IT之家），不按 category 聚合
             by_source = conn.execute(
-                "SELECT source, COUNT(*) FROM articles GROUP BY source ORDER BY COUNT(*) DESC"
+                "SELECT source, COUNT(*) FROM articles WHERE category NOT IN ('platform_hotlists', 'bilibili_videos') GROUP BY source ORDER BY COUNT(*) DESC"
             ).fetchall()
             # 缓存状态统计 — 与 cache.py 保持一致的口径
             # HTML 已下载到磁盘（有 local_path 且非错误标记）
             cache_cached = conn.execute(
-                "SELECT COUNT(*) FROM articles WHERE local_path != '' AND local_path NOT LIKE '[ERR:%'"
+                "SELECT COUNT(*) FROM articles WHERE local_path != '' AND local_path NOT LIKE '[ERR:%' AND category NOT IN ('platform_hotlists', 'bilibili_videos')"
             ).fetchone()[0]
             # 文本已提取（可从 DB 直接阅读/分析）
             cache_text = conn.execute(
-                "SELECT COUNT(*) FROM articles WHERE text_content != ''"
+                "SELECT COUNT(*) FROM articles WHERE text_content != '' AND category NOT IN ('platform_hotlists', 'bilibili_videos')"
             ).fetchone()[0]
             # 翻译已完成
             cache_translated = conn.execute(
-                "SELECT COUNT(*) FROM articles WHERE translated_content != ''"
+                "SELECT COUNT(*) FROM articles WHERE translated_content != '' AND category NOT IN ('platform_hotlists', 'bilibili_videos')"
             ).fetchone()[0]
             # 下载失败
             cache_failed = conn.execute(
-                "SELECT COUNT(*) FROM articles WHERE local_path LIKE '[ERR:%'"
+                "SELECT COUNT(*) FROM articles WHERE local_path LIKE '[ERR:%' AND category NOT IN ('platform_hotlists', 'bilibili_videos')"
             ).fetchone()[0]
             # 从未尝试下载
-            total_for_cache = conn.execute("SELECT COUNT(*) FROM articles").fetchone()[0]
+            total_for_cache = conn.execute(
+                "SELECT COUNT(*) FROM articles WHERE category NOT IN ('platform_hotlists', 'bilibili_videos')"
+            ).fetchone()[0]
             cache_pending = total_for_cache - cache_cached - cache_failed
             return {
                 'articles': articles,
