@@ -70,6 +70,10 @@ def cache_status():
     orphan_files = sorted(disk_ids - db_ids)
 
     # 未缓存的文章列表（有 URL 但无 local_path）
+    uncached_total = conn.execute(
+        f"SELECT COUNT(*) FROM articles WHERE url != '' AND url LIKE 'http%' "
+        f"AND (local_path = '' OR local_path IS NULL) AND {_HOTLIST_EXCLUDE}"
+    ).fetchone()[0]
     uncached_rows = conn.execute(
         f"SELECT id, title, source FROM articles WHERE url != '' AND url LIKE 'http%' "
         f"AND (local_path = '' OR local_path IS NULL) AND {_HOTLIST_EXCLUDE} "
@@ -111,7 +115,7 @@ def cache_status():
             {'id': r[0], 'title': r[1][:80], 'source': r[2]}
             for r in uncached_rows
         ],
-        'uncached_count': len(uncached_rows),
+        'uncached_count': uncached_total,
     }
 
 
