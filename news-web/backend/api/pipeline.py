@@ -568,6 +568,7 @@ _cls_state   = _new_state()
 _score_state = _new_state()
 _recluster_state  = _new_state()
 _evt_sum_state    = _new_state()
+_filter_state     = _new_state()
 
 
 def _batch_ai_keywords():
@@ -911,6 +912,86 @@ def _batch_ai_summarize_events():
             _evt_sum_state["done"] += 1
     except Exception as e: logger.error(f"batch-summarize-events: {e}")
     finally: _evt_sum_state["running"] = False
+
+
+# ═════════════════════════════════════════════════════════
+# AI 预筛选 — 标题批量判断，筛掉不需要的文章
+# ═════════════════════════════════════════════════════════
+
+def _batch_ai_filter():
+    """对未筛选的文章标题批量调用 AI，标记通过/拒绝。"""
+    global _filter_state
+    _filter_state = _new_state(); _filter_state["running"] = True
+    try:
+        db = _conn()
+        rows = db.execute("""
+            SELECT id, title, source FROM articles
+            WHERE (local_path = '' OR local_path IS NULL)
+              AND (ai_filtered = 0)
+              AND category NOT IN ('platform_hotlists', 'bilibili_videos')
+            ORDER BY fetched_at DESC
+        """).fetchall()
+        db.close()
+
+        if not rows:
+            _filter_state["running"] = False
+            return
+
+        _filter_state["total"] = len(rows)
+        _log(_filter_state, f"待筛选 {len(rows)} 篇标题")
+
+        from pipeline.ai_filter import filter_batch
+
+        BATCH = 30
+        for i in range(0, len(rows), BATCH):
+            batch = rows[i:i + BATCH]
+            _filter_state["current"] = f"批次 {i // BATCH + 1} ({len(batch)} 篇)"
+            batch_ids = filter_batch(batch)
+
+            db2 = _conn()
+            for aid, title, source in batch:
+                if aid in batch_ids:
+                    db2.execute("UPDATE articles SET ai_filtered=1 WHERE id=?", (aid,))
+                    _filter_state["done"] += 1
+                else:
+                    db2.execute("UPDATE articles SET ai_filtered=-1 WHERE id=?", (aid,))
+                    _filter_state["done"] += 1
+                    _filter_state["failed"] += 1
+            db2.commit(); db2.close()
+
+            approved = _filter_state["done"] - _filter_state["failed"]
+            rejected = _filter_state["failed"]
+            _log(_filter_state, f"[{_filter_state['done']}/{len(rows)}] 通过={approved} 拒绝={rejected}")
+            time.sleep(0.5)
+
+    except Exception as e:
+        logger.error(f"batch-ai-filter: {e}")
+    finally:
+        _filter_state["running"] = False
+
+
+@router.post("/batch-ai-filter")
+def start_batch_ai_filter():
+    """启动 AI 预筛选 — 批量判断文章标题是否值得缓存。"""
+    global _filter_state
+    if _filter_state.get("running"):
+        return {"ok": False, "message": "AI 筛选已在运行中"}
+    db = _conn()
+    n = db.execute("""
+        SELECT COUNT(*) FROM articles
+        WHERE (local_path = '' OR local_path IS NULL)
+          AND (ai_filtered = 0)
+          AND category NOT IN ('platform_hotlists', 'bilibili_videos')
+    """).fetchone()[0]
+    db.close()
+    threading.Thread(target=_batch_ai_filter, daemon=True).start()
+    return {"ok": True, "message": f"启动 AI 预筛选，预计 {n} 篇", "pending": n}
+
+
+@router.get("/batch-ai-filter/status")
+def get_batch_ai_filter_status():
+    """查询 AI 预筛选进度。"""
+    return dict(_filter_state)
 
 
 def _hp_check(aid: int) -> bool:

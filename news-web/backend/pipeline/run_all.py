@@ -7,6 +7,17 @@ import os, sys, subprocess, logging
 
 logger = logging.getLogger(__name__)
 
+# 各步骤超时时间（秒）— fetch_content 需要下载大量页面，超时更长
+STEP_TIMEOUTS = {
+    'fetch_english_news.py': 300,
+    'fetch_platform_hotlists.py': 300,
+    'collect_data.py': 300,
+    'ai_filter.py': 600,
+    'fetch_content.py': 900,
+    'translate_content.py': 600,
+    'analyze.py': 600,
+}
+
 PIPELINE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -42,11 +53,14 @@ def run_pipeline(db_path: str = "", user_agent: str = "", callback=None, run_typ
 
     steps += [
         ('collect_data.py', '去重聚类'),
-        ('fetch_content.py', '页面归档'),
     ]
 
-    # Step 3.5: AI 翻译 (only if translation enabled + API key)
+    # AI 预筛选 — 只在有 API Key 时启用，筛掉不需要的文章再下载
     from config import config
+    if config.openai_api_key:
+        steps.append(('ai_filter.py', 'AI 筛选'))
+
+    steps.append(('fetch_content.py', '页面归档'))
     if config.translation_enabled and config.translation_api_key:
         steps.append(('translate_content.py', 'AI 翻译'))
 
@@ -66,9 +80,10 @@ def run_pipeline(db_path: str = "", user_agent: str = "", callback=None, run_typ
         if callback:
             callback('running', label)
 
+        timeout = STEP_TIMEOUTS.get(script, 300)
         result = subprocess.run(
             [sys.executable, script_path],
-            env=env, capture_output=True, encoding='utf-8', errors='replace', timeout=300,
+            env=env, capture_output=True, encoding='utf-8', errors='replace', timeout=timeout,
         )
 
         # ── 记录 fetch_logs（仅抓取类步骤） ─────────────

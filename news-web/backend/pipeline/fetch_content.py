@@ -51,31 +51,44 @@ def can_fetch(url: str) -> bool:
     return bool(url and url.startswith('http') and not any(d in url for d in BLOCKED))
 
 
-def download_page(url: str) -> dict:
-    """下载页面 HTML，返回 {'html': str, 'error': str|None}"""
+def download_page(url: str, retries: int = 2) -> dict:
+    """下载页面 HTML，返回 {'html': str, 'error': str|None}。网络临时错误自动重试。"""
     if not can_fetch(url):
         return {'html': '', 'error': 'Blocked'}
-    try:
-        req = urllib.request.Request(url, headers={
-            'User-Agent': config.user_agent,
-            'Accept': 'text/html,application/xhtml+xml',
-            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-        })
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-            raw = resp.read()
-            ct = resp.headers.get('Content-Type', '')
-            cs = 'utf-8'
-            if 'charset=' in ct:
-                cs = ct.split('charset=')[-1].split(';')[0].strip()
-            try:
-                html = raw.decode(cs, errors='replace')
-            except:
-                html = raw.decode('utf-8', errors='replace')
-        return {'html': html, 'error': None}
-    except urllib.error.HTTPError as e:
-        return {'html': '', 'error': f'HTTP {e.code}'}
-    except Exception as e:
-        return {'html': '', 'error': str(e)[:300]}
+    last_error = ''
+    for attempt in range(retries + 1):
+        try:
+            req = urllib.request.Request(url, headers={
+                'User-Agent': config.user_agent,
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+                'Accept-Encoding': 'identity',
+            })
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+                raw = resp.read()
+                ct = resp.headers.get('Content-Type', '')
+                cs = 'utf-8'
+                if 'charset=' in ct:
+                    cs = ct.split('charset=')[-1].split(';')[0].strip()
+                try:
+                    html = raw.decode(cs, errors='replace')
+                except:
+                    html = raw.decode('utf-8', errors='replace')
+            return {'html': html, 'error': None}
+        except urllib.error.HTTPError as e:
+            if e.code == 403 and attempt < retries:
+                time.sleep(1)
+                continue
+            return {'html': '', 'error': f'HTTP {e.code}'}
+        except (urllib.error.URLError, OSError, ConnectionError) as e:
+            last_error = str(e)[:300]
+            if attempt < retries:
+                time.sleep(1)
+                continue
+            return {'html': '', 'error': last_error}
+        except Exception as e:
+            return {'html': '', 'error': str(e)[:300]}
+    return {'html': '', 'error': last_error}
 
 
 def extract_img_srcs(html: str, base_url: str) -> list:
@@ -139,9 +152,11 @@ def archive_pages(db_path: str, limit: int = 0, source: str = None, recent: int 
     os.makedirs(content_dir, exist_ok=True)
 
     # ── 查询未存档文章（排除热榜/视频趋势数据，它们没有可缓存的内容页）──
+    # ai_filtered: 0=未筛选(兼容旧数据), 1=AI通过, -1=AI拒绝(跳过)
     where = [
         "(local_path IS NULL OR local_path = '')",
         "category NOT IN ('platform_hotlists', 'bilibili_videos')",
+        "ai_filtered != -1",
     ]
     params = []
     if source:

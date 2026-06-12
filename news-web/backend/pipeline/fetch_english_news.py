@@ -346,30 +346,35 @@ HEADERS = {
 
 def parse_rss_regex(xml_text: str) -> list:
     """
-    解析 RSS XML，支持两种 CDATA 格式：
+    解析 RSS XML，兼容多种格式：
     - BBC/Reuters 风格: <title><![CDATA[Title]]></title>
     - Ars Technica 风格: <title>Title</title>
+    - 36Kr 风格: <link><![CDATA[URL]]></link>
+    - Atom 风格: <link rel="alternate" href="URL"/>
     """
     items = []
     item_blocks = re.findall(r'<item>(.*?)</item>', xml_text, re.DOTALL | re.IGNORECASE)
 
     for block in item_blocks:
         # 提取 title（兼容 CDATA 和 plain text）
-        # 优先尝试 CDATA 格式
         title_match = re.search(r'<title><!\[CDATA\[(.*?)\]\]></title>', block, re.DOTALL)
         if not title_match:
-            # 尝试普通格式
             title_match = re.search(r'<title>(.*?)</title>', block, re.DOTALL)
         title = re.sub(r'<[^>]+>', '', title_match.group(1)).strip() if title_match else ''
 
-        # 提取 link（兼容三种格式：<link>url</link> / <link href="url"/> / <link rel="..." href="url"/>）
-        link_match = re.search(r'<link>(.*?)</link>', block, re.DOTALL)
-        if not link_match or not link_match.group(1).strip():
-            link_match = re.search(r'<link[^>]*>(.*?)</link>', block, re.DOTALL)
-        if not link_match or not link_match.group(1).strip():
-            # Atom feed: <link href="URL"/> 或 <link rel="alternate" href="URL"/>
-            link_match = re.search(r'<link[^>]+href="([^"]+)"', block, re.DOTALL | re.IGNORECASE)
-        link = re.sub(r'<[^>]+>', '', link_match.group(1)).strip() if link_match else ''
+        # 提取 link（兼容 CDATA / plain text / Atom href 属性）
+        link = ''
+        link_cdata = re.search(r'<link><!\[CDATA\[(.*?)\]\]></link>', block, re.DOTALL)
+        if link_cdata and link_cdata.group(1).strip():
+            link = link_cdata.group(1).strip()
+        if not link:
+            link_plain = re.search(r'<link>(.*?)</link>', block, re.DOTALL)
+            if link_plain and link_plain.group(1).strip():
+                link = re.sub(r'<[^>]+>', '', link_plain.group(1)).strip()
+        if not link:
+            link_attr = re.search(r'<link[^>]+href="([^"]+)"', block, re.DOTALL | re.IGNORECASE)
+            if link_attr:
+                link = link_attr.group(1).strip()
 
         # 提取 pub_date
         pub_match = re.search(r'<pubDate>(.*?)</pubDate>', block, re.DOTALL)

@@ -144,6 +144,9 @@ export const api = {
   startBatchAiFull: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/batch-ai-full', { method: 'POST' }),
   getBatchAiFullStatus: () => fetchJSON<{ running: boolean; total: number; done: number; current: string; log: string[] }>('/pipeline/batch-ai-full/status'),
 
+  startBatchAiFilter: () => fetchJSON<{ ok: boolean; message: string; pending: number }>('/pipeline/batch-ai-filter', { method: 'POST' }),
+  getBatchAiFilterStatus: () => fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string; log: string[] }>('/pipeline/batch-ai-filter/status'),
+
   getNotifications: (params: { limit?: number; unread_only?: boolean } = {}) => {
     const qs = new URLSearchParams();
     if (params.limit) qs.set('limit', String(params.limit));

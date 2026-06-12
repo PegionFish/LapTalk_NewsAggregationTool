@@ -265,7 +265,9 @@ class NewsDB:
                                ('ai_keywords','TEXT DEFAULT \'\''),
                                ('ai_category','TEXT DEFAULT \'\''),
                                ('ai_tags','TEXT DEFAULT \'\''),
-                               ('ai_priority_score','REAL DEFAULT 0.0')]:
+                               ('ai_priority_score','REAL DEFAULT 0.0'),
+                               # AI 预筛选：0=未筛选, 1=通过, -1=拒绝
+                               ('ai_filtered','INTEGER DEFAULT 0')]:
                 try:
                     conn.execute(f"ALTER TABLE articles ADD COLUMN {col} {dtype}")
                 except sqlite3.OperationalError:
