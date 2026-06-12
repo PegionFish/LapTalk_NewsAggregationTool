@@ -189,6 +189,10 @@ export const api = {
     if (date) qs.set('date', date);
     return fetchJSON<{ total: number; items: import('../types').HotlistItem[] }>(`/hotlists/top?${qs}`);
   },
+  getHotlistsLive: () =>
+    fetchJSON<{ status: string; data: Record<string, { count: number; items: import('../types').HotlistItem[] }> | null }>('/hotlists/live'),
+  startLiveFetch: () =>
+    fetchJSON<{ ok: boolean; message?: string }>('/hotlists/live/fetch', { method: 'POST' }),
 
   // ── 数据采集监控 ────────────────────────────────────
   getFetchOverview: () =>

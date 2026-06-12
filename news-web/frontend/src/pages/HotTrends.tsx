@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { api } from '../api/client';
 import type { HotlistItem } from '../types';
 import { Card, Button, Tabs, Tab, EmptyState, Loading } from '../components/ui';
@@ -15,25 +15,50 @@ const PLATFORM_ORDER = ['weibo', 'zhihu', 'douyin', 'toutiao', 'bilibili'];
 
 export default function HotTrends() {
   const [data, setData] = useState<Record<string, { count: number; items: HotlistItem[] }>>({});
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [fetching, setFetching] = useState(false);
   const [activeTab, setActiveTab] = useState('weibo');
   const [error, setError] = useState('');
+  const [hasLoaded, setHasLoaded] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setInterval>>();
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    setError('');
+  // 轮询实时抓取状态
+  const pollLive = useCallback(async () => {
     try {
-      const result = await api.getHotlists();
-      setData(result as unknown as Record<string, { count: number; items: HotlistItem[] }>);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '加载失败');
-    } finally {
-      setLoading(false);
+      const res = await api.getHotlistsLive();
+      if (res.status === 'done' && res.data) {
+        setData(res.data);
+        setFetching(false);
+        setHasLoaded(true);
+        clearInterval(timerRef.current);
+      }
+    } catch {
+      clearInterval(timerRef.current);
+      setFetching(false);
     }
   }, []);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  // 启动实时抓取
+  const handleFetch = useCallback(async () => {
+    setFetching(true);
+    setError('');
+    try {
+      await api.startLiveFetch();
+      // 开始轮询
+      timerRef.current = setInterval(pollLive, 1500);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '启动失败');
+      setFetching(false);
+    }
+  }, [pollLive]);
 
+  // 页面挂载时自动抓取
+  useEffect(() => {
+    handleFetch();
+    return () => clearInterval(timerRef.current);
+  }, []); // eslint-disable-line
+
+  // 选第一个有数据的平台
   useEffect(() => {
     if (!loading && data) {
       const first = PLATFORM_ORDER.find(p => data[p]?.count > 0);
@@ -70,16 +95,16 @@ export default function HotTrends() {
             color: 'var(--text-muted)',
             margin: '4px 0 0 30px',
           }}>
-            来自微博/知乎/抖音/头条 + B站热门 · 共 {totalCount} 条
+            现场抓取 · 仅展示当前实时数据 · 共 {totalCount} 条
           </p>
         </div>
         <Button
           variant="primary"
           icon="fa-sync-alt"
-          loading={loading}
-          onClick={fetchData}
+          loading={fetching}
+          onClick={handleFetch}
         >
-          刷新
+          重新抓取
         </Button>
       </div>
 
@@ -113,7 +138,6 @@ export default function HotTrends() {
               count={count}
               color={meta.color}
               onClick={() => setActiveTab(pid)}
-              disabled={count === 0 && activeTab !== pid}
             >
               {meta.label}
             </Tab>
@@ -122,8 +146,8 @@ export default function HotTrends() {
       </Tabs>
 
       {/* 榜单内容 */}
-      {loading ? (
-        <Loading text="加载热点数据..." />
+      {fetching && !hasLoaded ? (
+        <Loading text="正在抓取各平台热点数据..." />
       ) : (
         <Card flat style={{ padding: 0 }}>
           {/* 列表头 */}
@@ -160,7 +184,7 @@ export default function HotTrends() {
             <EmptyState icon="fa-inbox">
               <p>暂无数据</p>
               <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                请等待 pipeline 执行后自动填充
+                点击「重新抓取」获取最新热点
               </p>
             </EmptyState>
           ) : (
