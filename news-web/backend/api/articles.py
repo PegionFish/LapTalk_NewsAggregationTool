@@ -200,7 +200,7 @@ async def get_article_content(article_id: int):
                 "source": "remote",
             }
         except Exception as e:
-            raise HTTPException(502, f"fetch_failed: {str(e)[:80]}")
+            raise HTTPException(502, f"fetch_failed: {str(e)[:300]}")
 
 
 def _inject_base(html: str, base_url: str) -> str:
@@ -273,7 +273,7 @@ async def serve_article_html(article_id: int):
             html = _sanitize_html(resp.text)
             return HTMLResponse(content=html, media_type="text/html")
         except Exception as e:
-            raise HTTPException(502, f"fetch_failed: {str(e)[:80]}")
+            raise HTTPException(502, f"fetch_failed: {str(e)[:300]}")
 
 
 @router.post("/{article_id}/analyze")

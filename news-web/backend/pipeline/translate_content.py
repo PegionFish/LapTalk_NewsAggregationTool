@@ -106,7 +106,7 @@ def translate_articles(db_path: str, limit: int = 0, recent: int = 0) -> dict:
             conn2.execute("UPDATE articles SET content_status='failed' WHERE id=?", (aid,))
             conn2.commit()
             conn2.close()
-            print(f"❌ {str(e)[:60]}")
+            print(f"❌ {str(e)[:300]}")
             failed += 1
 
         if idx < total:

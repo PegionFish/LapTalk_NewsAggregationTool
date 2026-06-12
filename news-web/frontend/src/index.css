@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
 /* ═══════════════════════════════════════════════════════════
    全局样式 — 科幻主题精修版
    ═══════════════════════════════════════════════════════════ */
@@ -102,8 +104,6 @@ a:hover {
   }
 }
 
-
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
 body {
   font-family: var(--font-sans);

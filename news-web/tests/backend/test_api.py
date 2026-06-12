@@ -1,4 +1,5 @@
-import pytest, json, os
+import pytest, json, os, sqlite3
+from datetime import datetime
 from fastapi.testclient import TestClient
 from types import SimpleNamespace
 import sys
@@ -11,6 +12,8 @@ from main import app
 from config import config
 from utils.text import extract_text_from_html
 from ai_client import analyze_article, extract_keywords_ai
+from api import pipeline as pipeline_api
+import translation_client
 
 @pytest.fixture
 def client(test_db_path):
@@ -168,6 +171,124 @@ def test_extract_keywords_ai_sends_full_text(monkeypatch):
     assert result == ["GPU"]
     assert "正文：" in captured["prompt"]
     assert len(captured["prompt"]) > 7000
+
+
+def _seed_pipeline_article(db_path: str, content_cache_path: str, article_id: int, html_body: str):
+    """写入批量 AI 处理测试所需的文章与 HTML 缓存。"""
+    html = f"<html><body><article>{html_body}</article></body></html>"
+    html_path = os.path.join(content_cache_path, f"article{article_id}.html")
+    with open(html_path, "w", encoding="utf-8") as f:
+        f.write(html)
+
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        UPDATE articles
+        SET title=?, source=?, url=?, category=?, published_date=?, fetched_at=?,
+            local_path=?, text_content=?, content_lang='en', content_status='fetched'
+        WHERE id=?
+        """,
+        (
+            f"Pipeline Article {article_id}",
+            "Guru3D",
+            f"https://test.com/{article_id}",
+            "rss_news",
+            datetime.utcnow().isoformat(timespec="seconds"),
+            datetime.utcnow().isoformat(timespec="seconds"),
+            f"article{article_id}.html",
+            html_body,
+            article_id,
+        ),
+    )
+    conn.execute("UPDATE articles SET local_path='', translated_content='already translated' WHERE id!=?", (article_id,))
+    conn.commit()
+    conn.close()
+
+
+def test_batch_translate_retries_request_timeout_at_queue_tail(monkeypatch, test_db_path, tmp_path, news_db):
+    """翻译遇到 Request Timed Out 时应追加到队尾重试一次。"""
+    config._data['db_path'] = test_db_path
+    config._data['content_cache_path'] = str(tmp_path)
+    _seed_pipeline_article(
+        test_db_path,
+        str(tmp_path),
+        1,
+        "This English article body has enough words to pass text extraction and language detection.",
+    )
+
+    calls = []
+
+    def fake_translate(text):
+        calls.append(text)
+        if len(calls) == 1:
+            raise TimeoutError("Request timed out")
+        return "这是中文翻译结果，长度足够用于断言，并且包含更多字符。"
+
+    monkeypatch.setattr(translation_client, "translate_to_chinese", fake_translate)
+
+    pipeline_api._batch_translate()
+
+    assert len(calls) == 2
+    assert pipeline_api._translate_state["failed"] == 0, pipeline_api._translate_state["log"]
+    assert pipeline_api._translate_state["done"] == 1
+    assert any("已排到队列末尾重试" in line for line in pipeline_api._translate_state["log"])
+
+    conn = sqlite3.connect(test_db_path)
+    translated = conn.execute("SELECT translated_content, content_status FROM articles WHERE id=1").fetchone()
+    conn.close()
+    assert translated[0] == "这是中文翻译结果，长度足够用于断言，并且包含更多字符。"
+    assert translated[1] == "translated"
+
+
+def test_batch_analyze_retries_request_timeout_at_queue_tail(monkeypatch, test_db_path, news_db):
+    """分析遇到 Request Timed Out 时应追加到队尾重试一次。"""
+    config._data['db_path'] = test_db_path
+    config._data['content_cache_path'] = ''
+
+    conn = sqlite3.connect(test_db_path)
+    conn.execute(
+        """
+        UPDATE articles
+        SET title=?, source=?, url=?, category=?, published_date=?, fetched_at=?,
+            text_content=?, content_lang='en', content_status='fetched', ai_analyzed=0, ai_summary=''
+        WHERE id=?
+        """,
+        (
+            "Pipeline Analyze Article",
+            "Guru3D",
+            "https://test.com/analyze",
+            "rss_news",
+            datetime.utcnow().isoformat(timespec="seconds"),
+            datetime.utcnow().isoformat(timespec="seconds"),
+            "English article body with enough words for batch analysis.",
+            1,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    calls = []
+
+    def fake_analyze(title, text):
+        calls.append((title, text))
+        if len(calls) == 1:
+            raise TimeoutError("Request timed out")
+        return "这是 AI 分析摘要，长度足够用于断言。"
+
+    monkeypatch.setattr("ai_client.analyze_article", fake_analyze)
+
+    pipeline_api._batch_analyze()
+
+    assert len(calls) == 2
+    assert pipeline_api._analyze_state["failed"] == 0
+    assert pipeline_api._analyze_state["done"] == 1
+    assert any("已排到队列末尾重试" in line for line in pipeline_api._analyze_state["log"])
+
+    conn = sqlite3.connect(test_db_path)
+    analyzed = conn.execute("SELECT ai_summary, ai_analyzed FROM articles WHERE id=1").fetchone()
+    conn.close()
+    assert analyzed[0] == "这是 AI 分析摘要，长度足够用于断言。"
+    assert analyzed[1] == 1
 
 
 # ══════════════════════════════════════════════════════════════

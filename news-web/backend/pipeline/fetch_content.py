@@ -75,7 +75,7 @@ def download_page(url: str) -> dict:
     except urllib.error.HTTPError as e:
         return {'html': '', 'error': f'HTTP {e.code}'}
     except Exception as e:
-        return {'html': '', 'error': str(e)[:80]}
+        return {'html': '', 'error': str(e)[:300]}
 
 
 def extract_img_srcs(html: str, base_url: str) -> list:
