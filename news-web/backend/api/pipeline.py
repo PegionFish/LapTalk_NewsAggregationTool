@@ -75,6 +75,7 @@ def _batch_translate():
             FROM articles
             WHERE local_path != '' AND local_path NOT LIKE '[ERR:%'
               AND (translated_content IS NULL OR translated_content = '')
+              AND category NOT IN ('platform_hotlists', 'bilibili_videos')
             ORDER BY id DESC
         """).fetchall()
         db.close()
@@ -87,7 +88,7 @@ def _batch_translate():
         _log(_translate_state, f"待处理 {len(rows)} 篇 — HTML 直传 LLM 翻译")
 
         from utils.text import extract_text_from_html, detect_language
-        from translation_client import translate_to_chinese
+        from translation_client import translate_html
 
         retry_counts: dict[int, int] = {}
         retry_queue: list[tuple[int, str, str]] = []
@@ -141,7 +142,7 @@ def _batch_translate():
             # HTML 直传 LLM 翻译，保留全部标签结构
             try:
                 _log(_translate_state, f"#{aid} 📡 翻译中... (HTML {len(html)//1024}KB, 模型: {config.translation_model})")
-                translation = translate_to_chinese(html)
+                translation = translate_html(html)
                 if translation and len(translation) > 20:
                     db2 = _conn()
                     db2.execute(
@@ -162,7 +163,7 @@ def _batch_translate():
                 ):
                     retry_queue.append((aid, title, html))
                     continue
-                _log(_translate_state, f"#{aid} ❌ API 调用失败: {str(e)[:80]}")
+                _log(_translate_state, f"#{aid} ❌ API 调用失败: {str(e)[:300]}")
                 _translate_state["failed"] += 1
                 _translate_state["done"] += 1
                 continue
@@ -170,13 +171,13 @@ def _batch_translate():
             _translate_state["done"] += 1
 
             if idx < len(rows):
-                time.sleep(3)
+                time.sleep(5)
 
         for aid, title, html in retry_queue:
             _translate_state["current"] = f"#{aid} {title[:50]}"
             _log(_translate_state, f"#{aid} 🔄 重试翻译请求...")
             try:
-                translation = translate_to_chinese(html)
+                translation = translate_html(html)
                 if translation and len(translation) > 20:
                     db2 = _conn()
                     db2.execute(
@@ -195,7 +196,7 @@ def _batch_translate():
                 if _is_request_timeout_error(e):
                     _log(_translate_state, f"#{aid} ❌ API 调用失败: Request Timed Out（重试后仍超时）")
                 else:
-                    _log(_translate_state, f"#{aid} ❌ API 调用失败: {str(e)[:80]}")
+                    _log(_translate_state, f"#{aid} ❌ API 调用失败: {str(e)[:300]}")
                 _translate_state["failed"] += 1
                 _translate_state["done"] += 1
                 continue
@@ -223,6 +224,7 @@ def _batch_analyze():
             FROM articles
             WHERE text_content != ''
               AND (ai_analyzed IS NULL OR ai_analyzed = 0 OR ai_summary IS NULL OR ai_summary = '')
+              AND category NOT IN ('platform_hotlists', 'bilibili_videos')
             ORDER BY id DESC
         """).fetchall()
         db.close()
@@ -265,7 +267,7 @@ def _batch_analyze():
                 ):
                     retry_queue.append((aid, title, text))
                     continue
-                _log(_analyze_state, f"#{aid} ❌ API 调用失败: {str(e)[:80]}")
+                _log(_analyze_state, f"#{aid} ❌ API 调用失败: {str(e)[:300]}")
                 _analyze_state["failed"] += 1
                 _analyze_state["done"] += 1
                 continue
@@ -273,7 +275,7 @@ def _batch_analyze():
             _analyze_state["done"] += 1
 
             if idx < len(rows):
-                time.sleep(1)  # 篇间短暂延迟
+                time.sleep(5)  # 篇间延迟，防 API 限频
 
         for aid, title, text in retry_queue:
             _analyze_state["current"] = f"#{aid} {title[:50]}"
@@ -298,7 +300,7 @@ def _batch_analyze():
                 if _is_request_timeout_error(e):
                     _log(_analyze_state, f"#{aid} ❌ API 调用失败: Request Timed Out（重试后仍超时）")
                 else:
-                    _log(_analyze_state, f"#{aid} ❌ API 调用失败: {str(e)[:80]}")
+                    _log(_analyze_state, f"#{aid} ❌ API 调用失败: {str(e)[:300]}")
                 _analyze_state["failed"] += 1
                 _analyze_state["done"] += 1
                 continue
@@ -463,6 +465,7 @@ def start_batch_translate():
         SELECT COUNT(*) FROM articles
         WHERE local_path != '' AND local_path NOT LIKE '[ERR:%'
           AND (translated_content IS NULL OR translated_content = '')
+          AND category NOT IN ('platform_hotlists', 'bilibili_videos')
     """).fetchone()[0]
     db.close()
 
@@ -479,11 +482,13 @@ def get_batch_translate_status():
             SELECT COUNT(*) FROM articles
             WHERE local_path != '' AND local_path NOT LIKE '[ERR:%'
               AND (translated_content IS NULL OR translated_content = '')
+              AND category NOT IN ('platform_hotlists', 'bilibili_videos')
         """).fetchone()[0]
         done = db.execute("""
             SELECT COUNT(*) FROM articles
             WHERE local_path != '' AND local_path NOT LIKE '[ERR:%'
               AND translated_content != ''
+              AND category NOT IN ('platform_hotlists', 'bilibili_videos')
         """).fetchone()[0]
         db.close()
         return {"running": True, "total": total, "done": done, "failed": 0,
@@ -502,6 +507,7 @@ def start_batch_analyze():
         SELECT COUNT(*) FROM articles
         WHERE text_content != ''
           AND (ai_analyzed IS NULL OR ai_analyzed = 0 OR ai_summary IS NULL OR ai_summary = '')
+          AND category NOT IN ('platform_hotlists', 'bilibili_videos')
     """).fetchone()[0]
     db.close()
     threading.Thread(target=_batch_analyze, daemon=True).start()
@@ -517,9 +523,11 @@ def get_batch_analyze_status():
             SELECT COUNT(*) FROM articles
             WHERE text_content != ''
               AND (ai_analyzed IS NULL OR ai_analyzed = 0 OR ai_summary IS NULL OR ai_summary = '')
+              AND category NOT IN ('platform_hotlists', 'bilibili_videos')
         """).fetchone()[0]
         done = db.execute("""
             SELECT COUNT(*) FROM articles WHERE ai_analyzed = 1 AND ai_summary != ''
+              AND category NOT IN ('platform_hotlists', 'bilibili_videos')
         """).fetchone()[0]
         db.close()
         return {"running": True, "total": total, "done": done, "failed": 0,
@@ -567,7 +575,7 @@ def _batch_ai_keywords():
     _kw_state = _new_state(); _kw_state["running"] = True
     try:
         db = _conn()
-        rows = db.execute("SELECT id, title, text_content, source FROM articles WHERE text_content != '' AND (ai_keywords IS NULL OR ai_keywords = '') ORDER BY id DESC").fetchall(); db.close()
+        rows = db.execute("SELECT id, title, text_content, source FROM articles WHERE text_content != '' AND (ai_keywords IS NULL OR ai_keywords = '') AND category NOT IN ('platform_hotlists', 'bilibili_videos') ORDER BY id DESC").fetchall(); db.close()
         if not rows: _kw_state["running"] = False; return
         _kw_state["total"] = len(rows)
         _log(_kw_state, f"待提取关键词 {len(rows)} 篇")
@@ -586,7 +594,7 @@ def _batch_ai_keywords():
                 if _is_request_timeout_error(e) and _queue_timeout_retry(_kw_state, aid, retry_counts):
                     retry_queue.append((aid, title, text, source or ""))
                     continue
-                _log(_kw_state, f"#{aid} ❌ API 调用失败: {str(e)[:80]}")
+                _log(_kw_state, f"#{aid} ❌ API 调用失败: {str(e)[:300]}")
                 _kw_state["failed"] += 1; _kw_state["done"] += 1
                 continue
             if kws:
@@ -597,7 +605,7 @@ def _batch_ai_keywords():
             else:
                 _log(_kw_state, f"#{aid} ⚠️ AI 返回空"); _kw_state["failed"] += 1
             _kw_state["done"] += 1
-            time.sleep(0.8) if idx < len(rows) else None
+            time.sleep(5) if idx < len(rows) else None
 
         for aid, title, text, source in retry_queue:
             _kw_state["current"] = f"#{aid} {title[:50]}"
@@ -615,7 +623,7 @@ def _batch_ai_keywords():
                 if _is_request_timeout_error(e):
                     _log(_kw_state, f"#{aid} ❌ API 调用失败: Request Timed Out（重试后仍超时）")
                 else:
-                    _log(_kw_state, f"#{aid} ❌ API 调用失败: {str(e)[:80]}")
+                    _log(_kw_state, f"#{aid} ❌ API 调用失败: {str(e)[:300]}")
                 _kw_state["failed"] += 1
             _kw_state["done"] += 1
     except Exception as e: logger.error(f"batch-keywords: {e}")
@@ -627,7 +635,7 @@ def _batch_ai_classify():
     _cls_state = _new_state(); _cls_state["running"] = True
     try:
         db = _conn()
-        rows = db.execute("SELECT id, title, text_content FROM articles WHERE text_content != '' AND (ai_category IS NULL OR ai_category = '') ORDER BY id DESC").fetchall(); db.close()
+        rows = db.execute("SELECT id, title, text_content FROM articles WHERE text_content != '' AND (ai_category IS NULL OR ai_category = '') AND category NOT IN ('platform_hotlists', 'bilibili_videos') ORDER BY id DESC").fetchall(); db.close()
         if not rows: _cls_state["running"] = False; return
         _cls_state["total"] = len(rows)
         _log(_cls_state, f"待分类 {len(rows)} 篇")
@@ -646,7 +654,7 @@ def _batch_ai_classify():
                 if _is_request_timeout_error(e) and _queue_timeout_retry(_cls_state, aid, retry_counts):
                     retry_queue.append((aid, title, text))
                     continue
-                _log(_cls_state, f"#{aid} ❌ API 调用失败: {str(e)[:80]}")
+                _log(_cls_state, f"#{aid} ❌ API 调用失败: {str(e)[:300]}")
                 _cls_state["failed"] += 1; _cls_state["done"] += 1
                 continue
             if r:
@@ -657,7 +665,7 @@ def _batch_ai_classify():
             else:
                 _log(_cls_state, f"#{aid} ⚠️ AI 返回空"); _cls_state["failed"] += 1
             _cls_state["done"] += 1
-            time.sleep(0.8) if idx < len(rows) else None
+            time.sleep(5) if idx < len(rows) else None
 
         for aid, title, text in retry_queue:
             _cls_state["current"] = f"#{aid} {title[:50]}"
@@ -675,7 +683,7 @@ def _batch_ai_classify():
                 if _is_request_timeout_error(e):
                     _log(_cls_state, f"#{aid} ❌ API 调用失败: Request Timed Out（重试后仍超时）")
                 else:
-                    _log(_cls_state, f"#{aid} ❌ API 调用失败: {str(e)[:80]}")
+                    _log(_cls_state, f"#{aid} ❌ API 调用失败: {str(e)[:300]}")
                 _cls_state["failed"] += 1
             _cls_state["done"] += 1
     except Exception as e: logger.error(f"batch-classify: {e}")
@@ -687,7 +695,7 @@ def _batch_ai_score():
     _score_state = _new_state(); _score_state["running"] = True
     try:
         db = _conn()
-        rows = db.execute("SELECT id, title, text_content, source, fetched_at FROM articles WHERE text_content != '' AND (ai_priority_score IS NULL OR ai_priority_score = 0.0) ORDER BY id DESC").fetchall(); db.close()
+        rows = db.execute("SELECT id, title, text_content, source, fetched_at FROM articles WHERE text_content != '' AND (ai_priority_score IS NULL OR ai_priority_score = 0.0) AND category NOT IN ('platform_hotlists', 'bilibili_videos') ORDER BY id DESC").fetchall(); db.close()
         if not rows: _score_state["running"] = False; return
         _score_state["total"] = len(rows)
         _log(_score_state, f"待评分 {len(rows)} 篇")
@@ -710,7 +718,7 @@ def _batch_ai_score():
                 if _is_request_timeout_error(e) and _queue_timeout_retry(_score_state, aid, retry_counts):
                     retry_queue.append((aid, title, text, source or "Unknown", fetched_at or ""))
                     continue
-                _log(_score_state, f"#{aid} ❌ API 调用失败: {str(e)[:80]}")
+                _log(_score_state, f"#{aid} ❌ API 调用失败: {str(e)[:300]}")
                 _score_state["failed"] += 1; _score_state["done"] += 1
                 continue
             if r:
@@ -721,7 +729,7 @@ def _batch_ai_score():
             else:
                 _log(_score_state, f"#{aid} ⚠️ AI 返回空"); _score_state["failed"] += 1
             _score_state["done"] += 1
-            time.sleep(0.8) if idx < len(rows) else None
+            time.sleep(5) if idx < len(rows) else None
 
         for aid, title, text, source, fetched_at in retry_queue:
             _score_state["current"] = f"#{aid} {title[:50]}"
@@ -743,7 +751,7 @@ def _batch_ai_score():
                 if _is_request_timeout_error(e):
                     _log(_score_state, f"#{aid} ❌ API 调用失败: Request Timed Out（重试后仍超时）")
                 else:
-                    _log(_score_state, f"#{aid} ❌ API 调用失败: {str(e)[:80]}")
+                    _log(_score_state, f"#{aid} ❌ API 调用失败: {str(e)[:300]}")
                 _score_state["failed"] += 1
             _score_state["done"] += 1
     except Exception as e: logger.error(f"batch-score: {e}")
@@ -755,7 +763,7 @@ def _batch_ai_recluster():
     _recluster_state = _new_state(); _recluster_state["running"] = True
     try:
         db = _conn()
-        unlinked = db.execute("SELECT a.id, a.title FROM articles a LEFT JOIN article_events ae ON a.id=ae.article_id WHERE ae.article_id IS NULL AND a.text_content!=''").fetchall()
+        unlinked = db.execute("SELECT a.id, a.title FROM articles a LEFT JOIN article_events ae ON a.id=ae.article_id WHERE ae.article_id IS NULL AND a.text_content!='' AND a.category NOT IN ('platform_hotlists', 'bilibili_videos')").fetchall()
         events  = db.execute("SELECT id, title FROM events WHERE status='active'").fetchall()
         db.close()
         if not unlinked: _recluster_state["running"] = False; return
@@ -779,7 +787,7 @@ def _batch_ai_recluster():
                     if _is_request_timeout_error(cmp_err):
                         timed_out = True
                         break
-                    _log(_recluster_state, f"#{aid} ⚠️ 与事件#{evt_id}比对失败: {str(cmp_err)[:60]}")
+                    _log(_recluster_state, f"#{aid} ⚠️ 与事件#{evt_id}比对失败: {str(cmp_err)[:300]}")
             if timed_out and _queue_timeout_retry(_recluster_state, aid, retry_counts):
                 retry_queue.append((aid, art_title))
                 continue
@@ -798,7 +806,7 @@ def _batch_ai_recluster():
                 db2.execute("INSERT INTO article_events (article_id, event_id) VALUES (?,?)", (aid, cur.lastrowid))
                 db2.commit(); db2.close()
             _recluster_state["done"] += 1
-            time.sleep(1.0) if idx < len(unlinked) else None
+            time.sleep(5) if idx < len(unlinked) else None
 
         for aid, art_title in retry_queue:
             _recluster_state["current"] = f"#{aid} {art_title[:50]}"
@@ -830,7 +838,7 @@ def _batch_ai_recluster():
                 if _is_request_timeout_error(e):
                     _log(_recluster_state, f"#{aid} ❌ API 调用失败: Request Timed Out（重试后仍超时）")
                 else:
-                    _log(_recluster_state, f"#{aid} ❌ API 调用失败: {str(e)[:80]}")
+                    _log(_recluster_state, f"#{aid} ❌ API 调用失败: {str(e)[:300]}")
                 _recluster_state["failed"] += 1
             _recluster_state["done"] += 1
     except Exception as e: logger.error(f"batch-recluster: {e}")
@@ -864,7 +872,7 @@ def _batch_ai_summarize_events():
                 if _is_request_timeout_error(e) and _queue_timeout_retry(_evt_sum_state, evt_id, retry_counts):
                     retry_queue.append(evt_id)
                     continue
-                _log(_evt_sum_state, f"#{evt_id} ❌ API 调用失败: {str(e)[:80]}")
+                _log(_evt_sum_state, f"#{evt_id} ❌ API 调用失败: {str(e)[:300]}")
                 _evt_sum_state["failed"] += 1; _evt_sum_state["done"] += 1
                 continue
             if summary:
@@ -875,7 +883,7 @@ def _batch_ai_summarize_events():
             else:
                 _log(_evt_sum_state, f"#{evt_id} ⚠️ AI 返回空"); _evt_sum_state["failed"] += 1
             _evt_sum_state["done"] += 1
-            time.sleep(0.8) if idx < len(events) else None
+            time.sleep(5) if idx < len(events) else None
 
         for evt_id in retry_queue:
             _evt_sum_state["current"] = f"事件#{evt_id}"
@@ -898,7 +906,7 @@ def _batch_ai_summarize_events():
                 if _is_request_timeout_error(e):
                     _log(_evt_sum_state, f"#{evt_id} ❌ API 调用失败: Request Timed Out（重试后仍超时）")
                 else:
-                    _log(_evt_sum_state, f"#{evt_id} ❌ API 调用失败: {str(e)[:80]}")
+                    _log(_evt_sum_state, f"#{evt_id} ❌ API 调用失败: {str(e)[:300]}")
                 _evt_sum_state["failed"] += 1
             _evt_sum_state["done"] += 1
     except Exception as e: logger.error(f"batch-summarize-events: {e}")
@@ -923,7 +931,7 @@ def _batch_status(state, total_label: str, done_label: str):
 def start_batch_keywords():
     global _kw_state
     if _kw_state.get("running"): return {"ok": False, "message": "关键词提取已在运行中"}
-    db = _conn(); n = db.execute("SELECT COUNT(*) FROM articles WHERE text_content!='' AND (ai_keywords IS NULL OR ai_keywords='')").fetchone()[0]; db.close()
+    db = _conn(); n = db.execute("SELECT COUNT(*) FROM articles WHERE text_content!='' AND (ai_keywords IS NULL OR ai_keywords='') AND category NOT IN ('platform_hotlists', 'bilibili_videos')").fetchone()[0]; db.close()
     threading.Thread(target=_batch_ai_keywords, daemon=True).start()
     return {"ok": True, "message": f"启动 AI 关键词提取，预计 {n} 篇", "pending": n}
 
@@ -931,7 +939,7 @@ def start_batch_keywords():
 def start_batch_classify():
     global _cls_state
     if _cls_state.get("running"): return {"ok": False, "message": "分类已在运行中"}
-    db = _conn(); n = db.execute("SELECT COUNT(*) FROM articles WHERE text_content!='' AND (ai_category IS NULL OR ai_category='')").fetchone()[0]; db.close()
+    db = _conn(); n = db.execute("SELECT COUNT(*) FROM articles WHERE text_content!='' AND (ai_category IS NULL OR ai_category='') AND category NOT IN ('platform_hotlists', 'bilibili_videos')").fetchone()[0]; db.close()
     threading.Thread(target=_batch_ai_classify, daemon=True).start()
     return {"ok": True, "message": f"启动 AI 分类，预计 {n} 篇", "pending": n}
 
@@ -939,7 +947,7 @@ def start_batch_classify():
 def start_batch_score():
     global _score_state
     if _score_state.get("running"): return {"ok": False, "message": "评分已在运行中"}
-    db = _conn(); n = db.execute("SELECT COUNT(*) FROM articles WHERE text_content!='' AND (ai_priority_score IS NULL OR ai_priority_score=0.0)").fetchone()[0]; db.close()
+    db = _conn(); n = db.execute("SELECT COUNT(*) FROM articles WHERE text_content!='' AND (ai_priority_score IS NULL OR ai_priority_score=0.0) AND category NOT IN ('platform_hotlists', 'bilibili_videos')").fetchone()[0]; db.close()
     threading.Thread(target=_batch_ai_score, daemon=True).start()
     return {"ok": True, "message": f"启动 AI 评分，预计 {n} 篇", "pending": n}
 
@@ -947,7 +955,7 @@ def start_batch_score():
 def start_batch_recluster():
     global _recluster_state
     if _recluster_state.get("running"): return {"ok": False, "message": "重聚类已在运行中"}
-    db = _conn(); n = db.execute("SELECT COUNT(*) FROM articles a LEFT JOIN article_events ae ON a.id=ae.article_id WHERE ae.article_id IS NULL AND a.text_content!=''").fetchone()[0]; db.close()
+    db = _conn(); n = db.execute("SELECT COUNT(*) FROM articles a LEFT JOIN article_events ae ON a.id=ae.article_id WHERE ae.article_id IS NULL AND a.text_content!='' AND a.category NOT IN ('platform_hotlists', 'bilibili_videos')").fetchone()[0]; db.close()
     threading.Thread(target=_batch_ai_recluster, daemon=True).start()
     return {"ok": True, "message": f"启动智能重聚类，预计 {n} 篇", "pending": n}
 
@@ -1019,7 +1027,7 @@ def _batch_ai_full():
             fn()
             # 等待子任务完成（子任务的 running 为 False 即完成）
             while st.get("running"):
-                time.sleep(2)
+                time.sleep(5)
             _log(_full_state, f"✅ {label} 完成")
             if _full_state["steps"]:
                 _full_state["steps"][idx - 1]["status"] = "done"
