@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
+import { api } from '../../api/client';
 
 interface CacheStatus {
   checked_at: string;
@@ -18,6 +19,17 @@ interface CacheStatus {
     en_articles: number;
   };
   recent: { id: number; title: string; source: string; fetched_at: string }[];
+  uncached_articles: { id: number; title: string; source: string }[];
+  uncached_count: number;
+}
+
+interface CacheFetchState {
+  running: boolean;
+  total: number;
+  done: number;
+  failed: number;
+  current: string;
+  log: string[];
 }
 
 interface Props {
@@ -29,13 +41,15 @@ export default function CacheSettings({ cachePath, setCachePath }: Props) {
   const [checking, setChecking] = useState(false);
   const [cleaning, setCleaning] = useState(false);
   const [verifying, setVerifying] = useState(false);
+  const [fetchState, setFetchState] = useState<CacheFetchState>({ running: false, total: 0, done: 0, failed: 0, current: '', log: [] });
+  const [fetching, setFetching] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setInterval>>();
 
   const handleCheck = async () => {
     setChecking(true);
     try {
-      const r = await fetch('/api/cache/status');
-      const d = await r.json();
-      setStatus(d);
+      const d = await api.getCacheStatus();
+      setStatus(d as unknown as CacheStatus);
     } catch { setStatus(null); }
     setChecking(false);
   };
@@ -57,6 +71,35 @@ export default function CacheSettings({ cachePath, setCachePath }: Props) {
     handleCheck();
     setCleaning(false);
   };
+
+  // 启动缓存抓取
+  const handleStartFetch = async () => {
+    setFetching(true);
+    try {
+      await api.startCacheFetch();
+      timerRef.current = setInterval(pollFetch, 2000);
+    } catch { setFetching(false); }
+  };
+
+  // 轮询抓取状态
+  const pollFetch = async () => {
+    try {
+      const s = await api.getCacheFetchStatus();
+      setFetchState(s as unknown as CacheFetchState);
+      if (!(s as unknown as CacheFetchState).running) {
+        clearInterval(timerRef.current);
+        setFetching(false);
+        handleCheck(); // 刷新状态
+      }
+    } catch { clearInterval(timerRef.current); setFetching(false); }
+  };
+
+  // 检查是否有未缓存文章时自动提示
+  useEffect(() => {
+    if (status && status.uncached_count > 0 && !fetchState.running) {
+      setFetching(false);
+    }
+  }, [status]);
 
   const s = status?.summary;
 
@@ -83,7 +126,7 @@ export default function CacheSettings({ cachePath, setCachePath }: Props) {
       <div className="settings-card">
         <div className="card-header">
           <h3><i className="fas fa-heartbeat" /> 缓存健康检查</h3>
-          <p className="card-description">诊断磁盘文件完整性、DB 记录一致性、翻译覆盖率</p>
+          <p className="card-description">诊断磁盘文件完整性、DB 记录一致性、翻译覆盖率（仅统计 RSS 新闻）</p>
         </div>
         <div className="card-body">
           <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
@@ -136,6 +179,60 @@ export default function CacheSettings({ cachePath, setCachePath }: Props) {
                   }} />
                 </div>
               </div>
+
+              {/* 未缓存文章提示 */}
+              {status!.uncached_count > 0 && (
+                <div style={{
+                  marginTop: 16, padding: '12px 16px', background: 'rgba(255, 183, 77, 0.1)',
+                  border: '1px solid rgba(255, 183, 77, 0.3)', borderRadius: 8,
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--accent-orange)' }}>
+                      <i className="fas fa-exclamation-triangle" style={{ marginRight: 6 }} />
+                      {status!.uncached_count} 篇文章未缓存
+                    </span>
+                    <button
+                      className="btn btn-primary"
+                      style={{ padding: '6px 14px', fontSize: 12 }}
+                      onClick={handleStartFetch}
+                      disabled={fetching || fetchState.running}
+                    >
+                      <i className={`fas fa-${fetching || fetchState.running ? 'spinner fa-spin' : 'download'}`} />
+                      {' '}{fetchState.running ? `抓取中 ${fetchState.done}/${fetchState.total}` : '开始缓存'}
+                    </button>
+                  </div>
+
+                  {/* 抓取进度 */}
+                  {fetchState.running && (
+                    <div style={{ marginBottom: 8 }}>
+                      <div style={{ height: 4, background: 'var(--bg-primary)', borderRadius: 2, overflow: 'hidden', marginBottom: 4 }}>
+                        <div style={{
+                          height: '100%', borderRadius: 2, transition: 'width 0.3s',
+                          width: `${fetchState.total > 0 ? (fetchState.done / fetchState.total) * 100 : 0}%`,
+                          background: 'var(--accent)',
+                        }} />
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                        {fetchState.current} · 失败 {fetchState.failed}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 未缓存文章列表 */}
+                  <div style={{ maxHeight: 120, overflow: 'auto', fontSize: 11 }}>
+                    {status!.uncached_articles.slice(0, 10).map(a => (
+                      <div key={a.id} style={{ padding: '2px 0', color: 'var(--text-secondary)' }}>
+                        #{a.id} {a.title.slice(0, 50)} <span style={{ color: 'var(--text-muted)' }}>({a.source})</span>
+                      </div>
+                    ))}
+                    {status!.uncached_count > 10 && (
+                      <div style={{ color: 'var(--text-muted)', padding: '4px 0' }}>
+                        ... 还有 {status!.uncached_count - 10} 篇
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* 最近下载 */}
               {status!.recent.length > 0 && (

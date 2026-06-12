@@ -242,4 +242,23 @@ export const api = {
 
   getFetchLogs: (limit = 50) =>
     fetchJSON<{ logs: import('../types').FetchLog[] }>(`/fetch/logs?limit=${limit}`),
+
+  // ── 缓存管理 ──────────────────────────────────────────
+  getCacheStatus: () =>
+    fetchJSON<{
+      checked_at: string; cache_dir: string;
+      summary: { total_articles: number; with_url: number; cached_db: number; cached_disk: number;
+        missing_disk: number; orphan_files: number; with_text: number; with_translation: number;
+        pending_download: number; failed_download: number; en_articles: number; };
+      recent: { id: number; title: string; source: string; fetched_at: string }[];
+      missing_on_disk: number[]; orphan_files: number[];
+      uncached_articles: { id: number; title: string; source: string }[];
+      uncached_count: number;
+    }>('/cache/status'),
+
+  startCacheFetch: () =>
+    fetchJSON<{ ok: boolean; message?: string }>('/cache/fetch/start', { method: 'POST' }),
+
+  getCacheFetchStatus: () =>
+    fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string; log: string[] }>('/cache/fetch/status'),
 };

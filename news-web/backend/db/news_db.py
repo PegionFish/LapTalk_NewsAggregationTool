@@ -112,7 +112,7 @@ SOURCE_TIERS = {
     'Digital Trends': 0.6,
     '36Kr': 0.4, '钛媒体': 0.4, '爱范儿': 0.4, '少数派': 0.4,
     '机器之心': 0.4, '雷锋网': 0.4, 'Solidot': 0.4,
-    'BBC Technology': 0.6, 'BBC World': 0.4, 'NPR Technology': 0.6,
+    'BBC Technology': 0.6, 'NPR Technology': 0.6,
     'Liliputing': 0.6, 'Android Police': 0.6, 'XDA Developers': 0.6,
     'MIT Tech Review': 0.8, 'The Decoder': 0.6, 'AI News': 0.4, 'MarkTechPost': 0.4,
     'VentureBeat AI': 0.6,
@@ -1237,13 +1237,17 @@ class NewsDB:
             """, (today,)).fetchone()
             hl_health = self._compute_source_health(conn, 'hotlist')
 
-            # 缓存统计
-            total = conn.execute("SELECT COUNT(*) FROM articles").fetchone()[0]
+            # 缓存统计 — 仅 RSS 新闻，排除热榜
+            total = conn.execute(
+                "SELECT COUNT(*) FROM articles WHERE category NOT IN ('platform_hotlists', 'bilibili_videos')"
+            ).fetchone()[0]
             cached = conn.execute(
-                "SELECT COUNT(*) FROM articles WHERE local_path != '' AND local_path NOT LIKE '[ERR:%'"
+                "SELECT COUNT(*) FROM articles WHERE local_path != '' AND local_path NOT LIKE '[ERR:%' "
+                "AND category NOT IN ('platform_hotlists', 'bilibili_videos')"
             ).fetchone()[0]
             failed = conn.execute(
-                "SELECT COUNT(*) FROM articles WHERE local_path LIKE '[ERR:%'"
+                "SELECT COUNT(*) FROM articles WHERE local_path LIKE '[ERR:%' "
+                "AND category NOT IN ('platform_hotlists', 'bilibili_videos')"
             ).fetchone()[0]
             pending = total - cached - failed
             cached_pct = round(cached / total * 100, 1) if total > 0 else 0.0

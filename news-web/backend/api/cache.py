@@ -1,7 +1,7 @@
 """
 缓存状态检查 API — 诊断本地内容缓存的完整性。
 """
-import os, sqlite3
+import os, sqlite3, threading
 from datetime import datetime
 from fastapi import APIRouter, BackgroundTasks
 
@@ -9,6 +9,12 @@ from config import config
 from db.news_db import NewsDB
 
 router = APIRouter(prefix="/api/cache", tags=["cache"])
+
+# 热榜排除过滤条件
+_HOTLIST_EXCLUDE = "category NOT IN ('platform_hotlists', 'bilibili_videos')"
+
+# 缓存抓取状态
+_cache_fetch_state = {"running": False, "total": 0, "done": 0, "failed": 0, "current": "", "log": []}
 
 
 def _get_conn():
@@ -34,23 +40,23 @@ def _scan_cache_dir() -> set:
 
 @router.get("/status")
 def cache_status():
-    """检查内容缓存状态 — 统计磁盘/DB/URL 各维度。"""
+    """检查内容缓存状态 — 仅统计 RSS 新闻，排除热榜。"""
     conn = _get_conn()
     if not conn:
         return {'error': 'database_not_configured'}
 
-    total = conn.execute("SELECT COUNT(*) FROM articles").fetchone()[0]
-    with_url = conn.execute("SELECT COUNT(*) FROM articles WHERE url != '' AND url LIKE 'http%'").fetchone()[0]
+    total = conn.execute(f"SELECT COUNT(*) FROM articles WHERE {_HOTLIST_EXCLUDE}").fetchone()[0]
+    with_url = conn.execute(f"SELECT COUNT(*) FROM articles WHERE url != '' AND url LIKE 'http%' AND {_HOTLIST_EXCLUDE}").fetchone()[0]
     with_local = conn.execute(
-        "SELECT COUNT(*) FROM articles WHERE local_path != '' AND local_path NOT LIKE '[ERR:%'"
+        f"SELECT COUNT(*) FROM articles WHERE local_path != '' AND local_path NOT LIKE '[ERR:%' AND {_HOTLIST_EXCLUDE}"
     ).fetchone()[0]
     with_err = conn.execute(
-        "SELECT COUNT(*) FROM articles WHERE local_path LIKE '[ERR:%'"
+        f"SELECT COUNT(*) FROM articles WHERE local_path LIKE '[ERR:%' AND {_HOTLIST_EXCLUDE}"
     ).fetchone()[0]
-    pending = total - with_local - with_err  # 从未尝试下载
-    with_text = conn.execute("SELECT COUNT(*) FROM articles WHERE text_content != ''").fetchone()[0]
-    with_translation = conn.execute("SELECT COUNT(*) FROM articles WHERE translated_content != ''").fetchone()[0]
-    en_articles = conn.execute("SELECT COUNT(*) FROM articles WHERE content_lang='en'").fetchone()[0]
+    pending = total - with_local - with_err
+    with_text = conn.execute(f"SELECT COUNT(*) FROM articles WHERE text_content != '' AND {_HOTLIST_EXCLUDE}").fetchone()[0]
+    with_translation = conn.execute(f"SELECT COUNT(*) FROM articles WHERE translated_content != '' AND {_HOTLIST_EXCLUDE}").fetchone()[0]
+    en_articles = conn.execute(f"SELECT COUNT(*) FROM articles WHERE content_lang='en' AND {_HOTLIST_EXCLUDE}").fetchone()[0]
 
     # 磁盘文件统计
     disk_ids = _scan_cache_dir()
@@ -58,15 +64,23 @@ def cache_status():
 
     # 交叉比对：DB 有记录但磁盘文件缺失
     db_ids = set()
-    for (row,) in conn.execute("SELECT id FROM articles WHERE local_path != '' AND local_path NOT LIKE '[ERR:%'"):
+    for (row,) in conn.execute(f"SELECT id FROM articles WHERE local_path != '' AND local_path NOT LIKE '[ERR:%' AND {_HOTLIST_EXCLUDE}"):
         db_ids.add(row)
     missing_on_disk = sorted(db_ids - disk_ids)
     orphan_files = sorted(disk_ids - db_ids)
 
+    # 未缓存的文章列表（有 URL 但无 local_path）
+    uncached_rows = conn.execute(
+        f"SELECT id, title, source FROM articles WHERE url != '' AND url LIKE 'http%' "
+        f"AND (local_path = '' OR local_path IS NULL) AND {_HOTLIST_EXCLUDE} "
+        f"ORDER BY id DESC LIMIT 100"
+    ).fetchall()
+
     # 最近下载
     recent = conn.execute(
-        "SELECT id, title, source, content_fetched_at FROM articles "
-        "WHERE content_fetched_at IS NOT NULL ORDER BY content_fetched_at DESC LIMIT 10"
+        f"SELECT id, title, source, content_fetched_at FROM articles "
+        f"WHERE content_fetched_at IS NOT NULL AND {_HOTLIST_EXCLUDE} "
+        f"ORDER BY content_fetched_at DESC LIMIT 10"
     ).fetchall()
 
     conn.close()
@@ -77,23 +91,86 @@ def cache_status():
         'summary': {
             'total_articles': total,
             'with_url': with_url,
-            'cached_db': with_local,           # DB 有 local_path 记录
-            'cached_disk': disk_count,         # 磁盘文件实际存在
-            'missing_disk': len(missing_on_disk),     # DB 有记录但文件缺失
-            'orphan_files': len(orphan_files),        # 磁盘有文件但 DB 无记录
-            'with_text': with_text,            # 纯文本已提取
-            'with_translation': with_translation,     # 翻译已完成
-            'pending_download': pending,       # 从未尝试下载
-            'failed_download': with_err,       # 下载失败
-            'en_articles': en_articles,        # 英文文章（可翻译）
+            'cached_db': with_local,
+            'cached_disk': disk_count,
+            'missing_disk': len(missing_on_disk),
+            'orphan_files': len(orphan_files),
+            'with_text': with_text,
+            'with_translation': with_translation,
+            'pending_download': pending,
+            'failed_download': with_err,
+            'en_articles': en_articles,
         },
         'recent': [
             {'id': r[0], 'title': r[1][:60], 'source': r[2], 'fetched_at': r[3]}
             for r in recent
         ],
-        'missing_on_disk': missing_on_disk[:50],   # 只返回前 50 个
+        'missing_on_disk': missing_on_disk[:50],
         'orphan_files': orphan_files[:50],
+        'uncached_articles': [
+            {'id': r[0], 'title': r[1][:80], 'source': r[2]}
+            for r in uncached_rows
+        ],
+        'uncached_count': len(uncached_rows),
     }
+
+
+def _batch_cache_fetch():
+    """后台线程：批量抓取未缓存的文章。"""
+    global _cache_fetch_state
+    _cache_fetch_state = {"running": True, "total": 0, "done": 0, "failed": 0, "current": "", "log": []}
+    try:
+        from pipeline.fetch_content import fetch_article_content
+        conn = _get_conn()
+        if not conn:
+            return
+        rows = conn.execute(
+            f"SELECT id, title, url FROM articles WHERE url != '' AND url LIKE 'http%' "
+            f"AND (local_path = '' OR local_path IS NULL) AND {_HOTLIST_EXCLUDE} "
+            f"ORDER BY id DESC"
+        ).fetchall()
+        conn.close()
+
+        if not rows:
+            _cache_fetch_state["running"] = False
+            return
+
+        _cache_fetch_state["total"] = len(rows)
+        _cache_fetch_state["log"].append(f"开始抓取 {len(rows)} 篇未缓存文章")
+
+        for idx, (aid, title, url) in enumerate(rows, 1):
+            _cache_fetch_state["current"] = f"#{aid} {title[:50]}"
+            try:
+                result = fetch_article_content(url, aid)
+                if result and result.get('local_path'):
+                    _cache_fetch_state["done"] += 1
+                    _cache_fetch_state["log"].append(f"#{aid} ✅ {title[:40]}")
+                else:
+                    _cache_fetch_state["failed"] += 1
+                    _cache_fetch_state["log"].append(f"#{aid} ❌ {title[:40]}")
+            except Exception as e:
+                _cache_fetch_state["failed"] += 1
+                _cache_fetch_state["log"].append(f"#{aid} ❌ {str(e)[:60]}")
+    except Exception as e:
+        _cache_fetch_state["log"].append(f"错误: {str(e)[:100]}")
+    finally:
+        _cache_fetch_state["running"] = False
+
+
+@router.get("/fetch/status")
+def get_cache_fetch_status():
+    """查询缓存抓取进度。"""
+    return dict(_cache_fetch_state)
+
+
+@router.post("/fetch/start")
+def start_cache_fetch():
+    """启动批量缓存抓取。"""
+    if _cache_fetch_state.get("running"):
+        return {"ok": False, "message": "抓取任务已在运行中"}
+    _cache_fetch_state["log"] = []
+    threading.Thread(target=_batch_cache_fetch, daemon=True).start()
+    return {"ok": True, "message": "开始抓取未缓存文章"}
 
 
 @router.post("/verify")

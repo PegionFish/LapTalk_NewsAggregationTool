@@ -328,13 +328,6 @@ RSS_FEEDS = [
         'credible': True,
     },
     {
-        'name': 'BBC World',
-        'url': 'https://feeds.bbci.co.uk/news/world/rss.xml',
-        'tag': 'BBC世界',
-        'lang': 'en',
-        'credible': True,
-    },
-    {
         'name': 'NPR Technology',
         'url': 'https://feeds.npr.org/1001/rss.xml',
         'tag': 'NPR科技',
