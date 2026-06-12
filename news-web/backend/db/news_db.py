@@ -1314,6 +1314,8 @@ class NewsDB:
 
     def get_fetch_sources(self, source_type: str = '') -> list:
         """返回所有源的详情列表（含健康状态、缓存覆盖率）。"""
+        # 已从抓取列表中移除的源，不再显示
+        _REMOVED_SOURCES = {'BBC World'}
         with self._conn() as conn:
             where = "WHERE 1=1"
             params = []
@@ -1328,6 +1330,8 @@ class NewsDB:
             """, params).fetchall()
             result = []
             for src_name, category in sources:
+                if src_name in _REMOVED_SOURCES:
+                    continue
                 if category == 'rss_news':
                     stype = 'rss'
                 elif category == 'bilibili_videos':
