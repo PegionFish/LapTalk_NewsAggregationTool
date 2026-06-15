@@ -1,52 +1,73 @@
 """
 批量 AI 处理 API — 遍历数据库，对未处理文章执行翻译或分析。
 后台异步执行，立即返回待处理数量。
+
+全局锁: 同一时间只能运行一个 AI/管道任务。
+状态持久化: 所有状态同步写入 DB，刷新后可恢复。
 """
 import os, sqlite3, time, logging, threading
 from datetime import datetime
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from config import config
 from utils.text import FULL_TEXT_MAX_LENGTH
+from utils.task_lock import task_lock
+from utils.task_state import task_state
 
 router = APIRouter(prefix="/api/pipeline", tags=["pipeline"])
 logger = logging.getLogger(__name__)
 
-# ── 进度追踪（内存）───────────────────────────────────────
-LOG_MAX = 80  # 单次任务最多保留日志条数，防内存膨胀
+# ── 进度追踪（内存 + DB 双写）───────────────────────────────
+LOG_MAX = 80
 
 def _new_state():
     return {"running": False, "total": 0, "done": 0, "failed": 0, "current": "", "log": []}
 
-def _log(state, msg: str):
+def _log(state, msg: str, task_type: str = ''):
     ts = datetime.now().strftime('%H:%M:%S')
     state["log"].append(f"[{ts}] {msg}")
     if len(state["log"]) > LOG_MAX:
         state["log"] = state["log"][-LOG_MAX:]
+    if task_type:
+        task_state.update(task_type, log_msg=msg)
 
+def _sync_state(state: dict, task_type: str):
+    """将内存状态同步到 DB。"""
+    task_state.update(task_type,
+        running=state.get('running', False),
+        total=state.get('total', 0),
+        done=state.get('done', 0),
+        failed=state.get('failed', 0),
+        current=state.get('current', ''),
+    )
 
 def _is_request_timeout_error(exc: Exception) -> bool:
-    """识别 OpenAI 兼容客户端抛出的请求超时异常。"""
     return "request timed out" in str(exc).lower()
 
-
-def _queue_timeout_retry(
-    state: dict,
-    item_id: int,
-    retry_counts: dict[int, int],
-    max_retries: int = 4,
-) -> bool:
-    """判断当前超时任务是否仍可进入队尾重试；最多重试 4 次（共 5 次尝试）。"""
+def _queue_timeout_retry(state, item_id, retry_counts, max_retries=4, task_type=''):
     count = retry_counts.get(item_id, 0) + 1
     retry_counts[item_id] = count
     if count <= max_retries:
-        _log(state, f"#{item_id} ⏳ Request Timed Out，已排到队列末尾重试 ({count}/{max_retries + 1})")
+        _log(state, f"#{item_id} Request Timed Out, retry ({count}/{max_retries + 1})", task_type)
         return True
     return False
 
 # 模块级状态初始化
 _translate_state = _new_state()
 _analyze_state  = _new_state()
+
+
+def _check_and_lock(task_type: str) -> tuple[bool, str]:
+    """检查并获取任务锁。返回 (ok, message)。"""
+    ok, reason = task_lock.acquire(task_type)
+    if not ok:
+        return False, f"无法启动: {reason}"
+    return True, ''
+
+
+def _unlock(task_type: str):
+    """释放任务锁。"""
+    task_lock.release(task_type)
 
 
 def _conn():
@@ -206,6 +227,8 @@ def _batch_translate():
         logger.error(f"Batch translate error: {e}")
     finally:
         _translate_state["running"] = False
+        _unlock('translate')
+        task_state.finish('translate', success=True)
 
 
 # ═════════════════════════════════════════════════════════
@@ -310,6 +333,8 @@ def _batch_analyze():
         logger.error(f"Batch analyze error: {e}")
     finally:
         _analyze_state["running"] = False
+        _unlock('analyze')
+        task_state.finish('analyze', success=True)
 
 
 # ═════════════════════════════════════════════════════════
@@ -394,6 +419,8 @@ def _build_logic_chains():
         logger.error(f"Build chains error: {e}")
     finally:
         _chain_state["running"] = False
+        _unlock('build_chains')
+        task_state.finish('build_chains', success=True)
 
 
 def _batch_ai_rank_events():
@@ -446,6 +473,8 @@ def _batch_ai_rank_events():
         logger.error(f"Batch rank events error: {e}")
     finally:
         _rank_state["running"] = False
+        _unlock('rank_events')
+        task_state.finish('rank_events', success=True)
 
 
 # ═════════════════════════════════════════════════════════
@@ -459,6 +488,10 @@ def start_batch_translate():
     if _translate_state.get("running"):
         return {"ok": False, "message": "翻译任务已在运行中", "state": _translate_state}
 
+    ok, msg = _check_and_lock('translate')
+    if not ok:
+        return {"ok": False, "message": msg}
+
     # 预计算待处理数量
     db = _conn()
     pending = db.execute("""
@@ -469,6 +502,7 @@ def start_batch_translate():
     """).fetchone()[0]
     db.close()
 
+    task_state.init_state('translate', total=pending)
     threading.Thread(target=_batch_translate, daemon=True).start()
     return {"ok": True, "message": f"启动批量翻译，预计 {pending} 篇", "pending": pending}
 
@@ -502,6 +536,9 @@ def start_batch_analyze():
     global _analyze_state
     if _analyze_state.get("running"):
         return {"ok": False, "message": "分析任务已在运行中", "state": _analyze_state}
+    ok, msg = _check_and_lock('analyze')
+    if not ok:
+        return {"ok": False, "message": msg}
     db = _conn()
     pending = db.execute("""
         SELECT COUNT(*) FROM articles
@@ -510,6 +547,7 @@ def start_batch_analyze():
           AND category NOT IN ('platform_hotlists', 'bilibili_videos')
     """).fetchone()[0]
     db.close()
+    task_state.init_state('analyze', total=pending)
     threading.Thread(target=_batch_analyze, daemon=True).start()
     return {"ok": True, "message": f"启动批量分析，预计 {pending} 篇", "pending": pending}
 
@@ -554,7 +592,10 @@ def start_build_chains():
     global _chain_state
     if _chain_state.get("running"):
         return {"ok": False, "message": "链构筑已在运行中", "state": _chain_state}
-
+    ok, msg = _check_and_lock('build_chains')
+    if not ok:
+        return {"ok": False, "message": msg}
+    task_state.init_state('build_chains')
     threading.Thread(target=_build_logic_chains, daemon=True).start()
     return {"ok": True, "message": "开始构筑逻辑链"}
 
@@ -628,7 +669,10 @@ def _batch_ai_keywords():
                 _kw_state["failed"] += 1
             _kw_state["done"] += 1
     except Exception as e: logger.error(f"batch-keywords: {e}")
-    finally: _kw_state["running"] = False
+    finally:
+        _kw_state["running"] = False
+        _unlock('keywords')
+        task_state.finish('keywords', success=True)
 
 
 def _batch_ai_classify():
@@ -688,7 +732,10 @@ def _batch_ai_classify():
                 _cls_state["failed"] += 1
             _cls_state["done"] += 1
     except Exception as e: logger.error(f"batch-classify: {e}")
-    finally: _cls_state["running"] = False
+    finally:
+        _cls_state["running"] = False
+        _unlock('classify')
+        task_state.finish('classify', success=True)
 
 
 def _batch_ai_score():
@@ -756,7 +803,10 @@ def _batch_ai_score():
                 _score_state["failed"] += 1
             _score_state["done"] += 1
     except Exception as e: logger.error(f"batch-score: {e}")
-    finally: _score_state["running"] = False
+    finally:
+        _score_state["running"] = False
+        _unlock('score')
+        task_state.finish('score', success=True)
 
 
 def _batch_ai_recluster():
@@ -843,7 +893,10 @@ def _batch_ai_recluster():
                 _recluster_state["failed"] += 1
             _recluster_state["done"] += 1
     except Exception as e: logger.error(f"batch-recluster: {e}")
-    finally: _recluster_state["running"] = False
+    finally:
+        _recluster_state["running"] = False
+        _unlock('recluster')
+        task_state.finish('recluster', success=True)
 
 
 def _batch_ai_summarize_events():
@@ -911,7 +964,10 @@ def _batch_ai_summarize_events():
                 _evt_sum_state["failed"] += 1
             _evt_sum_state["done"] += 1
     except Exception as e: logger.error(f"batch-summarize-events: {e}")
-    finally: _evt_sum_state["running"] = False
+    finally:
+        _evt_sum_state["running"] = False
+        _unlock('summarize_events')
+        task_state.finish('summarize_events', success=True)
 
 
 # ═════════════════════════════════════════════════════════
@@ -968,6 +1024,8 @@ def _batch_ai_filter():
         logger.error(f"batch-ai-filter: {e}")
     finally:
         _filter_state["running"] = False
+        _unlock('ai_filter')
+        task_state.finish('ai_filter', success=True)
 
 
 @router.post("/batch-ai-filter")
@@ -976,6 +1034,9 @@ def start_batch_ai_filter():
     global _filter_state
     if _filter_state.get("running"):
         return {"ok": False, "message": "AI 筛选已在运行中"}
+    ok, msg = _check_and_lock('ai_filter')
+    if not ok:
+        return {"ok": False, "message": msg}
     db = _conn()
     n = db.execute("""
         SELECT COUNT(*) FROM articles
@@ -984,6 +1045,7 @@ def start_batch_ai_filter():
           AND category NOT IN ('platform_hotlists', 'bilibili_videos')
     """).fetchone()[0]
     db.close()
+    task_state.init_state('ai_filter', total=n)
     threading.Thread(target=_batch_ai_filter, daemon=True).start()
     return {"ok": True, "message": f"启动 AI 预筛选，预计 {n} 篇", "pending": n}
 
@@ -1012,7 +1074,10 @@ def _batch_status(state, total_label: str, done_label: str):
 def start_batch_keywords():
     global _kw_state
     if _kw_state.get("running"): return {"ok": False, "message": "关键词提取已在运行中"}
+    ok, msg = _check_and_lock('keywords')
+    if not ok: return {"ok": False, "message": msg}
     db = _conn(); n = db.execute("SELECT COUNT(*) FROM articles WHERE text_content!='' AND (ai_keywords IS NULL OR ai_keywords='') AND category NOT IN ('platform_hotlists', 'bilibili_videos')").fetchone()[0]; db.close()
+    task_state.init_state('keywords', total=n)
     threading.Thread(target=_batch_ai_keywords, daemon=True).start()
     return {"ok": True, "message": f"启动 AI 关键词提取，预计 {n} 篇", "pending": n}
 
@@ -1020,7 +1085,10 @@ def start_batch_keywords():
 def start_batch_classify():
     global _cls_state
     if _cls_state.get("running"): return {"ok": False, "message": "分类已在运行中"}
+    ok, msg = _check_and_lock('classify')
+    if not ok: return {"ok": False, "message": msg}
     db = _conn(); n = db.execute("SELECT COUNT(*) FROM articles WHERE text_content!='' AND (ai_category IS NULL OR ai_category='') AND category NOT IN ('platform_hotlists', 'bilibili_videos')").fetchone()[0]; db.close()
+    task_state.init_state('classify', total=n)
     threading.Thread(target=_batch_ai_classify, daemon=True).start()
     return {"ok": True, "message": f"启动 AI 分类，预计 {n} 篇", "pending": n}
 
@@ -1028,7 +1096,10 @@ def start_batch_classify():
 def start_batch_score():
     global _score_state
     if _score_state.get("running"): return {"ok": False, "message": "评分已在运行中"}
+    ok, msg = _check_and_lock('score')
+    if not ok: return {"ok": False, "message": msg}
     db = _conn(); n = db.execute("SELECT COUNT(*) FROM articles WHERE text_content!='' AND (ai_priority_score IS NULL OR ai_priority_score=0.0) AND category NOT IN ('platform_hotlists', 'bilibili_videos')").fetchone()[0]; db.close()
+    task_state.init_state('score', total=n)
     threading.Thread(target=_batch_ai_score, daemon=True).start()
     return {"ok": True, "message": f"启动 AI 评分，预计 {n} 篇", "pending": n}
 
@@ -1036,7 +1107,10 @@ def start_batch_score():
 def start_batch_recluster():
     global _recluster_state
     if _recluster_state.get("running"): return {"ok": False, "message": "重聚类已在运行中"}
+    ok, msg = _check_and_lock('recluster')
+    if not ok: return {"ok": False, "message": msg}
     db = _conn(); n = db.execute("SELECT COUNT(*) FROM articles a LEFT JOIN article_events ae ON a.id=ae.article_id WHERE ae.article_id IS NULL AND a.text_content!='' AND a.category NOT IN ('platform_hotlists', 'bilibili_videos')").fetchone()[0]; db.close()
+    task_state.init_state('recluster', total=n)
     threading.Thread(target=_batch_ai_recluster, daemon=True).start()
     return {"ok": True, "message": f"启动智能重聚类，预计 {n} 篇", "pending": n}
 
@@ -1044,7 +1118,10 @@ def start_batch_recluster():
 def start_batch_summarize_events():
     global _evt_sum_state
     if _evt_sum_state.get("running"): return {"ok": False, "message": "事件摘要已在运行中"}
+    ok, msg = _check_and_lock('summarize_events')
+    if not ok: return {"ok": False, "message": msg}
     db = _conn(); n = db.execute("SELECT COUNT(*) FROM events WHERE article_count>=2 AND (ai_summary IS NULL OR ai_summary='')").fetchone()[0]; db.close()
+    task_state.init_state('summarize_events', total=n)
     threading.Thread(target=_batch_ai_summarize_events, daemon=True).start()
     return {"ok": True, "message": f"启动事件摘要，预计 {n} 个事件", "pending": n}
 
@@ -1064,6 +1141,9 @@ def get_batch_summarize_events_status(): return dict(_evt_sum_state)
 def start_batch_rank_events():
     global _rank_state
     if _rank_state.get("running"): return {"ok": False, "message": "事件排序已在运行中"}
+    ok, msg = _check_and_lock('rank_events')
+    if not ok: return {"ok": False, "message": msg}
+    task_state.init_state('rank_events')
     threading.Thread(target=_batch_ai_rank_events, daemon=True).start()
     return {"ok": True, "message": "启动全景图事件优先级排序"}
 
@@ -1119,6 +1199,8 @@ def _batch_ai_full():
         _full_state["done"] = idx
     _full_state["running"] = False
     _full_state["current"] = "全部完成"
+    _unlock('ai_full')
+    task_state.finish('ai_full', success=True)
 
 
 @router.post("/batch-ai-full")
@@ -1127,6 +1209,10 @@ def start_batch_ai_full():
     global _full_state
     if _full_state.get("running"):
         return {"ok": False, "message": "全流程已在运行中"}
+    ok, msg = _check_and_lock('ai_full')
+    if not ok:
+        return {"ok": False, "message": msg}
+    task_state.init_state('ai_full', total=9)
     threading.Thread(target=_batch_ai_full, daemon=True).start()
     return {"ok": True, "message": "启动全流程 AI 处理 — 翻译→分析→关键词→分类→评分→聚类→摘要→链"}
 

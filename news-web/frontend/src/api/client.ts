@@ -315,4 +315,14 @@ export const api = {
 
   listBackups: () =>
     fetchJSON<{ backups: { name: string; path: string; version: string; created_at: string }[] }>('/update/backups'),
+
+  // ── 统一任务状态 ──────────────────────────────────────
+  getAllTasksStatus: () =>
+    fetchJSON<{ tasks: Record<string, { running: boolean; status: string; total: number; done: number; failed: number; current: string; error: string; log: string[]; extra: Record<string, unknown>; level: number }>; running_count: number; running_types: string[] }>('/tasks/status'),
+
+  getActiveTasks: () =>
+    fetchJSON<{ active: Record<string, { started_at: string; task_id: string }>; count: number; types: string[] }>('/tasks/active'),
+
+  getTaskStatus: (taskType: string) =>
+    fetchJSON<{ running: boolean; status: string; total: number; done: number; failed: number; current: string; log: string[] }>(`/tasks/${taskType}`),
 };

@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from config import config
 from db.migrations import ensure_schema
 from scheduler import start_scheduler, stop_scheduler, trigger_pipeline_manual, get_pipeline_status
+from utils.task_state import task_state
 
 # ── Logging ──────────────────────────────────────────────
 LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'logs')
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     if config.db_path:
         ensure_schema(config.db_path)
+        task_state.set_db_path(config.db_path)
     if not os.environ.get('NEWS_WEB_TESTING'):
         start_scheduler()                      # Start daily cron jobs
     yield
@@ -83,6 +85,7 @@ from api.pipeline import router as pipeline_router
 from api.hotlists import router as hotlists_router
 from api.fetch import router as fetch_router
 from api.update import router as update_router
+from api.tasks import router as tasks_router
 
 app.include_router(settings_router)
 app.include_router(stats_router)
@@ -99,6 +102,7 @@ app.include_router(pipeline_router)
 app.include_router(hotlists_router)
 app.include_router(fetch_router)
 app.include_router(update_router)
+app.include_router(tasks_router)
 
 # ── SPA fallback + static mount (must be last) ──────────
 from fastapi.responses import FileResponse

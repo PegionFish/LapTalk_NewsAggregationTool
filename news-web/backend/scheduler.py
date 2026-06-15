@@ -10,6 +10,8 @@ from apscheduler.triggers.cron import CronTrigger
 
 from config import config
 from pipeline.run_all import run_pipeline
+from utils.task_lock import task_lock
+from utils.task_state import task_state
 
 logger = logging.getLogger(__name__)
 
@@ -79,37 +81,9 @@ def _build_cron_triggers() -> list[CronTrigger]:
 
 
 async def _run_pipeline_job():
-    """Wrapper that logs the pipeline run and updates status."""
-    global _pipeline_state
-    _pipeline_state.update(running=True, current_step='starting', steps=[])
-    _add_schedule_log("定时管道启动")
-    logger.info("Scheduled pipeline starting...")
-    try:
-        def progress_callback(status, message):
-            _pipeline_state['current_step'] = message
-            _pipeline_state['steps'].append({'name': message, 'status': status, 'duration_ms': 0})
-
-        success = run_pipeline(
-            db_path=config.db_path,
-            user_agent=config.user_agent,
-            callback=progress_callback,
-            run_type=_pipeline_state.get('run_type', 'scheduled'),
-        )
-        _pipeline_state['last_status'] = 'success' if success else 'failed'
-        if success:
-            _add_schedule_log("管道执行成功")
-            logger.info("Scheduled pipeline completed successfully")
-        else:
-            _add_schedule_log("管道执行失败")
-            logger.error("Scheduled pipeline failed")
-    except Exception as e:
-        _pipeline_state['last_status'] = 'error'
-        _add_schedule_log(f"管道异常: {str(e)[:100]}")
-        logger.exception(f"Scheduled pipeline error: {e}")
-    finally:
-        _pipeline_state['running'] = False
-        _pipeline_state['run_type'] = 'scheduled'
-        _pipeline_state['last_run'] = datetime.now().isoformat(timespec='seconds')
+    """Wrapper that runs pipeline in thread to avoid blocking event loop."""
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _run_pipeline_job_sync)
 
 
 # ── SQLite backup (daily 03:00, keep 7 days) ─────────────
@@ -159,7 +133,7 @@ def start_scheduler():
         while len(minutes) < len(hours):
             minutes.append(0)
         time_strs = [f"{h:02d}:{minutes[i]:02d}" for i, h in enumerate(hours[:len(minutes)])]
-        _add_schedule_log(f"调度器启动: 每天 {', '.join(time_strs)} 运行")
+        _add_schedule_log("调度器启动: 每天 " + ", ".join(time_strs) + " 运行")
         logger.info(f"Pipeline scheduler started: daily {', '.join(time_strs)}, backup at 03:00")
 
 
@@ -198,7 +172,7 @@ def reload_scheduler():
     while len(minutes) < len(hours):
         minutes.append(0)
     time_strs = [f"{h:02d}:{minutes[i]:02d}" for i, h in enumerate(hours[:len(minutes)])]
-    _add_schedule_log(f"调度器重载: 每天 {', '.join(time_strs)} 运行")
+    _add_schedule_log("调度器重载: 每天 " + ", ".join(time_strs) + " 运行")
     logger.info(f"Scheduler reloaded: daily {', '.join(time_strs)}")
 
 
@@ -207,5 +181,54 @@ async def trigger_pipeline_manual():
     global _pipeline_state
     _pipeline_state['run_type'] = 'manual'
     _add_schedule_log("手动触发管道")
-    asyncio.create_task(_run_pipeline_job())
+    import concurrent.futures
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, _run_pipeline_job_sync)
     return {'status': 'pipeline_started'}
+
+
+def _run_pipeline_job_sync():
+    """同步版本的管道执行（在线程池中运行）。"""
+    global _pipeline_state
+
+    ok, reason = task_lock.acquire('pipeline')
+    if not ok:
+        _add_schedule_log(f"管道启动失败: {reason}")
+        logger.warning(f"Pipeline skipped: {reason}")
+        return
+
+    task_state.init_state('pipeline')
+    _pipeline_state.update(running=True, current_step='starting', steps=[])
+    _add_schedule_log("管道启动")
+    logger.info("Pipeline starting...")
+    try:
+        def progress_callback(status, message):
+            _pipeline_state['current_step'] = message
+            _pipeline_state['steps'].append({'name': message, 'status': status, 'duration_ms': 0})
+            task_state.update('pipeline', current=message)
+
+        success = run_pipeline(
+            db_path=config.db_path,
+            user_agent=config.user_agent,
+            callback=progress_callback,
+            run_type=_pipeline_state.get('run_type', 'scheduled'),
+        )
+        _pipeline_state['last_status'] = 'success' if success else 'failed'
+        if success:
+            _add_schedule_log("管道执行成功")
+            logger.info("Pipeline completed successfully")
+            task_state.finish('pipeline', success=True)
+        else:
+            _add_schedule_log("管道执行失败")
+            logger.error("Pipeline failed")
+            task_state.finish('pipeline', success=False, error="Pipeline failed")
+    except Exception as e:
+        _pipeline_state['last_status'] = 'error'
+        _add_schedule_log(f"管道异常: {str(e)[:100]}")
+        logger.exception(f"Pipeline error: {e}")
+        task_state.finish('pipeline', success=False, error=str(e)[:200])
+    finally:
+        _pipeline_state['running'] = False
+        _pipeline_state['run_type'] = 'scheduled'
+        _pipeline_state['last_run'] = datetime.now().isoformat(timespec='seconds')
+        task_lock.release('pipeline')
