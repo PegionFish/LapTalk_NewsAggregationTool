@@ -133,8 +133,8 @@ def update_article(article_id: int, body: ArticleUpdate):
 
 @router.get("/{article_id}/content")
 async def get_article_content(article_id: int):
-    """获取文章内容 — 三级回退：DB缓存 → 磁盘文件 → 代理获取。
-    返回结构化 JSON（原文 content + 译文 translation 独立不覆盖）。"""
+    """获取文章内容 — 四级回退：DB缓存 → 磁盘文件 → 按需下载 → 返回链接。
+    未缓存文章首次打开时自动下载并存盘。"""
     db = get_db()
     with db._conn() as conn:
         row = conn.execute(
@@ -171,6 +171,15 @@ async def get_article_content(article_id: int):
                 html = f.read()
             text = extract_text_from_html(html)
             lang = detect_language(text)
+            # 回填 DB
+            try:
+                conn2 = sqlite3.connect(config.db_path)
+                conn2.execute("UPDATE articles SET text_content=?, content_lang=?, content_status='fetched' WHERE id=?",
+                              (text, lang, article_id))
+                conn2.commit()
+                conn2.close()
+            except Exception:
+                pass
             return {
                 "url": url,
                 "content": text,
@@ -180,27 +189,57 @@ async def get_article_content(article_id: int):
                 "source": "local",
             }
 
-    # 3. 回退：代理获取原文
-    if not url:
-        raise HTTPException(404, "no_url")
-    async with httpx.AsyncClient(proxy=get_httpx_proxy()) as client:
+    # 3. 未缓存 → 按需下载并存盘
+    if url and url.startswith('http'):
         try:
-            resp = await client.get(url, headers={'User-Agent': config.user_agent},
-                                    follow_redirects=True, timeout=15)
+            from pipeline.fetch_content import download_page, sanitize_html
             from utils.text import extract_text_from_html, detect_language
-            html = resp.text
-            text = extract_text_from_html(html)
-            lang = detect_language(text)
-            return {
-                "url": url,
-                "content": text,
-                "translation": "",
-                "lang": lang,
-                "status": "proxied",
-                "source": "remote",
-            }
-        except Exception as e:
-            raise HTTPException(502, f"fetch_failed: {str(e)[:300]}")
+            import os, sqlite3 as _sqlite3
+            from datetime import datetime
+
+            result = download_page(url, retries=1)
+            if result.get('html') and not result.get('error'):
+                html = sanitize_html(result['html'])
+                content_dir = config.content_cache_path
+                os.makedirs(content_dir, exist_ok=True)
+                file_path = os.path.join(content_dir, f'{article_id}.html')
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(html)
+
+                text = extract_text_from_html(html)
+                lang = detect_language(text)
+                now = datetime.now().isoformat(timespec='seconds')
+                rel_path = f'{os.path.basename(content_dir)}/{article_id}.html'
+
+                conn2 = _sqlite3.connect(config.db_path)
+                conn2.execute("""
+                    UPDATE articles SET local_path=?, content_fetched_at=?,
+                        text_content=?, content_lang=?, content_status='fetched'
+                    WHERE id=?
+                """, (rel_path, now, text, lang, article_id))
+                conn2.commit()
+                conn2.close()
+
+                return {
+                    "url": url,
+                    "content": text,
+                    "translation": "",
+                    "lang": lang,
+                    "status": "fetched",
+                    "source": "on_demand",
+                }
+        except Exception:
+            pass
+
+    # 4. 全部失败 → 返回 URL 让用户自己打开
+    return {
+        "url": url or "",
+        "content": "",
+        "translation": "",
+        "lang": "",
+        "status": "no_cache",
+        "source": "link_only",
+    }
 
 
 def _inject_base(html: str, base_url: str) -> str:
@@ -238,8 +277,11 @@ def _sanitize_html(html: str) -> str:
 
 @router.get("/{article_id}/html")
 async def serve_article_html(article_id: int):
-    """返回文章 HTML — 优先本地缓存，已切除脚本/追踪标签。"""
+    """返回文章 HTML — 本地缓存优先，未缓存时按需下载并存盘。"""
     from fastapi.responses import HTMLResponse
+    import os, sqlite3 as _sqlite3
+    from datetime import datetime
+
     db = get_db()
     with db._conn() as conn:
         row = conn.execute(
@@ -250,9 +292,8 @@ async def serve_article_html(article_id: int):
 
     url, local_path = row
 
-    # 1. 本地 HTML 缓存 — 切除脚本后返回纯阅读内容
+    # 1. 本地 HTML 缓存
     if local_path and not local_path.startswith('[ERR:'):
-        import os
         cache_dir = config.content_cache_path
         full_path = os.path.join(cache_dir, os.path.basename(local_path))
         if os.path.isfile(full_path):
@@ -263,17 +304,54 @@ async def serve_article_html(article_id: int):
             html = _sanitize_html(html)
             return HTMLResponse(content=html, media_type="text/html")
 
-    # 2. 回退代理获取 — 同样切除脚本
-    if not url:
-        raise HTTPException(404, "no_url")
-    async with httpx.AsyncClient(proxy=get_httpx_proxy()) as client:
+    # 2. 未缓存 → 按需下载并存盘
+    if url and url.startswith('http'):
         try:
-            resp = await client.get(url, headers={'User-Agent': config.user_agent},
-                                    follow_redirects=True, timeout=15)
-            html = _sanitize_html(resp.text)
-            return HTMLResponse(content=html, media_type="text/html")
-        except Exception as e:
-            raise HTTPException(502, f"fetch_failed: {str(e)[:300]}")
+            from pipeline.fetch_content import download_page
+            result = download_page(url, retries=1)
+            if result.get('html') and not result.get('error'):
+                from utils.text import extract_text_from_html, detect_language
+                html = result['html']
+                cache_dir = config.content_cache_path
+                os.makedirs(cache_dir, exist_ok=True)
+                file_path = os.path.join(cache_dir, f'{article_id}.html')
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(html)
+
+                text = extract_text_from_html(html)
+                lang = detect_language(text)
+                now = datetime.now().isoformat(timespec='seconds')
+                rel_path = f'{os.path.basename(cache_dir)}/{article_id}.html'
+
+                conn2 = _sqlite3.connect(config.db_path)
+                conn2.execute("""
+                    UPDATE articles SET local_path=?, content_fetched_at=?,
+                        text_content=?, content_lang=?, content_status='fetched'
+                    WHERE id=?
+                """, (rel_path, now, text, lang, article_id))
+                conn2.commit()
+                conn2.close()
+
+                if url:
+                    html = _inject_base(html, url)
+                html = _sanitize_html(html)
+                return HTMLResponse(content=html, media_type="text/html")
+        except Exception:
+            pass
+
+    # 3. 无法获取 → 返回简洁提示页
+    fallback = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+        body {{ font-family: -apple-system, sans-serif; display: flex; align-items: center; justify-content: center;
+               height: 100vh; margin: 0; background: #f5f5f5; color: #666; flex-direction: column; gap: 16px; }}
+        a {{ color: var(--accent, #00d4ff); text-decoration: none; padding: 8px 16px; border: 1px solid currentColor;
+             border-radius: 6px; font-size: 13px; }}
+        a:hover {{ background: rgba(0,212,255,0.1); }}
+    </style></head><body>
+        <i class="fas fa-link" style="font-size:32px; color:#ccc;"></i>
+        <p>内容暂未缓存</p>
+        <a href="{url}" target="_blank" rel="noopener">在原站阅读 <i class="fas fa-external-link-alt"></i></a>
+    </body></html>"""
+    return HTMLResponse(content=fallback, media_type="text/html")
 
 
 @router.post("/{article_id}/analyze")
