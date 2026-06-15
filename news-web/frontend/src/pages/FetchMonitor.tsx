@@ -99,6 +99,18 @@ export default function FetchMonitor() {
 
   useEffect(() => { refreshAll(); refreshSchedule(); }, [refreshAll, refreshSchedule]);
 
+  // 调度 Tab 激活时自动刷新日志
+  const scheduleTimer = useRef<ReturnType<typeof setInterval>>();
+  useEffect(() => {
+    if (activeTab === 'schedule') {
+      refreshSchedule();
+      scheduleTimer.current = setInterval(refreshSchedule, 5000);
+    } else {
+      clearInterval(scheduleTimer.current);
+    }
+    return () => clearInterval(scheduleTimer.current);
+  }, [activeTab, refreshSchedule]);
+
   const handleExpand = async (name: string) => {
     if (expandedSource === name) { setExpandedSource(null); return; }
     setExpandedSource(name);
