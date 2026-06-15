@@ -25,6 +25,28 @@ if ! command -v docker &>/dev/null; then
 fi
 info "Docker found: $(docker --version)"
 
+# Configure Docker daemon with TUNA mirror for Chinese network
+DAEMON_JSON="/etc/docker/daemon.json"
+if [ ! -f "$DAEMON_JSON" ] || ! grep -q "tuna.tsinghua.edu.cn" "$DAEMON_JSON" 2>/dev/null; then
+    info "Configuring Docker daemon with TUNA mirrors..."
+    mkdir -p /etc/docker
+    cat > "$DAEMON_JSON" << 'EOF'
+{
+  "registry-mirrors": [
+    "https://mirrors.tuna.tsinghua.edu.cn",
+    "https://docker.m.daocloud.io"
+  ]
+}
+EOF
+    # Restart Docker daemon if possible
+    if command -v systemctl &>/dev/null; then
+        systemctl restart docker 2>/dev/null || true
+    elif command -v synoservicectl &>/dev/null; then
+        synoservicectl --restart pkgctl-Docker 2>/dev/null || true
+    fi
+    info "Docker mirrors configured. May need to restart Docker daemon."
+fi
+
 # Create data dir
 mkdir -p "$DATA_DIR/data" "$DATA_DIR/logs" "$DATA_DIR/backups"
 

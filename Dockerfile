@@ -1,7 +1,10 @@
-FROM docker.1ms.run/library/python:3.11-slim
+FROM dockerpull.org/library/python:3.11-slim
 
 LABEL maintainer="LapTalk"
 LABEL description="LapTalk News Aggregation Center"
+
+# TUNA apt mirror for Chinese network
+RUN sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources
 
 # System deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -11,9 +14,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Work dir
 WORKDIR /app
 
-# Python deps first (cache layer)
+# Python deps — TUNA PyPI mirror
 COPY news-web/backend/requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt && \
+RUN pip install --no-cache-dir \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    --trusted-host pypi.tuna.tsinghua.edu.cn \
+    -r /tmp/requirements.txt && \
     rm /tmp/requirements.txt
 
 # Backend
