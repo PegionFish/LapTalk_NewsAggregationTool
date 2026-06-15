@@ -1,13 +1,11 @@
 """
 Pipeline orchestrator — runs the full fetch → cluster → analyze cycle.
-Replaces cron_runner.sh / Hermes/OpenClaw scheduling.
-Call via `run_pipeline(db_path, user_agent)` or `python -m backend.pipeline.run_all`.
+Streams subprocess stdout in real-time for detailed progress reporting.
 """
-import os, sys, subprocess, logging
+import os, sys, subprocess, logging, re
 
 logger = logging.getLogger(__name__)
 
-# 各步骤超时时间（秒）— fetch_content 需要下载大量页面，超时更长
 STEP_TIMEOUTS = {
     'fetch_english_news.py': 300,
     'fetch_platform_hotlists.py': 300,
@@ -21,41 +19,48 @@ STEP_TIMEOUTS = {
 PIPELINE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
+def _stream_process(proc, callback, label):
+    """流式读取子进程 stdout，实时回调每行输出。"""
+    output_lines = []
+    for raw_line in iter(proc.stdout.readline, ''):
+        line = raw_line.rstrip('\n').rstrip('\r')
+        if not line:
+            continue
+        output_lines.append(line)
+        # 过滤有意义的进度行（跳过空行和纯格式行）
+        clean = line.strip()
+        if clean and not clean.startswith('---') and not clean.startswith('==='):
+            callback('running', f"[{label}] {clean}")
+    proc.stdout.close()
+    proc.wait()
+    return '\n'.join(output_lines)
+
+
 def run_pipeline(db_path: str = "", user_agent: str = "", callback=None, run_type: str = 'scheduled'):
     """
-    Execute the full pipeline sequence:
-    1. fetch_english_news.py — RSS feeds
-    2. collect_data.py — dedup, cluster, save to DB
-    3. fetch_content.py — archive pages (optional)
-    4. AI analysis (if API configured)
+    Execute the full pipeline with real-time progress streaming.
 
     Args:
-        db_path: SQLite database path (injects into subprocess env)
+        db_path: SQLite database path
         user_agent: UA for fetch scripts
-        callback: optional function(status, step) for progress reporting
+        callback: function(status, message) for progress reporting
     """
     env = os.environ.copy()
-    env['PYTHONIOENCODING'] = 'utf-8'  # 子进程 UTF-8 输出兼容
+    env['PYTHONIOENCODING'] = 'utf-8'
     if db_path:
         env['NEWS_DB_PATH'] = db_path
     if user_agent:
         env['USER_AGENT'] = user_agent
 
-    steps = [
-        ('fetch_english_news.py', 'RSS 抓取'),
-    ]
+    steps = [('fetch_english_news.py', 'RSS 抓取')]
 
-    # 平台热搜采集 — 可配置开关
     from config import config as _cfg
     if _cfg.platform_hotlist_enabled:
         env['BILIBILI_MAX_PAGES'] = str(_cfg.bilibili_max_pages)
         steps.append(('fetch_platform_hotlists.py', '平台热搜'))
 
-    steps += [
-        ('collect_data.py', '去重聚类'),
-    ]
+    steps.append(('collect_data.py', '去重聚类'))
 
-    # AI 预筛选 — 只在有 API Key 时启用，筛掉不需要的文章再下载
     from config import config
     if config.openai_api_key:
         steps.append(('ai_filter.py', 'AI 筛选'))
@@ -64,39 +69,58 @@ def run_pipeline(db_path: str = "", user_agent: str = "", callback=None, run_typ
     if config.translation_enabled and config.translation_api_key:
         steps.append(('translate_content.py', 'AI 翻译'))
 
-    # Step 4: AI analysis (only if API key is configured)
     if config.openai_api_key:
         steps.append(('analyze.py', 'AI 分析'))
 
-    for script, label in steps:
+    for idx, (script, label) in enumerate(steps, 1):
         script_path = os.path.join(PIPELINE_DIR, script)
         if not os.path.exists(script_path):
-            logger.warning(f"[Pipeline] {label}: 脚本不存在 ({script_path}) — 跳过")
+            logger.warning(f"[Pipeline] {label}: script not found — skipped")
             if callback:
-                callback('skipped', f"{label}: 脚本不存在")
+                callback('skipped', f"[{label}] 脚本不存在，跳过")
             continue
 
+        progress = f"[{idx}/{len(steps)}]"
         logger.info(f"[Pipeline] {label}...")
         if callback:
-            callback('running', label)
+            callback('running', f"{progress} {label} 启动中...")
 
         timeout = STEP_TIMEOUTS.get(script, 300)
-        result = subprocess.run(
-            [sys.executable, script_path],
-            env=env, capture_output=True, encoding='utf-8', errors='replace', timeout=timeout,
-        )
+        try:
+            proc = subprocess.Popen(
+                [sys.executable, '-u', script_path],
+                env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                encoding='utf-8', errors='replace',
+            )
+            full_output = _stream_process(proc, callback, label)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            logger.error(f"[Pipeline] {label} timed out ({timeout}s)")
+            if callback:
+                callback('error', f"{progress} {label} 超时 ({timeout}s)")
+            return False
+        except Exception as e:
+            logger.error(f"[Pipeline] {label} exception: {e}")
+            if callback:
+                callback('error', f"{progress} {label} 异常: {str(e)[:100]}")
+            return False
 
-        # ── 记录 fetch_logs（仅抓取类步骤） ─────────────
+        # 记录 fetch_logs
         if script in ('fetch_english_news.py', 'fetch_platform_hotlists.py') and db_path:
             try:
                 from datetime import datetime as _dt
                 from db.news_db import NewsDB as _NDB_
                 _ndb2 = _NDB_(db_path)
-                status = 'ok' if result.returncode == 0 else 'failed'
-                error_msg = result.stderr[:200] if result.returncode != 0 else ''
-                out = result.stdout or ''
-                import re as _re3
-                fm = _re3.search(r'总条目[：:]\s*(\d+)', out)
+                status = 'ok' if proc.returncode == 0 else 'failed'
+                error_msg = ''
+                stderr_out = ''
+                try:
+                    stderr_out = proc.stderr.read() if proc.stderr else ''
+                except Exception:
+                    pass
+                if proc.returncode != 0:
+                    error_msg = stderr_out[:200]
+                fm = re.search(r'总条目[：:]\s*(\d+)', full_output or '')
                 fetched = int(fm.group(1)) if fm else 0
                 source_name = 'RSS' if script == 'fetch_english_news.py' else '平台热搜'
                 source_type = 'rss' if script == 'fetch_english_news.py' else 'hotlist'
@@ -104,13 +128,20 @@ def run_pipeline(db_path: str = "", user_agent: str = "", callback=None, run_typ
             except Exception as _fe:
                 logger.warning(f"fetch_logs write failed: {_fe}")
 
-        if result.returncode != 0:
-            logger.error(f"[Pipeline] {label} 失败: {result.stderr[:200]}")
+        if proc.returncode != 0:
+            logger.error(f"[Pipeline] {label} failed (exit {proc.returncode})")
+            stderr_msg = ''
+            try:
+                stderr_msg = proc.stderr.read()[:100] if proc.stderr else ''
+            except Exception:
+                pass
             if callback:
-                callback('error', f"{label}: {result.stderr[:100]}")
+                callback('error', f"{progress} {label} 失败: {stderr_msg}")
             return False
 
-        logger.info(f"[Pipeline] {label} 完成")
+        logger.info(f"[Pipeline] {label} done")
+        if callback:
+            callback('running', f"{progress} {label} 完成")
 
     if callback:
         callback('complete', '全部完成')
