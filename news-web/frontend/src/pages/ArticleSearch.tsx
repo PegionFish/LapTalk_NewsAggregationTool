@@ -1,13 +1,12 @@
 import { useEffect, useState, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import type { Article } from '../types';
 import { Input, Select, Button, Badge, Loading } from '../components/ui';
+import ArticlePane from '../components/ArticlePane';
 
 const PER_PAGE = 50;
 
 export default function ArticleSearch() {
-  const navigate = useNavigate();
   const [articles, setArticles] = useState<Article[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -15,6 +14,7 @@ export default function ArticleSearch() {
   const [priority, setPriority] = useState('');
   const [verified, setVerified] = useState('');
   const [selected, setSelected] = useState<Article | null>(null);
+  const [reading, setReading] = useState<Article | null>(null);
   const [loading, setLoading] = useState(false);
   const [aiAnalysis, setAiAnalysis] = useState('');
   const [analyzing, setAnalyzing] = useState(false);
@@ -353,7 +353,7 @@ export default function ArticleSearch() {
               variant="primary"
               size="sm"
               icon="fa-book-open"
-              onClick={() => navigate(`/articles/${selected.id}`)}
+              onClick={() => setReading(selected)}
             >
               阅读全文
             </Button>
@@ -481,6 +481,8 @@ export default function ArticleSearch() {
           )}
         </div>
       )}
+
+      <ArticlePane article={reading} onClose={() => setReading(null)} />
     </div>
   );
 }
