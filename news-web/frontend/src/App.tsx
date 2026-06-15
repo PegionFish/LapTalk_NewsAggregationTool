@@ -11,6 +11,7 @@ import Login from './pages/Login';
 import ArticleReader from './pages/ArticleReader';
 import HotTrends from './pages/HotTrends';
 import FetchMonitor from './pages/FetchMonitor';
+import SystemUpdate from './pages/SystemUpdate';
 
 // ── Workspace 路由适配器 — 将 /chains/:chainId 转为 Workspace 可识别的 search params ──
 function WorkspaceRoute() {
@@ -77,6 +78,7 @@ function AuthedApp() {
           <Route path="/articles" element={<ArticleSearch />} />
           <Route path="/hotlists" element={<HotTrends />} />
           <Route path="/fetch" element={<FetchMonitor />} />
+          <Route path="/update" element={<SystemUpdate />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

@@ -228,3 +228,37 @@ export interface ScheduleInfo {
   last_run: string | null;
   last_status: string | null;
 }
+
+// ── 系统更新 ──────────────────────────────────────────
+
+export interface UpdateVersion {
+  version: string;
+  build_time: string;
+  python_version: string;
+  platform: string;
+}
+
+export interface UpdateManifest {
+  version: string;
+  build_time: string;
+  python_version?: string;
+  backend_files: string[];
+  frontend_files: string[];
+}
+
+export interface UpdateStatus {
+  phase: string;
+  message: string;
+  manifest: UpdateManifest | null;
+  progress: number;
+  error: string;
+  backup_path: string;
+  log: string[];
+}
+
+export interface BackupInfo {
+  name: string;
+  path: string;
+  version: string;
+  created_at: string;
+}

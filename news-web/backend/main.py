@@ -82,6 +82,7 @@ from api.cache import router as cache_router
 from api.pipeline import router as pipeline_router
 from api.hotlists import router as hotlists_router
 from api.fetch import router as fetch_router
+from api.update import router as update_router
 
 app.include_router(settings_router)
 app.include_router(stats_router)
@@ -97,6 +98,7 @@ app.include_router(cache_router)
 app.include_router(pipeline_router)
 app.include_router(hotlists_router)
 app.include_router(fetch_router)
+app.include_router(update_router)
 
 # ── SPA fallback + static mount (must be last) ──────────
 from fastapi.responses import FileResponse
@@ -118,4 +120,4 @@ else:
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8081, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8081, reload=os.getenv("LAPTALK_DEV") == "1")

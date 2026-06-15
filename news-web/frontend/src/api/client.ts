@@ -284,4 +284,35 @@ export const api = {
 
   getCacheFetchStatus: () =>
     fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string; log: string[] }>('/cache/fetch/status'),
+
+  // ── 系统更新 ──────────────────────────────────────────
+  getUpdateVersion: () =>
+    fetchJSON<{ version: string; build_time: string; python_version: string; platform: string }>('/update/current-version'),
+
+  getUpdateStatus: () =>
+    fetchJSON<{ phase: string; message: string; manifest: any; progress: number; error: string; backup_path: string; log: string[] }>('/update/status'),
+
+  uploadUpdatePackage: async (file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await fetch(`${BASE}/update/upload`, { method: 'POST', body: formData });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `HTTP ${res.status}`);
+    }
+    return res.json() as Promise<{ ok: boolean; filename: string; manifest: any; current_version: string }>;
+  },
+
+  applyUpdate: (filename: string, skipBackup = false) =>
+    fetchJSON<{ ok: boolean; message: string }>('/update/apply', {
+      method: 'POST', body: JSON.stringify({ filename, skip_backup: skipBackup })
+    }),
+
+  rollbackUpdate: (backupName: string) =>
+    fetchJSON<{ ok: boolean; message: string }>('/update/rollback', {
+      method: 'POST', body: JSON.stringify({ backup_name: backupName })
+    }),
+
+  listBackups: () =>
+    fetchJSON<{ backups: { name: string; path: string; version: string; created_at: string }[] }>('/update/backups'),
 };

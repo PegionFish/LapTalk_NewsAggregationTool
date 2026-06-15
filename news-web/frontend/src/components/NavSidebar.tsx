@@ -10,6 +10,7 @@ const ALL_ITEMS = [
   { path: '/fetch', label: '数据采集', icon: 'fa-satellite-dish', adminOnly: false },
   { path: '/chains', label: '逻辑链', icon: 'fa-diagram-project', adminOnly: false },
   { path: '/settings', label: '设置', icon: 'fa-sliders', adminOnly: true },
+  { path: '/update', label: '系统更新', icon: 'fa-cloud-upload-alt', adminOnly: true },
 ];
 
 export default function NavSidebar() {
