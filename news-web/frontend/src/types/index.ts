@@ -213,3 +213,18 @@ export interface BatchRetryState {
   current: string;
   log: string[];
 }
+
+// ── 调度管理 ──────────────────────────────────────────
+
+export interface ScheduleSlot {
+  hour: number;
+  minute: number;
+}
+
+export interface ScheduleInfo {
+  enabled: boolean;
+  schedule: ScheduleSlot[];
+  scheduler_running: boolean;
+  last_run: string | null;
+  last_status: string | null;
+}

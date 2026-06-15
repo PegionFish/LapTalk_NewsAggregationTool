@@ -251,6 +251,21 @@ export const api = {
   getFetchLogs: (limit = 50) =>
     fetchJSON<{ logs: import('../types').FetchLog[] }>(`/fetch/logs?limit=${limit}`),
 
+  // ── 调度管理 ──────────────────────────────────────────
+  getSchedule: () =>
+    fetchJSON<import('../types').ScheduleInfo>('/fetch/schedule'),
+
+  updateSchedule: (data: { enabled?: boolean; hours?: number[]; minutes?: number[] }) =>
+    fetchJSON<import('../types').ScheduleInfo>('/fetch/schedule', { method: 'PUT', body: JSON.stringify(data) }),
+
+  toggleSchedule: (enabled: boolean) =>
+    fetchJSON<{ ok: boolean; enabled: boolean; message: string }>('/fetch/schedule/toggle', {
+      method: 'POST', body: JSON.stringify({ enabled })
+    }),
+
+  getScheduleLogs: (limit = 50) =>
+    fetchJSON<{ logs: string[] }>(`/fetch/schedule/logs?limit=${limit}`),
+
   // ── 缓存管理 ──────────────────────────────────────────
   getCacheStatus: () =>
     fetchJSON<{

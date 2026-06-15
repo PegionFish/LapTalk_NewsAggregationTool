@@ -10,6 +10,8 @@ DEFAULT_CONFIG = {
     'openai_api_key': '',
     'openai_model': 'gpt-4o-mini',
     'pipeline_schedule_enabled': True,
+    'pipeline_cron_hours': [10, 17],      # 每天运行的小时数（0-23）
+    'pipeline_cron_minutes': [0, 0],      # 对应每个小时的分钟数
     # 翻译 API — 独立配置，默认指向硅基流动 DeepSeek V3.2
     'translation_enabled': False,
     'translation_base_url': 'https://api.siliconflow.cn/v1',
@@ -99,6 +101,30 @@ class AppConfig:
     @pipeline_schedule_enabled.setter
     def pipeline_schedule_enabled(self, val: bool):
         self._data['pipeline_schedule_enabled'] = val
+        self.save()
+
+    @property
+    def pipeline_cron_hours(self) -> list[int]:
+        hours = self._data.get('pipeline_cron_hours', [10, 17])
+        if not isinstance(hours, list):
+            hours = [10, 17]
+        return [max(0, min(23, int(h))) for h in hours if isinstance(h, (int, float))]
+
+    @pipeline_cron_hours.setter
+    def pipeline_cron_hours(self, val: list[int]):
+        self._data['pipeline_cron_hours'] = val
+        self.save()
+
+    @property
+    def pipeline_cron_minutes(self) -> list[int]:
+        minutes = self._data.get('pipeline_cron_minutes', [0, 0])
+        if not isinstance(minutes, list):
+            minutes = [0, 0]
+        return [max(0, min(59, int(m))) for m in minutes if isinstance(m, (int, float))]
+
+    @pipeline_cron_minutes.setter
+    def pipeline_cron_minutes(self, val: list[int]):
+        self._data['pipeline_cron_minutes'] = val
         self.save()
 
     # ── 翻译 API 配置 ──────────────────────────────────────
@@ -207,6 +233,8 @@ class AppConfig:
             d['openai_api_key'] = '***'
         if d.get('translation_api_key'):
             d['translation_api_key'] = '***'
+        d['pipeline_cron_hours'] = self.pipeline_cron_hours
+        d['pipeline_cron_minutes'] = self.pipeline_cron_minutes
         return d
 
 config = AppConfig()

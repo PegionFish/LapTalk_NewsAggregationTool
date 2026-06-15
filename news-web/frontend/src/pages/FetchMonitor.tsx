@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { api } from '../api/client';
-import type { FetchOverview, FetchSource, FetchLog, FailedArticle, FetchArticleItem, BatchRetryState } from '../types';
+import type { FetchOverview, FetchSource, FetchLog, FailedArticle, FetchArticleItem, BatchRetryState, ScheduleInfo } from '../types';
 import { Card, Button, Badge, Table, Tabs, Tab, StatCard, Loading } from '../components/ui';
 
 const emptyOverview: FetchOverview = {
@@ -26,7 +26,14 @@ const statusVariant: Record<string, 'green' | 'blue' | 'orange' | 'red'> = {
   failed: 'red',
 };
 
+type TabKey = 'overview' | 'schedule';
+const TABS: { key: TabKey; icon: string; label: string }[] = [
+  { key: 'overview', icon: 'fa-database', label: '数据源' },
+  { key: 'schedule', icon: 'fa-clock', label: '调度管理' },
+];
+
 export default function FetchMonitor() {
+  const [activeTab, setActiveTab] = useState<TabKey>('overview');
   const [overview, setOverview] = useState<FetchOverview>(emptyOverview);
   const [sources, setSources] = useState<FetchSource[]>([]);
   const [logs, setLogs] = useState<FetchLog[]>([]);
@@ -51,6 +58,18 @@ export default function FetchMonitor() {
   const [batchSubmitting, setBatchSubmitting] = useState(false);
   const batchTimer = useRef<ReturnType<typeof setInterval>>();
 
+  // 调度管理状态
+  const [scheduleInfo, setScheduleInfo] = useState<ScheduleInfo | null>(null);
+  const [scheduleHours, setScheduleHours] = useState<number[]>([10, 17]);
+  const [scheduleMinutes, setScheduleMinutes] = useState<number[]>([0, 0]);
+  const [scheduleEnabled, setScheduleEnabled] = useState(true);
+  const [scheduleLogs, setScheduleLogs] = useState<string[]>([]);
+  const [scheduleSaving, setScheduleSaving] = useState(false);
+  const [scheduleMessage, setScheduleMessage] = useState('');
+  const [showAddTime, setShowAddTime] = useState(false);
+  const [newHour, setNewHour] = useState(12);
+  const [newMinute, setNewMinute] = useState(0);
+
   const pollBatch = useCallback(async () => {
     try {
       const s = await api.getBatchRetryStatus();
@@ -68,7 +87,17 @@ export default function FetchMonitor() {
     ]).finally(() => setLoading(false));
   }, [sourceFilter]);
 
-  useEffect(() => { refreshAll(); }, [refreshAll]);
+  const refreshSchedule = useCallback(() => {
+    api.getSchedule().then(info => {
+      setScheduleInfo(info);
+      setScheduleEnabled(info.enabled);
+      setScheduleHours(info.schedule.map(s => s.hour));
+      setScheduleMinutes(info.schedule.map(s => s.minute));
+    }).catch(() => {});
+    api.getScheduleLogs(30).then(r => setScheduleLogs(r.logs)).catch(() => {});
+  }, []);
+
+  useEffect(() => { refreshAll(); refreshSchedule(); }, [refreshAll, refreshSchedule]);
 
   const handleExpand = async (name: string) => {
     if (expandedSource === name) { setExpandedSource(null); return; }
@@ -133,7 +162,6 @@ export default function FetchMonitor() {
     }
   };
 
-  // 重试所有失败文章
   const handleRetryAll = async () => {
     if (!confirm(`确定重试所有 ${failedTotal} 篇失败文章？同源文章间隔 5-10 秒。`)) return;
     setBatchSubmitting(true);
@@ -146,6 +174,56 @@ export default function FetchMonitor() {
       }
     } catch { /* ignore */ }
     finally { setBatchSubmitting(false); }
+  };
+
+  // ── 调度管理操作 ──
+  const handleSaveSchedule = async () => {
+    setScheduleSaving(true);
+    setScheduleMessage('');
+    try {
+      await api.updateSchedule({
+        enabled: scheduleEnabled,
+        hours: scheduleHours,
+        minutes: scheduleMinutes,
+      });
+      setScheduleMessage('调度配置已保存并重载');
+      setTimeout(refreshSchedule, 500);
+    } catch (e) {
+      setScheduleMessage('保存失败: ' + (e as Error).message);
+    }
+    setScheduleSaving(false);
+  };
+
+  const handleToggleSchedule = async () => {
+    try {
+      const res = await api.toggleSchedule(!scheduleEnabled);
+      setScheduleEnabled(!scheduleEnabled);
+      setScheduleMessage(res.message);
+      setTimeout(refreshSchedule, 500);
+    } catch (e) {
+      setScheduleMessage('操作失败: ' + (e as Error).message);
+    }
+  };
+
+  const handleAddTimeSlot = () => {
+    setScheduleHours([...scheduleHours, newHour]);
+    setScheduleMinutes([...scheduleMinutes, newMinute]);
+    setShowAddTime(false);
+  };
+
+  const handleRemoveTimeSlot = (index: number) => {
+    if (scheduleHours.length <= 1) return;
+    setScheduleHours(scheduleHours.filter((_, i) => i !== index));
+    setScheduleMinutes(scheduleMinutes.filter((_, i) => i !== index));
+  };
+
+  const handleManualRun = async () => {
+    try {
+      await api.triggerPipeline();
+      setScheduleMessage('管道已手动触发');
+    } catch (e) {
+      setScheduleMessage('触发失败: ' + (e as Error).message);
+    }
   };
 
   if (loading) {
@@ -184,409 +262,691 @@ export default function FetchMonitor() {
         <StatCard icon="fa-triangle-exclamation" label="下载失败" value={`${overview.cache.failed} 篇`} color="var(--accent-red)" />
       </div>
 
-      {/* ═══ 区块 2: 源列表 ═══ */}
-      <div style={{ marginBottom: 28 }}>
-        <h3 style={{
-          fontSize: 15,
-          fontWeight: 600,
-          marginBottom: 14,
-          color: 'var(--text-primary)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-        }}>
-          <i className="fas fa-database" style={{ color: 'var(--accent)' }} />
-          数据源
-        </h3>
+      {/* ═══ Tab 切换 ═══ */}
+      <Tabs style={{ marginBottom: 20 }}>
+        {TABS.map(t => (
+          <Tab key={t.key} active={activeTab === t.key} onClick={() => setActiveTab(t.key)}>
+            <i className={`fas ${t.icon}`} style={{ marginRight: 6 }} />
+            {t.label}
+          </Tab>
+        ))}
+      </Tabs>
 
-        {/* 类型筛选 */}
-        <Tabs style={{ marginBottom: 14 }}>
-          {['', 'rss', 'hotlist', 'bilibili'].map(t => (
-            <Tab
-              key={t}
-              active={sourceFilter === t}
-              onClick={() => setSourceFilter(t)}
-            >
-              {t === '' ? '全部' : typeLabels[t] || t}
-            </Tab>
-          ))}
-        </Tabs>
+      {/* ═══ Tab: 数据源 ═══ */}
+      {activeTab === 'overview' && (
+        <>
+          {/* ═══ 区块 2: 源列表 ═══ */}
+          <div style={{ marginBottom: 28 }}>
+            <div style={{
+              fontSize: 15,
+              fontWeight: 600,
+              marginBottom: 14,
+              color: 'var(--text-primary)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+            }}>
+              <i className="fas fa-database" style={{ color: 'var(--accent)' }} />
+              数据源
+            </div>
 
-        <Card flat style={{ padding: 0 }}>
-          <Table>
-            <thead>
-              <tr>
-                <th>源名称</th>
-                <th>类型</th>
-                <th>最近抓取</th>
-                <th>状态</th>
-                <th>成功率</th>
-                <th>文章(缓存/总计)</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sources.map(s => (
-                <tr
-                  key={s.name}
-                  style={{
-                    background: s.health === 'failing' ? 'rgba(239, 83, 80, 0.04)' : undefined,
-                  }}
+            <Tabs style={{ marginBottom: 14 }}>
+              {['', 'rss', 'hotlist', 'bilibili'].map(t => (
+                <Tab
+                  key={t}
+                  active={sourceFilter === t}
+                  onClick={() => setSourceFilter(t)}
                 >
-                  <td>
+                  {t === '' ? '全部' : typeLabels[t] || t}
+                </Tab>
+              ))}
+            </Tabs>
+
+            <Card flat style={{ padding: 0 }}>
+              <Table>
+                <thead>
+                  <tr>
+                    <th>源名称</th>
+                    <th>类型</th>
+                    <th>最近抓取</th>
+                    <th>状态</th>
+                    <th>成功率</th>
+                    <th>文章(缓存/总计)</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sources.map(s => (
+                    <tr
+                      key={s.name}
+                      style={{
+                        background: s.health === 'failing' ? 'rgba(239, 83, 80, 0.04)' : undefined,
+                      }}
+                    >
+                      <td>
+                        <button
+                          onClick={() => handleExpand(s.name)}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            color: 'var(--text-secondary)',
+                            cursor: 'pointer',
+                            fontSize: 12,
+                            padding: 0,
+                            fontWeight: 600,
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 6,
+                          }}
+                        >
+                          <i className={`fas ${expandedSource === s.name ? 'fa-chevron-down' : 'fa-chevron-right'}`} style={{ fontSize: 10 }} />
+                          {s.name}
+                        </button>
+                      </td>
+                      <td>{typeLabels[s.type] || s.type}</td>
+                      <td>{s.last_fetch ? formatTime(s.last_fetch) : '—'}</td>
+                      <td>
+                        <Badge variant={healthVariant[s.health]}>
+                          {s.health === 'healthy' ? '正常' : s.health === 'degraded' ? '降级' : '异常'}
+                        </Badge>
+                      </td>
+                      <td>{(s.success_rate_5 * 100).toFixed(0)}%</td>
+                      <td>{s.cached_articles}/{s.total_articles}</td>
+                      <td>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <Button variant="ghost" size="xs" onClick={() => handleViewArticles(s.name)}>
+                            查看
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="xs"
+                            onClick={() => handleRetrySource(s.name)}
+                            loading={retryingSource === s.name}
+                          >
+                            重抓
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </Table>
+            </Card>
+
+            {expandedSource && (
+              <Card flat style={{ marginTop: 12, padding: 16 }}>
+                {historyLoading ? (
+                  <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>加载中...</span>
+                ) : (
+                  <div style={{ fontSize: 12 }}>
+                    <div style={{ marginBottom: 10, fontWeight: 600, color: 'var(--text-secondary)' }}>
+                      <i className="fas fa-history" style={{ marginRight: 6 }} />
+                      最近抓取历史 (7 天)
+                    </div>
+                    {sourceHistory.length === 0 ? (
+                      <span style={{ color: 'var(--text-muted)' }}>暂无记录 — 该源可能尚未被系统调度抓取</span>
+                    ) : (
+                      <div style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 6,
+                        maxHeight: 140,
+                        overflowY: 'auto',
+                      }}>
+                        {sourceHistory.map((h, i) => (
+                          <div key={i} style={{
+                            display: 'flex',
+                            gap: 12,
+                            alignItems: 'center',
+                            fontSize: 11,
+                            fontFamily: 'var(--font-mono)',
+                            padding: '4px 8px',
+                            borderRadius: 4,
+                            background: 'rgba(0, 0, 0, 0.15)',
+                          }}>
+                            <span style={{ color: 'var(--text-muted)', minWidth: 130 }}>
+                              {h.started_at ? h.started_at.replace('T', ' ').substring(0, 19) : ''}
+                            </span>
+                            <Badge variant={h.status === 'ok' ? 'green' : 'red'}>
+                              {h.status === 'ok' ? '成功' : '失败'}
+                            </Badge>
+                            <span>{h.articles_fetched} 条</span>
+                            <span style={{ color: 'var(--accent-green)' }}>+{h.articles_new} 新增</span>
+                            <span style={{ color: 'var(--text-muted)' }}>{h.run_type === 'manual' ? '手动' : '调度'}</span>
+                            {h.error_msg && <span style={{ color: 'var(--accent-red)' }}>{h.error_msg.substring(0, 60)}</span>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <div style={{ marginTop: 12, borderTop: '1px solid var(--border)', paddingTop: 10 }}>
+                      <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+                        {['', 'pending', 'fetched', 'failed', 'translated'].map(st => (
+                          <Button
+                            key={st}
+                            variant={sourceArticlesFilter === st ? 'green' : 'ghost'}
+                            size="xs"
+                            onClick={() => handleViewArticles(expandedSource, st || undefined)}
+                          >
+                            {st === '' ? '全部' : st === 'pending' ? '待下载' : st === 'fetched' ? '已缓存' : st === 'failed' ? '失败' : '已翻译'}
+                          </Button>
+                        ))}
+                      </div>
+                      {sourceArticles.length > 0 && (
+                        <div style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 4,
+                          maxHeight: 200,
+                          overflowY: 'auto',
+                        }}>
+                          {sourceArticles.map(a => (
+                            <div key={a.id} style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 10,
+                              fontSize: 11,
+                              padding: '4px 8px',
+                              borderRadius: 4,
+                              transition: 'background var(--transition-fast)',
+                            }}
+                            onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-card-hover)')}
+                            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                            >
+                              <span style={{ minWidth: 36, color: 'var(--text-muted)' }}>#{a.id}</span>
+                              <a
+                                href={`/articles/${a.id}`}
+                                target="_blank"
+                                style={{
+                                  flex: 1,
+                                  color: 'var(--text-secondary)',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap',
+                                  textDecoration: 'none',
+                                }}
+                              >
+                                {a.title}
+                              </a>
+                              <Badge variant={statusVariant[a.content_status] || 'orange'}>
+                                {a.content_status}
+                              </Badge>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {sourceArticlesTotal > 0 && (
+                        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+                          共 {sourceArticlesTotal} 篇 · 显示前 30 篇
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </Card>
+            )}
+          </div>
+
+          {/* ═══ 区块 3: 失败文章列表 ═══ */}
+          <div style={{ marginBottom: 28 }}>
+            <div style={{
+              fontSize: 15,
+              fontWeight: 600,
+              marginBottom: 14,
+              color: 'var(--text-primary)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+            }}>
+              <i className="fas fa-exclamation-triangle" style={{ color: 'var(--accent-red)' }} />
+              下载失败的文章
+              <Badge variant="red">{failedTotal}</Badge>
+            </div>
+
+            {batchState.running && (
+              <div style={{
+                marginBottom: 12,
+                padding: '10px 14px',
+                background: 'rgba(0, 212, 255, 0.08)',
+                borderRadius: 8,
+                border: '1px solid rgba(0, 212, 255, 0.2)',
+                fontSize: 12,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+              }}>
+                <i className="fas fa-spinner fa-spin" style={{ color: 'var(--accent)' }} />
+                批量重试中: {batchState.done}/{batchState.total} · {batchState.current}
+              </div>
+            )}
+
+            <div style={{
+              marginBottom: 12,
+              display: 'flex',
+              gap: 10,
+              alignItems: 'center',
+            }}>
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={toggleSelectAll}
+              >
+                {selectedIds.size > 0 ? `取消全选 (${selectedIds.size})` : '全选当前页'}
+              </Button>
+              <Button
+                variant={selectedIds.size > 0 ? 'primary' : 'ghost'}
+                size="xs"
+                onClick={handleBatchRetry}
+                disabled={selectedIds.size === 0 || batchSubmitting || batchState.running}
+                loading={batchSubmitting}
+              >
+                批量重试 ({selectedIds.size} 篇)
+              </Button>
+              <Button
+                variant="orange"
+                size="xs"
+                icon="fa-redo"
+                onClick={handleRetryAll}
+                disabled={batchSubmitting || batchState.running}
+                loading={batchSubmitting}
+              >
+                重试所有失败 ({failedTotal} 篇)
+              </Button>
+            </div>
+
+            <Card flat style={{ padding: 0 }}>
+              <Table>
+                <thead>
+                  <tr>
+                    <th style={{ width: 32 }}>
+                      <input
+                        type="checkbox"
+                        onChange={toggleSelectAll}
+                        checked={selectedIds.size > 0 && selectedIds.size === failedArticles.length}
+                        style={{ accentColor: 'var(--accent)' }}
+                      />
+                    </th>
+                    <th>ID</th>
+                    <th>标题</th>
+                    <th>来源</th>
+                    <th>错误</th>
+                    <th>最近尝试</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {failedArticles.map(a => (
+                    <tr key={a.id}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(a.id)}
+                          onChange={() => toggleSelect(a.id)}
+                          style={{ accentColor: 'var(--accent)' }}
+                        />
+                      </td>
+                      <td>{a.id}</td>
+                      <td style={{
+                        maxWidth: 260,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}>
+                        {a.title}
+                      </td>
+                      <td>{a.source}</td>
+                      <td style={{ color: 'var(--accent-red)' }}>{a.error}</td>
+                      <td>{a.content_fetched_at ? formatTime(a.content_fetched_at) : '—'}</td>
+                      <td>
+                        <Button variant="ghost" size="xs" onClick={() => handleRetryArticle(a.id)}>
+                          重试
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </Table>
+            </Card>
+
+            {failedTotal > 50 && (
+              <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  onClick={() => { setFailedPage(failedPage - 1); api.getFailedArticles(failedPage - 1, 50).then(r => setFailedArticles(r.articles)).catch(() => {}); }}
+                  disabled={failedPage <= 1}
+                >
+                  上一页
+                </Button>
+                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                  第 {failedPage}/{Math.ceil(failedTotal / 50)} 页
+                </span>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  onClick={() => { setFailedPage(failedPage + 1); api.getFailedArticles(failedPage + 1, 50).then(r => setFailedArticles(r.articles)).catch(() => {}); }}
+                  disabled={failedPage >= Math.ceil(failedTotal / 50)}
+                >
+                  下一页
+                </Button>
+              </div>
+            )}
+          </div>
+
+          {/* ═══ 区块 4: 最近抓取日志 ═══ */}
+          <div>
+            <div style={{
+              fontSize: 15,
+              fontWeight: 600,
+              marginBottom: 14,
+              color: 'var(--text-primary)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+            }}>
+              <i className="fas fa-terminal" style={{ color: 'var(--accent)' }} />
+              最近抓取日志
+            </div>
+            <div style={{
+              background: '#0d1117',
+              borderRadius: 'var(--radius-md)',
+              padding: '10px 12px',
+              maxHeight: 240,
+              overflowY: 'auto',
+              fontFamily: 'var(--font-mono)',
+              fontSize: 10,
+              lineHeight: 1.8,
+              border: '1px solid var(--border)',
+            }}>
+              {logs.map((l, i) => {
+                const icon = l.status === 'ok' ? '✅' : l.status === 'partial' ? '⚠️' : '❌';
+                const color = l.status === 'ok' ? '#81c784' : l.status === 'partial' ? '#ffb74d' : '#ef5350';
+                return (
+                  <div key={i} style={{ color }}>
+                    [{formatTime(l.started_at)}] {l.source_name} {icon} {l.articles_fetched} 条, +{l.articles_new} 新增
+                    {l.duration_ms > 0 ? ` · ${(l.duration_ms / 1000).toFixed(1)}s` : ''}
+                    {l.run_type === 'manual' ? ' [手动]' : ''}
+                    {l.error_msg ? ` — ${l.error_msg}` : ''}
+                  </div>
+                );
+              })}
+              {logs.length === 0 && (
+                <div style={{ color: 'var(--text-muted)' }}>暂无抓取记录 — 等待首次调度运行</div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ═══ Tab: 调度管理 ═══ */}
+      {activeTab === 'schedule' && (
+        <>
+          {/* 调度状态卡片 */}
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+            gap: 14,
+            marginBottom: 24,
+          }}>
+            <StatCard
+              icon="fa-power-off"
+              label="调度状态"
+              value={scheduleInfo?.enabled ? '已启用' : '已禁用'}
+              color={scheduleInfo?.enabled ? 'var(--accent-green)' : 'var(--accent-red)'}
+            />
+            <StatCard
+              icon="fa-server"
+              label="调度器进程"
+              value={scheduleInfo?.scheduler_running ? '运行中' : '已停止'}
+              color={scheduleInfo?.scheduler_running ? 'var(--accent-green)' : 'var(--accent-orange)'}
+            />
+            <StatCard
+              icon="fa-calendar-check"
+              label="上次运行"
+              value={scheduleInfo?.last_run ? formatTime(scheduleInfo.last_run) : '—'}
+              color="var(--accent)"
+            />
+            <StatCard
+              icon="fa-check-circle"
+              label="上次状态"
+              value={scheduleInfo?.last_status === 'success' ? '成功' : scheduleInfo?.last_status === 'failed' ? '失败' : '—'}
+              color={scheduleInfo?.last_status === 'success' ? 'var(--accent-green)' : scheduleInfo?.last_status === 'failed' ? 'var(--accent-red)' : 'var(--text-muted)'}
+            />
+          </div>
+
+          {/* 定时配置 */}
+          <Card flat style={{ padding: 20, marginBottom: 20 }}>
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: 20,
+            }}>
+              <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <i className="fas fa-clock" style={{ color: 'var(--accent)' }} />
+                定时配置
+              </div>
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                <Button
+                  variant={scheduleEnabled ? 'green' : 'ghost'}
+                  size="sm"
+                  onClick={handleToggleSchedule}
+                >
+                  <i className={`fas fa-${scheduleEnabled ? 'pause' : 'play'}`} style={{ marginRight: 6 }} />
+                  {scheduleEnabled ? '禁用调度' : '启用调度'}
+                </Button>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  icon="fa-play"
+                  onClick={handleManualRun}
+                >
+                  立即运行
+                </Button>
+              </div>
+            </div>
+
+            {/* 时间列表 */}
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>
+                每天执行时间（24 小时制）:
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                {scheduleHours.map((h, i) => (
+                  <div key={i} style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    padding: '6px 12px',
+                    background: 'var(--bg-card)',
+                    borderRadius: 6,
+                    border: '1px solid var(--border)',
+                    fontSize: 13,
+                  }}>
+                    <i className="fas fa-clock" style={{ color: 'var(--accent)', fontSize: 11 }} />
+                    <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>
+                      {String(h).padStart(2, '0')}:{String(scheduleMinutes[i] || 0).padStart(2, '0')}
+                    </span>
                     <button
-                      onClick={() => handleExpand(s.name)}
+                      onClick={() => handleRemoveTimeSlot(i)}
+                      disabled={scheduleHours.length <= 1}
                       style={{
                         background: 'none',
                         border: 'none',
-                        color: 'var(--text-secondary)',
-                        cursor: 'pointer',
-                        fontSize: 12,
-                        padding: 0,
-                        fontWeight: 600,
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 6,
+                        color: 'var(--accent-red)',
+                        cursor: scheduleHours.length <= 1 ? 'not-allowed' : 'pointer',
+                        fontSize: 11,
+                        padding: '0 2px',
+                        opacity: scheduleHours.length <= 1 ? 0.3 : 1,
                       }}
                     >
-                      <i className={`fas ${expandedSource === s.name ? 'fa-chevron-down' : 'fa-chevron-right'}`} style={{ fontSize: 10 }} />
-                      {s.name}
+                      <i className="fas fa-times" />
                     </button>
-                  </td>
-                  <td>{typeLabels[s.type] || s.type}</td>
-                  <td>{s.last_fetch ? formatTime(s.last_fetch) : '—'}</td>
-                  <td>
-                    <Badge variant={healthVariant[s.health]}>
-                      {s.health === 'healthy' ? '正常' : s.health === 'degraded' ? '降级' : '异常'}
-                    </Badge>
-                  </td>
-                  <td>{(s.success_rate_5 * 100).toFixed(0)}%</td>
-                  <td>{s.cached_articles}/{s.total_articles}</td>
-                  <td>
-                    <div style={{ display: 'flex', gap: 6 }}>
-                      <Button variant="ghost" size="xs" onClick={() => handleViewArticles(s.name)}>
-                        查看
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="xs"
-                        onClick={() => handleRetrySource(s.name)}
-                        loading={retryingSource === s.name}
-                      >
-                        重抓
-                      </Button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </Table>
-        </Card>
+                  </div>
+                ))}
 
-        {/* 展开行内容 */}
-        {expandedSource && (
-          <Card flat style={{ marginTop: 12, padding: 16 }}>
-            {historyLoading ? (
-              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>加载中...</span>
-            ) : (
-              <div style={{ fontSize: 12 }}>
-                <div style={{ marginBottom: 10, fontWeight: 600, color: 'var(--text-secondary)' }}>
-                  <i className="fas fa-history" style={{ marginRight: 6 }} />
-                  最近抓取历史 (7 天)
-                </div>
-                {sourceHistory.length === 0 ? (
-                  <span style={{ color: 'var(--text-muted)' }}>暂无记录 — 该源可能尚未被系统调度抓取</span>
-                ) : (
+                {showAddTime ? (
                   <div style={{
                     display: 'flex',
-                    flexDirection: 'column',
-                    gap: 6,
-                    maxHeight: 140,
-                    overflowY: 'auto',
+                    alignItems: 'center',
+                    gap: 4,
+                    padding: '6px 10px',
+                    background: 'var(--bg-card)',
+                    borderRadius: 6,
+                    border: '1px solid var(--accent)',
                   }}>
-                    {sourceHistory.map((h, i) => (
-                      <div key={i} style={{
-                        display: 'flex',
-                        gap: 12,
-                        alignItems: 'center',
-                        fontSize: 11,
-                        fontFamily: 'var(--font-mono)',
-                        padding: '4px 8px',
+                    <select
+                      value={newHour}
+                      onChange={e => setNewHour(Number(e.target.value))}
+                      style={{
+                        width: 50,
+                        padding: '2px 4px',
+                        background: 'var(--bg-input, #1a1a2e)',
+                        color: 'var(--text-primary)',
+                        border: '1px solid var(--border)',
                         borderRadius: 4,
-                        background: 'rgba(0, 0, 0, 0.15)',
-                      }}>
-                        <span style={{ color: 'var(--text-muted)', minWidth: 130 }}>
-                          {h.started_at ? h.started_at.replace('T', ' ').substring(0, 19) : ''}
-                        </span>
-                        <Badge variant={h.status === 'ok' ? 'green' : 'red'}>
-                          {h.status === 'ok' ? '成功' : '失败'}
-                        </Badge>
-                        <span>{h.articles_fetched} 条</span>
-                        <span style={{ color: 'var(--accent-green)' }}>+{h.articles_new} 新增</span>
-                        <span style={{ color: 'var(--text-muted)' }}>{h.run_type === 'manual' ? '手动' : '调度'}</span>
-                        {h.error_msg && <span style={{ color: 'var(--accent-red)' }}>{h.error_msg.substring(0, 60)}</span>}
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {/* 源文章列表 */}
-                <div style={{ marginTop: 12, borderTop: '1px solid var(--border)', paddingTop: 10 }}>
-                  <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-                    {['', 'pending', 'fetched', 'failed', 'translated'].map(st => (
-                      <Button
-                        key={st}
-                        variant={sourceArticlesFilter === st ? 'green' : 'ghost'}
-                        size="xs"
-                        onClick={() => handleViewArticles(expandedSource, st || undefined)}
-                      >
-                        {st === '' ? '全部' : st === 'pending' ? '待下载' : st === 'fetched' ? '已缓存' : st === 'failed' ? '失败' : '已翻译'}
-                      </Button>
-                    ))}
-                  </div>
-                  {sourceArticles.length > 0 && (
-                    <div style={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: 4,
-                      maxHeight: 200,
-                      overflowY: 'auto',
-                    }}>
-                      {sourceArticles.map(a => (
-                        <div key={a.id} style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 10,
-                          fontSize: 11,
-                          padding: '4px 8px',
-                          borderRadius: 4,
-                          transition: 'background var(--transition-fast)',
-                        }}
-                        onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-card-hover)')}
-                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                        >
-                          <span style={{ minWidth: 36, color: 'var(--text-muted)' }}>#{a.id}</span>
-                          <a
-                            href={`/articles/${a.id}`}
-                            target="_blank"
-                            style={{
-                              flex: 1,
-                              color: 'var(--text-secondary)',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                              textDecoration: 'none',
-                            }}
-                          >
-                            {a.title}
-                          </a>
-                          <Badge variant={statusVariant[a.content_status] || 'orange'}>
-                            {a.content_status}
-                          </Badge>
-                        </div>
+                        fontSize: 12,
+                      }}
+                    >
+                      {Array.from({ length: 24 }, (_, i) => (
+                        <option key={i} value={i}>{String(i).padStart(2, '0')}</option>
                       ))}
-                    </div>
-                  )}
-                  {sourceArticlesTotal > 0 && (
-                    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
-                      共 {sourceArticlesTotal} 篇 · 显示前 30 篇
-                    </div>
-                  )}
-                </div>
+                    </select>
+                    <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>:</span>
+                    <select
+                      value={newMinute}
+                      onChange={e => setNewMinute(Number(e.target.value))}
+                      style={{
+                        width: 50,
+                        padding: '2px 4px',
+                        background: 'var(--bg-input, #1a1a2e)',
+                        color: 'var(--text-primary)',
+                        border: '1px solid var(--border)',
+                        borderRadius: 4,
+                        fontSize: 12,
+                      }}
+                    >
+                      {[0, 15, 30, 45].map(m => (
+                        <option key={m} value={m}>{String(m).padStart(2, '0')}</option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={handleAddTimeSlot}
+                      style={{
+                        background: 'var(--accent)',
+                        border: 'none',
+                        color: '#000',
+                        cursor: 'pointer',
+                        borderRadius: 4,
+                        padding: '2px 8px',
+                        fontSize: 11,
+                        fontWeight: 600,
+                      }}
+                    >
+                      <i className="fas fa-check" />
+                    </button>
+                    <button
+                      onClick={() => setShowAddTime(false)}
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: 'var(--text-muted)',
+                        cursor: 'pointer',
+                        padding: '2px 4px',
+                        fontSize: 11,
+                      }}
+                    >
+                      <i className="fas fa-times" />
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setShowAddTime(true)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      padding: '6px 12px',
+                      background: 'var(--bg-card)',
+                      borderRadius: 6,
+                      border: '1px dashed var(--border)',
+                      color: 'var(--text-secondary)',
+                      cursor: 'pointer',
+                      fontSize: 12,
+                    }}
+                  >
+                    <i className="fas fa-plus" style={{ fontSize: 10 }} />
+                    添加时间
+                  </button>
+                )}
               </div>
-            )}
+            </div>
+
+            {/* 保存按钮 */}
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+              <Button
+                variant="primary"
+                size="sm"
+                icon="fa-save"
+                onClick={handleSaveSchedule}
+                loading={scheduleSaving}
+              >
+                保存配置
+              </Button>
+              {scheduleMessage && (
+                <span style={{
+                  fontSize: 12,
+                  color: scheduleMessage.includes('失败') ? 'var(--accent-red)' : 'var(--accent-green)',
+                }}>
+                  {scheduleMessage}
+                </span>
+              )}
+            </div>
           </Card>
-        )}
-      </div>
 
-      {/* ═══ 区块 3: 失败文章列表 ═══ */}
-      <div style={{ marginBottom: 28 }}>
-        <h3 style={{
-          fontSize: 15,
-          fontWeight: 600,
-          marginBottom: 14,
-          color: 'var(--text-primary)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-        }}>
-          <i className="fas fa-exclamation-triangle" style={{ color: 'var(--accent-red)' }} />
-          下载失败的文章
-          <Badge variant="red">{failedTotal}</Badge>
-        </h3>
-
-        {batchState.running && (
-          <div style={{
-            marginBottom: 12,
-            padding: '10px 14px',
-            background: 'rgba(0, 212, 255, 0.08)',
-            borderRadius: 8,
-            border: '1px solid rgba(0, 212, 255, 0.2)',
-            fontSize: 12,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-          }}>
-            <i className="fas fa-spinner fa-spin" style={{ color: 'var(--accent)' }} />
-            批量重试中: {batchState.done}/{batchState.total} · {batchState.current}
-          </div>
-        )}
-
-        <div style={{
-          marginBottom: 12,
-          display: 'flex',
-          gap: 10,
-          alignItems: 'center',
-        }}>
-          <Button
-            variant="ghost"
-            size="xs"
-            onClick={toggleSelectAll}
-          >
-            {selectedIds.size > 0 ? `取消全选 (${selectedIds.size})` : '全选当前页'}
-          </Button>
-          <Button
-            variant={selectedIds.size > 0 ? 'primary' : 'ghost'}
-            size="xs"
-            onClick={handleBatchRetry}
-            disabled={selectedIds.size === 0 || batchSubmitting || batchState.running}
-            loading={batchSubmitting}
-          >
-            批量重试 ({selectedIds.size} 篇)
-          </Button>
-          <Button
-            variant="orange"
-            size="xs"
-            icon="fa-redo"
-            onClick={handleRetryAll}
-            disabled={batchSubmitting || batchState.running}
-            loading={batchSubmitting}
-          >
-            重试所有失败 ({failedTotal} 篇)
-          </Button>
-        </div>
-
-        <Card flat style={{ padding: 0 }}>
-          <Table>
-            <thead>
-              <tr>
-                <th style={{ width: 32 }}>
-                  <input
-                    type="checkbox"
-                    onChange={toggleSelectAll}
-                    checked={selectedIds.size > 0 && selectedIds.size === failedArticles.length}
-                    style={{ accentColor: 'var(--accent)' }}
-                  />
-                </th>
-                <th>ID</th>
-                <th>标题</th>
-                <th>来源</th>
-                <th>错误</th>
-                <th>最近尝试</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {failedArticles.map(a => (
-                <tr key={a.id}>
-                  <td>
-                    <input
-                      type="checkbox"
-                      checked={selectedIds.has(a.id)}
-                      onChange={() => toggleSelect(a.id)}
-                      style={{ accentColor: 'var(--accent)' }}
-                    />
-                  </td>
-                  <td>{a.id}</td>
-                  <td style={{
-                    maxWidth: 260,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}>
-                    {a.title}
-                  </td>
-                  <td>{a.source}</td>
-                  <td style={{ color: 'var(--accent-red)' }}>{a.error}</td>
-                  <td>{a.content_fetched_at ? formatTime(a.content_fetched_at) : '—'}</td>
-                  <td>
-                    <Button variant="ghost" size="xs" onClick={() => handleRetryArticle(a.id)}>
-                      重试
-                    </Button>
-                  </td>
-                </tr>
+          {/* 调度日志 */}
+          <div>
+            <div style={{
+              fontSize: 15,
+              fontWeight: 600,
+              marginBottom: 14,
+              color: 'var(--text-primary)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+            }}>
+              <i className="fas fa-scroll" style={{ color: 'var(--accent)' }} />
+              调度日志
+            </div>
+            <div style={{
+              background: '#0d1117',
+              borderRadius: 'var(--radius-md)',
+              padding: '10px 12px',
+              maxHeight: 300,
+              overflowY: 'auto',
+              fontFamily: 'var(--font-mono)',
+              fontSize: 10,
+              lineHeight: 1.8,
+              border: '1px solid var(--border)',
+            }}>
+              {scheduleLogs.map((log, i) => (
+                <div key={i} style={{
+                  color: log.includes('失败') || log.includes('异常') || log.includes('错误')
+                    ? '#ef5350'
+                    : log.includes('成功') || log.includes('启动')
+                      ? '#81c784'
+                      : '#90a4ae',
+                }}>
+                  {log}
+                </div>
               ))}
-            </tbody>
-          </Table>
-        </Card>
-
-        {failedTotal > 50 && (
-          <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
-            <Button
-              variant="ghost"
-              size="xs"
-              onClick={() => { setFailedPage(failedPage - 1); api.getFailedArticles(failedPage - 1, 50).then(r => setFailedArticles(r.articles)).catch(() => {}); }}
-              disabled={failedPage <= 1}
-            >
-              上一页
-            </Button>
-            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-              第 {failedPage}/{Math.ceil(failedTotal / 50)} 页
-            </span>
-            <Button
-              variant="ghost"
-              size="xs"
-              onClick={() => { setFailedPage(failedPage + 1); api.getFailedArticles(failedPage + 1, 50).then(r => setFailedArticles(r.articles)).catch(() => {}); }}
-              disabled={failedPage >= Math.ceil(failedTotal / 50)}
-            >
-              下一页
-            </Button>
+              {scheduleLogs.length === 0 && (
+                <div style={{ color: 'var(--text-muted)' }}>暂无调度日志</div>
+              )}
+            </div>
           </div>
-        )}
-      </div>
-
-      {/* ═══ 区块 4: 最近抓取日志 ═══ */}
-      <div>
-        <h3 style={{
-          fontSize: 15,
-          fontWeight: 600,
-          marginBottom: 14,
-          color: 'var(--text-primary)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-        }}>
-          <i className="fas fa-terminal" style={{ color: 'var(--accent)' }} />
-          最近抓取日志
-        </h3>
-        <div style={{
-          background: '#0d1117',
-          borderRadius: 'var(--radius-md)',
-          padding: '10px 12px',
-          maxHeight: 240,
-          overflowY: 'auto',
-          fontFamily: 'var(--font-mono)',
-          fontSize: 10,
-          lineHeight: 1.8,
-          border: '1px solid var(--border)',
-        }}>
-          {logs.map((l, i) => {
-            const icon = l.status === 'ok' ? '✅' : l.status === 'partial' ? '⚠️' : '❌';
-            const color = l.status === 'ok' ? '#81c784' : l.status === 'partial' ? '#ffb74d' : '#ef5350';
-            return (
-              <div key={i} style={{ color }}>
-                [{formatTime(l.started_at)}] {l.source_name} {icon} {l.articles_fetched} 条, +{l.articles_new} 新增
-                {l.duration_ms > 0 ? ` · ${(l.duration_ms / 1000).toFixed(1)}s` : ''}
-                {l.run_type === 'manual' ? ' [手动]' : ''}
-                {l.error_msg ? ` — ${l.error_msg}` : ''}
-              </div>
-            );
-          })}
-          {logs.length === 0 && (
-            <div style={{ color: 'var(--text-muted)' }}>暂无抓取记录 — 等待首次调度运行</div>
-          )}
-        </div>
-      </div>
+        </>
+      )}
     </div>
   );
 }

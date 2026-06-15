@@ -1,11 +1,13 @@
 """
-数据采集状态监控 API — 抓取历史、源健康、缓存重试。
+数据采集状态监控 API — 抓取历史、源健康、缓存重试、调度管理。
 """
 import os, sqlite3, threading, logging, time
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 
 from config import config
+from scheduler import get_schedule_info, get_schedule_logs, reload_scheduler
 
 router = APIRouter(prefix="/api/fetch", tags=["fetch"])
 logger = logging.getLogger(__name__)
@@ -466,6 +468,81 @@ def fetch_recent_logs(limit: int = Query(50, ge=1, le=200)):
     db = _get_new_db()
     logs = db.get_fetch_recent_logs(limit)
     return {"logs": logs}
+
+
+# ══════════════════════════════════════════════════════════════
+# 调度管理
+# ══════════════════════════════════════════════════════════════
+
+@router.get("/schedule")
+def get_schedule():
+    """获取当前调度配置和状态。"""
+    return get_schedule_info()
+
+
+class ScheduleUpdate(BaseModel):
+    enabled: bool | None = None
+    hours: list[int] | None = None
+    minutes: list[int] | None = None
+
+
+@router.put("/schedule")
+def update_schedule(body: ScheduleUpdate):
+    """更新调度配置并重载调度器。"""
+    if body.hours is not None:
+        if not isinstance(body.hours, list) or len(body.hours) == 0:
+            raise HTTPException(400, "hours 必须是非空整数列表")
+        if len(body.hours) > 12:
+            raise HTTPException(400, "最多支持 12 个定时时间")
+        for h in body.hours:
+            if not isinstance(h, int) or h < 0 or h > 23:
+                raise HTTPException(400, f"小时值无效: {h}（应为 0-23）")
+        config.pipeline_cron_hours = body.hours
+
+    if body.minutes is not None:
+        if not isinstance(body.minutes, list):
+            raise HTTPException(400, "minutes 必须是整数列表")
+        for m in body.minutes:
+            if not isinstance(m, int) or m < 0 or m > 59:
+                raise HTTPException(400, f"分钟值无效: {m}（应为 0-59）")
+        config.pipeline_cron_minutes = body.minutes
+
+    if body.enabled is not None:
+        config.pipeline_schedule_enabled = body.enabled
+
+    # 重载调度器
+    try:
+        reload_scheduler()
+    except Exception as e:
+        raise HTTPException(500, f"调度器重载失败: {str(e)[:200]}")
+
+    return get_schedule_info()
+
+
+class ToggleSchedule(BaseModel):
+    enabled: bool
+
+
+@router.post("/schedule/toggle")
+def toggle_schedule(body: ToggleSchedule):
+    """快速启用/禁用调度。"""
+    config.pipeline_schedule_enabled = body.enabled
+    try:
+        reload_scheduler()
+    except Exception as e:
+        raise HTTPException(500, f"调度器重载失败: {str(e)[:200]}")
+
+    return {
+        'ok': True,
+        'enabled': body.enabled,
+        'message': '调度已启用' if body.enabled else '调度已禁用',
+    }
+
+
+@router.get("/schedule/logs")
+def schedule_logs(limit: int = Query(50, ge=1, le=100)):
+    """获取调度器日志。"""
+    return {'logs': get_schedule_logs(limit)}
 
 
 # ── 内部工具 ──────────────────────────────────────────────

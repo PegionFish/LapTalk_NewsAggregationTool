@@ -1,7 +1,7 @@
 """
 APScheduler-based pipeline scheduler.
-Runs the news pipeline at 10:00 and 17:00 daily.
-Can be toggled on/off via config.
+Runs the news pipeline at configurable times daily (default 10:00 / 17:00).
+Can be toggled on/off and schedule changed via config/API.
 """
 import os, sqlite3, logging, glob, time, asyncio
 from datetime import datetime
@@ -15,11 +15,6 @@ logger = logging.getLogger(__name__)
 
 scheduler = AsyncIOScheduler()
 
-PIPELINE_CRON = [
-    CronTrigger(hour=10, minute=0),   # 10:00
-    CronTrigger(hour=17, minute=0),   # 17:00
-]
-
 # ── Pipeline status tracking ─────────────────────────────
 _pipeline_state = {
     'running': False,
@@ -30,16 +25,64 @@ _pipeline_state = {
     'run_type': 'scheduled',
 }
 
+# 调度器日志（内存环形缓冲）
+_schedule_log: list[str] = []
+_SCHEDULE_LOG_MAX = 100
+
+
+def _add_schedule_log(msg: str):
+    ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    _schedule_log.append(f"[{ts}] {msg}")
+    if len(_schedule_log) > _SCHEDULE_LOG_MAX:
+        _schedule_log[:] = _schedule_log[-_SCHEDULE_LOG_MAX:]
+
 
 def get_pipeline_status() -> dict:
     """Return current pipeline status (called by GET /api/pipeline/status)."""
     return dict(_pipeline_state)
 
 
+def get_schedule_info() -> dict:
+    """返回当前调度配置和状态。"""
+    hours = config.pipeline_cron_hours
+    minutes = config.pipeline_cron_minutes
+    # 对齐长度：分钟数不够时补 0
+    while len(minutes) < len(hours):
+        minutes.append(0)
+    schedule = []
+    for i, h in enumerate(hours[:len(minutes)]):
+        schedule.append({'hour': h, 'minute': minutes[i]})
+    return {
+        'enabled': config.pipeline_schedule_enabled,
+        'schedule': schedule,
+        'scheduler_running': scheduler.running,
+        'last_run': _pipeline_state.get('last_run'),
+        'last_status': _pipeline_state.get('last_status'),
+    }
+
+
+def get_schedule_logs(limit: int = 50) -> list[str]:
+    """返回调度器日志。"""
+    return _schedule_log[-limit:]
+
+
+def _build_cron_triggers() -> list[CronTrigger]:
+    """根据配置生成 cron triggers。"""
+    hours = config.pipeline_cron_hours
+    minutes = config.pipeline_cron_minutes
+    while len(minutes) < len(hours):
+        minutes.append(0)
+    triggers = []
+    for i, h in enumerate(hours[:len(minutes)]):
+        triggers.append(CronTrigger(hour=h, minute=minutes[i]))
+    return triggers
+
+
 async def _run_pipeline_job():
     """Wrapper that logs the pipeline run and updates status."""
     global _pipeline_state
     _pipeline_state.update(running=True, current_step='starting', steps=[])
+    _add_schedule_log("定时管道启动")
     logger.info("Scheduled pipeline starting...")
     try:
         def progress_callback(status, message):
@@ -54,11 +97,14 @@ async def _run_pipeline_job():
         )
         _pipeline_state['last_status'] = 'success' if success else 'failed'
         if success:
+            _add_schedule_log("管道执行成功")
             logger.info("Scheduled pipeline completed successfully")
         else:
+            _add_schedule_log("管道执行失败")
             logger.error("Scheduled pipeline failed")
     except Exception as e:
         _pipeline_state['last_status'] = 'error'
+        _add_schedule_log(f"管道异常: {str(e)[:100]}")
         logger.exception(f"Scheduled pipeline error: {e}")
     finally:
         _pipeline_state['running'] = False
@@ -97,28 +143,69 @@ async def _backup_db():
 def start_scheduler():
     """Start scheduler if enabled in config."""
     if not config.pipeline_schedule_enabled:
+        _add_schedule_log("调度器已禁用（配置 pipeline_schedule_enabled=false）")
         logger.info("Pipeline scheduler is disabled in config")
         return
 
     if not scheduler.running:
-        for trigger in PIPELINE_CRON:
+        triggers = _build_cron_triggers()
+        for trigger in triggers:
             scheduler.add_job(_run_pipeline_job, trigger)
         # Daily backup at 03:00
         scheduler.add_job(_backup_db, CronTrigger(hour=3, minute=0))
         scheduler.start()
-        logger.info("Pipeline scheduler started: daily 10:00 / 17:00, backup at 03:00")
+        hours = config.pipeline_cron_hours
+        minutes = config.pipeline_cron_minutes
+        while len(minutes) < len(hours):
+            minutes.append(0)
+        time_strs = [f"{h:02d}:{minutes[i]:02d}" for i, h in enumerate(hours[:len(minutes)])]
+        _add_schedule_log(f"调度器启动: 每天 {', '.join(time_strs)} 运行")
+        logger.info(f"Pipeline scheduler started: daily {', '.join(time_strs)}, backup at 03:00")
 
 
 def stop_scheduler():
     """Stop the scheduler."""
     if scheduler.running:
         scheduler.shutdown(wait=False)
+        _add_schedule_log("调度器已停止")
         logger.info("Pipeline scheduler stopped")
+
+
+def reload_scheduler():
+    """动态重载调度器 — 停止旧任务，根据新配置重新添加。"""
+    global scheduler
+
+    if scheduler.running:
+        scheduler.shutdown(wait=False)
+        logger.info("Scheduler stopped for reload")
+
+    # 重新创建 scheduler 实例（APScheduler shutdown 后需重新实例化）
+    scheduler = AsyncIOScheduler()
+
+    if not config.pipeline_schedule_enabled:
+        _add_schedule_log("调度器重载: 已禁用")
+        logger.info("Scheduler reload: disabled in config")
+        return
+
+    triggers = _build_cron_triggers()
+    for trigger in triggers:
+        scheduler.add_job(_run_pipeline_job, trigger)
+    scheduler.add_job(_backup_db, CronTrigger(hour=3, minute=0))
+    scheduler.start()
+
+    hours = config.pipeline_cron_hours
+    minutes = config.pipeline_cron_minutes
+    while len(minutes) < len(hours):
+        minutes.append(0)
+    time_strs = [f"{h:02d}:{minutes[i]:02d}" for i, h in enumerate(hours[:len(minutes)])]
+    _add_schedule_log(f"调度器重载: 每天 {', '.join(time_strs)} 运行")
+    logger.info(f"Scheduler reloaded: daily {', '.join(time_strs)}")
 
 
 async def trigger_pipeline_manual():
     """Manually trigger a pipeline run (via API)."""
     global _pipeline_state
     _pipeline_state['run_type'] = 'manual'
+    _add_schedule_log("手动触发管道")
     asyncio.create_task(_run_pipeline_job())
     return {'status': 'pipeline_started'}
