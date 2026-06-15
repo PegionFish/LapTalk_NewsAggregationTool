@@ -205,7 +205,7 @@ def _run_pipeline_job_sync():
         def progress_callback(status, message):
             _pipeline_state['current_step'] = message
             _pipeline_state['steps'].append({'name': message, 'status': status, 'duration_ms': 0})
-            task_state.update('pipeline', current=message)
+            task_state.update('pipeline', current=message, log_msg=f"{message}: {status}")
 
         success = run_pipeline(
             db_path=config.db_path,
