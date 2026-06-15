@@ -1,11 +1,11 @@
 """
-全局任务锁管理器 — 确保同一时间只能运行一个 AI/管道任务。
+全局任务锁管理器 — 确保同一时间只能运行一个 AI 任务，但抓取可并行。
 
 锁级别:
-  full_level=2 (互斥一切): pipeline, ai_full
-  full_level=1 (互斥 AI 任务): translate, analyze, keywords, classify, score,
+  full_level=2 (互斥一切): ai_full
+  full_level=1 (互斥 AI 任务): pipeline, translate, analyze, keywords, classify, score,
                                 recluster, summarize_events, build_chains, rank_events, ai_filter
-  full_level=0 (仅互斥同类): cache_fetch, batch_retry, hotlist_fetch, update
+  full_level=0 (仅互斥同类，可与 AI 并行): cache_fetch, batch_retry, hotlist_fetch, update
 """
 import threading, logging
 from datetime import datetime
@@ -13,9 +13,12 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 # 任务类型 → 锁级别
+# Level 0: 抓取类，不依赖 AI，可与 AI 任务并行
+# Level 1: AI 类，互斥其他 AI 任务，但不阻塞抓取
+# Level 2: 全量 AI，互斥一切
 TASK_LEVELS = {
-    'pipeline':        2,  # 全流程
     'ai_full':         2,  # 一键全量 AI
+    'pipeline':        1,  # 全流程（含 AI 步骤，与独立 AI 任务互斥）
     'translate':       1,
     'analyze':         1,
     'keywords':        1,
@@ -26,10 +29,10 @@ TASK_LEVELS = {
     'build_chains':    1,
     'rank_events':     1,
     'ai_filter':       1,
-    'cache_fetch':     0,
-    'batch_retry':     0,
-    'hotlist_fetch':   0,
-    'update':          0,
+    'cache_fetch':     0,  # 抓取类：可与 AI 并行
+    'batch_retry':     0,  # 抓取类：可与 AI 并行
+    'hotlist_fetch':   0,  # 抓取类：可与 AI 并行
+    'update':          0,  # 系统更新：独立操作
 }
 
 

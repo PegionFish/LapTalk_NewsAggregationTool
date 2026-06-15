@@ -16,3 +16,6 @@ venv/
 news-web/config.json
 logs/
 pids/
+tools/dist/
+tools/build/
+tools/*.spec
