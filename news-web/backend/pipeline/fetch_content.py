@@ -138,6 +138,85 @@ def download_images(img_urls: list, img_dir: str, page_url: str) -> int:
     return downloaded
 
 
+def fetch_article_content(url: str, article_id: int, db_path: str = None) -> dict:
+    """下载并归档单篇文章页面，返回缓存结果。"""
+    if db_path is None:
+        db_path = config.db_path
+    if not db_path:
+        return {'ok': False, 'error': 'database_not_configured'}
+
+    if not can_fetch(url):
+        return {'ok': False, 'error': 'Blocked'}
+
+    res = download_page(url)
+    conn = sqlite3.connect(db_path)
+    try:
+        if res['error']:
+            conn.execute("UPDATE articles SET local_path=? WHERE id=?",
+                         (f'[ERR:{res["error"]}]', article_id))
+            conn.commit()
+            return {'ok': False, 'error': res['error']}
+
+        if not res['html']:
+            return {'ok': False, 'error': 'empty_response'}
+
+        html = sanitize_html(res['html'])
+        content_dir = config.content_cache_path
+        os.makedirs(content_dir, exist_ok=True)
+
+        imgs = 0
+        try:
+            img_urls = extract_img_srcs(html, url)
+            if img_urls:
+                article_img_dir = os.path.join(content_dir, str(article_id), 'images')
+                imgs = download_images(img_urls, article_img_dir, url)
+        except Exception:
+            pass
+
+        file_path = os.path.join(content_dir, f'{article_id}.html')
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(html)
+        size = len(html.encode('utf-8'))
+
+        text = extract_text_from_html(html, max_length=FULL_TEXT_MAX_LENGTH)
+        lang = detect_language(text)
+        now = datetime.now().isoformat(timespec='seconds')
+        rel_path = f'{os.path.basename(content_dir)}/{article_id}.html'
+        conn.execute("""
+            UPDATE articles SET
+                local_path=?, content_fetched_at=?,
+                text_content=?, content_lang=?, content_status='fetched'
+            WHERE id=?
+        """, (rel_path, now, text, lang, article_id))
+
+        translated = False
+        if lang == 'en' and config.translation_enabled and config.translation_api_key:
+            try:
+                from translation_client import translate_to_chinese
+                translation = translate_to_chinese(text)
+                if translation:
+                    conn.execute("""
+                        UPDATE articles SET
+                            translated_content=?, content_status='translated', translated_at=?
+                        WHERE id=?
+                    """, (translation, datetime.now().isoformat(timespec='seconds'), article_id))
+                    translated = True
+            except Exception:
+                pass
+
+        conn.commit()
+        return {
+            'ok': True,
+            'local_path': rel_path,
+            'content_status': 'translated' if translated else 'fetched',
+            'size': size,
+            'images': imgs,
+            'lang': lang,
+        }
+    finally:
+        conn.close()
+
+
 def archive_pages(db_path: str, limit: int = 0, source: str = None, recent: int = 0):
     """遍历 articles，找出尚未存档的页面，下载并保存 HTML 文件"""
 
@@ -151,12 +230,12 @@ def archive_pages(db_path: str, limit: int = 0, source: str = None, recent: int 
     content_dir = config.content_cache_path
     os.makedirs(content_dir, exist_ok=True)
 
-    # ── 查询未存档文章（排除热榜/视频趋势数据，它们没有可缓存的内容页）──
-    # ai_filtered: 0=未筛选(兼容旧数据), 1=AI通过, -1=AI拒绝(跳过)
+    # ── 查询未存档文章（仅缓存 AI 已通过的普通 RSS 文章）──
+    # ai_filtered: 0=未筛选(跳过), 1=AI通过, -1=AI拒绝(跳过)
     where = [
         "(local_path IS NULL OR local_path = '')",
         "category NOT IN ('platform_hotlists', 'bilibili_videos')",
-        "ai_filtered != -1",
+        "ai_filtered = 1",
     ]
     params = []
     if source:

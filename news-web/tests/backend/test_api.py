@@ -205,6 +205,46 @@ def _seed_pipeline_article(db_path: str, content_cache_path: str, article_id: in
     conn.close()
 
 
+def test_cache_status_only_counts_ai_approved_rss_articles(client, news_db, test_db_path, tmp_path):
+    """页面 HTML 缓存状态只统计 AI 已通过筛选的普通 RSS 文章。"""
+    os.makedirs(tmp_path, exist_ok=True)
+    config._data['content_cache_path'] = str(tmp_path)
+    now = datetime.utcnow().isoformat(timespec="seconds")
+
+    conn = sqlite3.connect(test_db_path)
+    conn.execute("UPDATE articles SET ai_filtered=1 WHERE id=1")
+    conn.execute("UPDATE articles SET ai_filtered=0 WHERE id=2")
+    conn.execute("UPDATE articles SET ai_filtered=-1 WHERE id=3")
+    conn.execute(
+        """
+        INSERT INTO articles
+            (title, source, url, category, published_date, fetched_at, metadata, keywords, ai_filtered)
+        VALUES (?, ?, ?, ?, '', ?, '{}', '[]', 1)
+        """,
+        ("Platform Hot Topic", "weibo_hotlist", "https://hot.example/1", "platform_hotlists", now),
+    )
+    conn.execute(
+        """
+        INSERT INTO articles
+            (title, source, url, category, published_date, fetched_at, metadata, keywords, ai_filtered)
+        VALUES (?, ?, ?, ?, '', ?, '{}', '[]', 1)
+        """,
+        ("Bilibili Video", "bilibili_hotlist", "https://bili.example/1", "bilibili_videos", now),
+    )
+    conn.commit()
+    conn.close()
+
+    resp = client.get("/api/cache/status")
+
+    assert resp.status_code == 200
+    assert resp.json()["summary"]["total_articles"] == 1
+    assert resp.json()["summary"]["with_url"] == 1
+    assert resp.json()["summary"]["pending_download"] == 1
+    assert resp.json()["summary"]["failed_download"] == 0
+    assert resp.json()["uncached_count"] == 1
+    assert [item["id"] for item in resp.json()["uncached_articles"]] == [1]
+
+
 def test_batch_translate_retries_request_timeout_at_queue_tail(monkeypatch, test_db_path, tmp_path, news_db):
     """翻译遇到 Request Timed Out 时应追加到队尾重试一次。"""
     config._data['db_path'] = test_db_path

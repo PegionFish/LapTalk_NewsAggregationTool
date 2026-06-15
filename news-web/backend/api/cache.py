@@ -10,8 +10,8 @@ from db.news_db import NewsDB
 
 router = APIRouter(prefix="/api/cache", tags=["cache"])
 
-# 热榜排除过滤条件
-_HOTLIST_EXCLUDE = "category NOT IN ('platform_hotlists', 'bilibili_videos')"
+# 页面 HTML 缓存范围：只处理 AI 已通过筛选的普通 RSS 文章
+_CACHE_SCOPE = "category NOT IN ('platform_hotlists', 'bilibili_videos') AND ai_filtered = 1"
 
 # 缓存抓取状态
 _cache_fetch_state = {"running": False, "total": 0, "done": 0, "failed": 0, "current": "", "log": []}
@@ -40,23 +40,23 @@ def _scan_cache_dir() -> set:
 
 @router.get("/status")
 def cache_status():
-    """检查内容缓存状态 — 仅统计 RSS 新闻，排除热榜。"""
+    """检查内容缓存状态 — 仅统计 AI 已通过筛选的 RSS 新闻。"""
     conn = _get_conn()
     if not conn:
         return {'error': 'database_not_configured'}
 
-    total = conn.execute(f"SELECT COUNT(*) FROM articles WHERE {_HOTLIST_EXCLUDE}").fetchone()[0]
-    with_url = conn.execute(f"SELECT COUNT(*) FROM articles WHERE url != '' AND url LIKE 'http%' AND {_HOTLIST_EXCLUDE}").fetchone()[0]
+    total = conn.execute(f"SELECT COUNT(*) FROM articles WHERE {_CACHE_SCOPE}").fetchone()[0]
+    with_url = conn.execute(f"SELECT COUNT(*) FROM articles WHERE url != '' AND url LIKE 'http%' AND {_CACHE_SCOPE}").fetchone()[0]
     with_local = conn.execute(
-        f"SELECT COUNT(*) FROM articles WHERE local_path != '' AND local_path NOT LIKE '[ERR:%' AND {_HOTLIST_EXCLUDE}"
+        f"SELECT COUNT(*) FROM articles WHERE local_path != '' AND local_path NOT LIKE '[ERR:%' AND {_CACHE_SCOPE}"
     ).fetchone()[0]
     with_err = conn.execute(
-        f"SELECT COUNT(*) FROM articles WHERE local_path LIKE '[ERR:%' AND {_HOTLIST_EXCLUDE}"
+        f"SELECT COUNT(*) FROM articles WHERE local_path LIKE '[ERR:%' AND {_CACHE_SCOPE}"
     ).fetchone()[0]
-    pending = total - with_local - with_err
-    with_text = conn.execute(f"SELECT COUNT(*) FROM articles WHERE text_content != '' AND {_HOTLIST_EXCLUDE}").fetchone()[0]
-    with_translation = conn.execute(f"SELECT COUNT(*) FROM articles WHERE translated_content != '' AND {_HOTLIST_EXCLUDE}").fetchone()[0]
-    en_articles = conn.execute(f"SELECT COUNT(*) FROM articles WHERE content_lang='en' AND {_HOTLIST_EXCLUDE}").fetchone()[0]
+    pending = with_url - with_local - with_err
+    with_text = conn.execute(f"SELECT COUNT(*) FROM articles WHERE text_content != '' AND {_CACHE_SCOPE}").fetchone()[0]
+    with_translation = conn.execute(f"SELECT COUNT(*) FROM articles WHERE translated_content != '' AND {_CACHE_SCOPE}").fetchone()[0]
+    en_articles = conn.execute(f"SELECT COUNT(*) FROM articles WHERE content_lang='en' AND {_CACHE_SCOPE}").fetchone()[0]
 
     # 磁盘文件统计
     disk_ids = _scan_cache_dir()
@@ -64,7 +64,7 @@ def cache_status():
 
     # 交叉比对：DB 有记录但磁盘文件缺失
     db_ids = set()
-    for (row,) in conn.execute(f"SELECT id FROM articles WHERE local_path != '' AND local_path NOT LIKE '[ERR:%' AND {_HOTLIST_EXCLUDE}"):
+    for (row,) in conn.execute(f"SELECT id FROM articles WHERE local_path != '' AND local_path NOT LIKE '[ERR:%' AND {_CACHE_SCOPE}"):
         db_ids.add(row)
     missing_on_disk = sorted(db_ids - disk_ids)
     orphan_files = sorted(disk_ids - db_ids)
@@ -72,18 +72,18 @@ def cache_status():
     # 未缓存的文章列表（有 URL 但无 local_path）
     uncached_total = conn.execute(
         f"SELECT COUNT(*) FROM articles WHERE url != '' AND url LIKE 'http%' "
-        f"AND (local_path = '' OR local_path IS NULL) AND {_HOTLIST_EXCLUDE}"
+        f"AND (local_path = '' OR local_path IS NULL) AND {_CACHE_SCOPE}"
     ).fetchone()[0]
     uncached_rows = conn.execute(
         f"SELECT id, title, source FROM articles WHERE url != '' AND url LIKE 'http%' "
-        f"AND (local_path = '' OR local_path IS NULL) AND {_HOTLIST_EXCLUDE} "
+        f"AND (local_path = '' OR local_path IS NULL) AND {_CACHE_SCOPE} "
         f"ORDER BY id DESC LIMIT 100"
     ).fetchall()
 
     # 最近下载
     recent = conn.execute(
         f"SELECT id, title, source, content_fetched_at FROM articles "
-        f"WHERE content_fetched_at IS NOT NULL AND {_HOTLIST_EXCLUDE} "
+        f"WHERE content_fetched_at IS NOT NULL AND {_CACHE_SCOPE} "
         f"ORDER BY content_fetched_at DESC LIMIT 10"
     ).fetchall()
 
@@ -130,7 +130,7 @@ def _batch_cache_fetch():
             return
         rows = conn.execute(
             f"SELECT id, title, url FROM articles WHERE url != '' AND url LIKE 'http%' "
-            f"AND (local_path = '' OR local_path IS NULL) AND {_HOTLIST_EXCLUDE} "
+            f"AND (local_path = '' OR local_path IS NULL) AND {_CACHE_SCOPE} "
             f"ORDER BY id DESC"
         ).fetchall()
         conn.close()
@@ -140,7 +140,7 @@ def _batch_cache_fetch():
             return
 
         _cache_fetch_state["total"] = len(rows)
-        _cache_fetch_state["log"].append(f"开始抓取 {len(rows)} 篇未缓存文章")
+        _cache_fetch_state["log"].append(f"开始抓取 {len(rows)} 篇已通过筛选的未缓存文章")
 
         for idx, (aid, title, url) in enumerate(rows, 1):
             _cache_fetch_state["current"] = f"#{aid} {title[:50]}"
@@ -174,7 +174,7 @@ def start_cache_fetch():
         return {"ok": False, "message": "抓取任务已在运行中"}
     _cache_fetch_state["log"] = []
     threading.Thread(target=_batch_cache_fetch, daemon=True).start()
-    return {"ok": True, "message": "开始抓取未缓存文章"}
+    return {"ok": True, "message": "开始抓取已通过筛选的未缓存文章"}
 
 
 @router.post("/verify")

@@ -42,8 +42,14 @@ def _queue_timeout_retry(state, item_id, retry_counts, max_retries=4, task_type=
     retry_counts[item_id] = count
     if count <= max_retries:
         _log(state, f"#{item_id} Request Timed Out, retry ({count}/{max_retries + 1})", task_type)
+        _log(state, f"#{item_id} 已排到队列末尾重试", task_type)
         return True
     return False
+
+def _new_state() -> dict:
+    """创建后台任务进度状态。"""
+    return {"running": False, "total": 0, "done": 0, "failed": 0, "current": "", "log": []}
+
 
 # 模块级状态初始化
 _translate_state = _new_state()
