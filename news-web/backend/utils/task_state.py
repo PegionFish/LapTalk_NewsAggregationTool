@@ -8,8 +8,6 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-LOG_MAX = 80
-
 
 def _conn(db_path: str):
     return sqlite3.connect(db_path)
@@ -135,8 +133,6 @@ class TaskStateManager:
                 if k == 'log_msg':
                     ts = datetime.now().strftime('%H:%M:%S')
                     state.setdefault('log', []).append(f"[{ts}] {v}")
-                    if len(state['log']) > LOG_MAX:
-                        state['log'] = state['log'][-LOG_MAX:]
                 elif k == 'extra':
                     state.setdefault('extra', {}).update(v)
                 else:

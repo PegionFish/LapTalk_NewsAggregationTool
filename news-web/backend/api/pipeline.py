@@ -18,16 +18,9 @@ router = APIRouter(prefix="/api/pipeline", tags=["pipeline"])
 logger = logging.getLogger(__name__)
 
 # ── 进度追踪（内存 + DB 双写）───────────────────────────────
-LOG_MAX = 80
-
-def _new_state():
-    return {"running": False, "total": 0, "done": 0, "failed": 0, "current": "", "log": []}
-
 def _log(state, msg: str, task_type: str = ''):
     ts = datetime.now().strftime('%H:%M:%S')
     state["log"].append(f"[{ts}] {msg}")
-    if len(state["log"]) > LOG_MAX:
-        state["log"] = state["log"][-LOG_MAX:]
     if task_type:
         task_state.update(task_type, log_msg=msg)
 

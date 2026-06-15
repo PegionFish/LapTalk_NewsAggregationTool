@@ -29,14 +29,9 @@ _pipeline_state = {
 
 # 调度器日志（内存环形缓冲）
 _schedule_log: list[str] = []
-_SCHEDULE_LOG_MAX = 100
-
-
 def _add_schedule_log(msg: str):
     ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     _schedule_log.append(f"[{ts}] {msg}")
-    if len(_schedule_log) > _SCHEDULE_LOG_MAX:
-        _schedule_log[:] = _schedule_log[-_SCHEDULE_LOG_MAX:]
 
 
 def get_pipeline_status() -> dict:

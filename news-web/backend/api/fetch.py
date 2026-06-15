@@ -16,8 +16,6 @@ logger = logging.getLogger(__name__)
 _retry_locks: dict = {}
 _retry_lock = threading.Lock()
 
-# 最多缓存重试日志条数
-LOG_MAX = 200
 _retry_state: dict = {
     "running": False, "total": 0, "done": 0, "failed": 0, "current": "", "log": []
 }
@@ -548,9 +546,6 @@ def schedule_logs(limit: int = Query(50, ge=1, le=100)):
 # ── 内部工具 ──────────────────────────────────────────────
 
 def _log_retry(msg: str):
-    """批量重试进度记录。"""
     global _retry_state
     ts = datetime.now().strftime('%H:%M:%S')
     _retry_state["log"].append(f"[{ts}] {msg}")
-    if len(_retry_state["log"]) > LOG_MAX:
-        _retry_state["log"] = _retry_state["log"][-LOG_MAX:]
