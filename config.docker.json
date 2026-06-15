@@ -1,0 +1,20 @@
+{
+  "db_path": "/app/data/news.db",
+  "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+  "openai_base_url": "https://api.openai.com/v1",
+  "openai_api_key": "",
+  "openai_model": "gpt-4o-mini",
+  "pipeline_schedule_enabled": true,
+  "pipeline_cron_hours": [10, 17],
+  "pipeline_cron_minutes": [0, 0],
+  "translation_enabled": false,
+  "translation_base_url": "https://api.siliconflow.cn/v1",
+  "translation_api_key": "",
+  "translation_model": "deepseek-ai/DeepSeek-V3-0324",
+  "translation_target_lang": "zh-CN",
+  "content_cache_path": "/app/data/content",
+  "platform_hotlist_enabled": true,
+  "bilibili_max_pages": 7,
+  "proxy_enabled": false,
+  "proxy_url": ""
+}
