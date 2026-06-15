@@ -749,21 +749,21 @@ export default function FetchMonitor() {
             {/* 时间列表 */}
             <div style={{ marginBottom: 16 }}>
               <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>
-                每天执行时间（24 小时制）:
+                每天执行时间（24 小时制，最多 48 个）:
               </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', marginBottom: 10 }}>
                 {scheduleHours.map((h, i) => (
                   <div key={i} style={{
                     display: 'flex',
                     alignItems: 'center',
                     gap: 4,
-                    padding: '6px 12px',
+                    padding: '4px 10px',
                     background: 'var(--bg-card)',
                     borderRadius: 6,
                     border: '1px solid var(--border)',
-                    fontSize: 13,
+                    fontSize: 12,
                   }}>
-                    <i className="fas fa-clock" style={{ color: 'var(--accent)', fontSize: 11 }} />
+                    <i className="fas fa-clock" style={{ color: 'var(--accent)', fontSize: 10 }} />
                     <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>
                       {String(h).padStart(2, '0')}:{String(scheduleMinutes[i] || 0).padStart(2, '0')}
                     </span>
@@ -775,7 +775,7 @@ export default function FetchMonitor() {
                         border: 'none',
                         color: 'var(--accent-red)',
                         cursor: scheduleHours.length <= 1 ? 'not-allowed' : 'pointer',
-                        fontSize: 11,
+                        fontSize: 10,
                         padding: '0 2px',
                         opacity: scheduleHours.length <= 1 ? 0.3 : 1,
                       }}
@@ -784,13 +784,48 @@ export default function FetchMonitor() {
                     </button>
                   </div>
                 ))}
+              </div>
 
+              {/* 快捷添加 */}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', marginBottom: 8 }}>
+                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>快捷:</span>
+                {[
+                  { label: '每2小时', gen: () => Array.from({ length: 12 }, (_, i) => ({ h: i * 2, m: 0 })) },
+                  { label: '每3小时', gen: () => Array.from({ length: 8 }, (_, i) => ({ h: i * 3, m: 0 })) },
+                  { label: '每4小时', gen: () => Array.from({ length: 6 }, (_, i) => ({ h: i * 4, m: 0 })) },
+                  { label: '工作日 9-18 每2h', gen: () => Array.from({ length: 5 }, (_, i) => ({ h: 9 + i * 2, m: 0 })) },
+                  { label: '早中晚', gen: () => [{ h: 8, m: 0 }, { h: 13, m: 0 }, { h: 20, m: 0 }] },
+                ].map(preset => (
+                  <button
+                    key={preset.label}
+                    onClick={() => {
+                      const slots = preset.gen();
+                      setScheduleHours(slots.map(s => s.h));
+                      setScheduleMinutes(slots.map(s => s.m));
+                    }}
+                    style={{
+                      padding: '3px 8px',
+                      background: 'var(--bg-card)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 4,
+                      color: 'var(--text-secondary)',
+                      cursor: 'pointer',
+                      fontSize: 10,
+                    }}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* 手动添加 */}
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                 {showAddTime ? (
                   <div style={{
                     display: 'flex',
                     alignItems: 'center',
                     gap: 4,
-                    padding: '6px 10px',
+                    padding: '4px 8px',
                     background: 'var(--bg-card)',
                     borderRadius: 6,
                     border: '1px solid var(--accent)',
@@ -799,13 +834,9 @@ export default function FetchMonitor() {
                       value={newHour}
                       onChange={e => setNewHour(Number(e.target.value))}
                       style={{
-                        width: 50,
-                        padding: '2px 4px',
-                        background: 'var(--bg-input, #1a1a2e)',
-                        color: 'var(--text-primary)',
-                        border: '1px solid var(--border)',
-                        borderRadius: 4,
-                        fontSize: 12,
+                        width: 50, padding: '2px 4px',
+                        background: 'var(--bg-input, #1a1a2e)', color: 'var(--text-primary)',
+                        border: '1px solid var(--border)', borderRadius: 4, fontSize: 12,
                       }}
                     >
                       {Array.from({ length: 24 }, (_, i) => (
@@ -817,30 +848,23 @@ export default function FetchMonitor() {
                       value={newMinute}
                       onChange={e => setNewMinute(Number(e.target.value))}
                       style={{
-                        width: 50,
-                        padding: '2px 4px',
-                        background: 'var(--bg-input, #1a1a2e)',
-                        color: 'var(--text-primary)',
-                        border: '1px solid var(--border)',
-                        borderRadius: 4,
-                        fontSize: 12,
+                        width: 50, padding: '2px 4px',
+                        background: 'var(--bg-input, #1a1a2e)', color: 'var(--text-primary)',
+                        border: '1px solid var(--border)', borderRadius: 4, fontSize: 12,
                       }}
                     >
-                      {[0, 15, 30, 45].map(m => (
+                      {[0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55].map(m => (
                         <option key={m} value={m}>{String(m).padStart(2, '0')}</option>
                       ))}
                     </select>
                     <button
                       onClick={handleAddTimeSlot}
+                      disabled={scheduleHours.length >= 48}
                       style={{
-                        background: 'var(--accent)',
-                        border: 'none',
-                        color: '#000',
-                        cursor: 'pointer',
-                        borderRadius: 4,
-                        padding: '2px 8px',
-                        fontSize: 11,
-                        fontWeight: 600,
+                        background: 'var(--accent)', border: 'none', color: '#000',
+                        cursor: scheduleHours.length >= 48 ? 'not-allowed' : 'pointer',
+                        borderRadius: 4, padding: '2px 8px', fontSize: 11, fontWeight: 600,
+                        opacity: scheduleHours.length >= 48 ? 0.5 : 1,
                       }}
                     >
                       <i className="fas fa-check" />
@@ -848,12 +872,8 @@ export default function FetchMonitor() {
                     <button
                       onClick={() => setShowAddTime(false)}
                       style={{
-                        background: 'none',
-                        border: 'none',
-                        color: 'var(--text-muted)',
-                        cursor: 'pointer',
-                        padding: '2px 4px',
-                        fontSize: 11,
+                        background: 'none', border: 'none', color: 'var(--text-muted)',
+                        cursor: 'pointer', padding: '2px 4px', fontSize: 11,
                       }}
                     >
                       <i className="fas fa-times" />
@@ -862,23 +882,25 @@ export default function FetchMonitor() {
                 ) : (
                   <button
                     onClick={() => setShowAddTime(true)}
+                    disabled={scheduleHours.length >= 48}
                     style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 4,
-                      padding: '6px 12px',
+                      display: 'flex', alignItems: 'center', gap: 4,
+                      padding: '4px 10px',
                       background: 'var(--bg-card)',
                       borderRadius: 6,
                       border: '1px dashed var(--border)',
-                      color: 'var(--text-secondary)',
-                      cursor: 'pointer',
-                      fontSize: 12,
+                      color: scheduleHours.length >= 48 ? 'var(--text-muted)' : 'var(--text-secondary)',
+                      cursor: scheduleHours.length >= 48 ? 'not-allowed' : 'pointer',
+                      fontSize: 11,
                     }}
                   >
-                    <i className="fas fa-plus" style={{ fontSize: 10 }} />
-                    添加时间
+                    <i className="fas fa-plus" style={{ fontSize: 9 }} />
+                    添加
                   </button>
                 )}
+                <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                  {scheduleHours.length}/48
+                </span>
               </div>
             </div>
 

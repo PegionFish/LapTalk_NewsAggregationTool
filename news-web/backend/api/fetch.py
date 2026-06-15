@@ -492,8 +492,8 @@ def update_schedule(body: ScheduleUpdate):
     if body.hours is not None:
         if not isinstance(body.hours, list) or len(body.hours) == 0:
             raise HTTPException(400, "hours 必须是非空整数列表")
-        if len(body.hours) > 12:
-            raise HTTPException(400, "最多支持 12 个定时时间")
+        if len(body.hours) > 48:
+            raise HTTPException(400, "最多支持 48 个定时时间")
         for h in body.hours:
             if not isinstance(h, int) or h < 0 or h > 23:
                 raise HTTPException(400, f"小时值无效: {h}（应为 0-23）")
