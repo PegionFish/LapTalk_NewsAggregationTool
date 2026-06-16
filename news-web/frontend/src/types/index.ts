@@ -154,6 +154,7 @@ export interface FetchOverview {
     failing: number;
     last_run: string | null;
     articles_today: number;
+    articles_yesterday: number;
   };
   hotlist: {
     total_sources: number;
@@ -162,6 +163,7 @@ export interface FetchOverview {
     failing: number;
     last_run: string | null;
     articles_today: number;
+    articles_yesterday: number;
   };
   cache: {
     total_articles: number;

@@ -1,11 +1,12 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import type { FetchOverview, FetchSource, FetchLog, FailedArticle, FetchArticleItem, BatchRetryState, ScheduleInfo } from '../types';
 import { Card, Button, Badge, Table, Tabs, Tab, StatCard, Loading } from '../components/ui';
 
 const emptyOverview: FetchOverview = {
-  rss: { total_sources: 0, healthy: 0, degraded: 0, failing: 0, last_run: null, articles_today: 0 },
-  hotlist: { total_sources: 0, healthy: 0, degraded: 0, failing: 0, last_run: null, articles_today: 0 },
+  rss: { total_sources: 0, healthy: 0, degraded: 0, failing: 0, last_run: null, articles_today: 0, articles_yesterday: 0 },
+  hotlist: { total_sources: 0, healthy: 0, degraded: 0, failing: 0, last_run: null, articles_today: 0, articles_yesterday: 0 },
   cache: { total_articles: 0, cached: 0, pending: 0, failed: 0, cached_pct: 0 },
 };
 
@@ -26,6 +27,14 @@ const statusVariant: Record<string, 'green' | 'blue' | 'orange' | 'red'> = {
   failed: 'red',
 };
 
+/** 计算今日新增的趋势 */
+function calcTrend(today: number, yesterday: number): 'up' | 'down' | 'flat' | null {
+  if (today === 0 && yesterday === 0) return null;
+  if (today > yesterday) return 'up';
+  if (today < yesterday) return 'down';
+  return 'flat';
+}
+
 type TabKey = 'overview' | 'schedule';
 const TABS: { key: TabKey; icon: string; label: string }[] = [
   { key: 'overview', icon: 'fa-database', label: '数据源' },
@@ -33,11 +42,17 @@ const TABS: { key: TabKey; icon: string; label: string }[] = [
 ];
 
 export default function FetchMonitor() {
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<TabKey>('overview');
   const [overview, setOverview] = useState<FetchOverview>(emptyOverview);
   const [sources, setSources] = useState<FetchSource[]>([]);
   const [logs, setLogs] = useState<FetchLog[]>([]);
   const [loading, setLoading] = useState(true);
+  const [toast, setToast] = useState('');
+  const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 3500); };
+
+  const [pipelineStatus, setPipelineStatus] = useState<{ running: boolean; last_run: string | null; last_status: string | null; current_step: string | null }>({ running: false, last_run: null, last_status: null, current_step: null });
+  const [quickActionLoading, setQuickActionLoading] = useState(''); // 'pipeline' | 'retry'
 
   const [sourceFilter, setSourceFilter] = useState('');
   const [expandedSource, setExpandedSource] = useState<string | null>(null);
@@ -69,6 +84,54 @@ export default function FetchMonitor() {
   const [showAddTime, setShowAddTime] = useState(false);
   const [newHour, setNewHour] = useState(12);
   const [newMinute, setNewMinute] = useState(0);
+
+  const failedSectionRef = useRef<HTMLDivElement>(null);
+
+  // Pipeline 状态轮询
+  useEffect(() => {
+    api.getPipelineStatus().then(setPipelineStatus).catch(() => {});
+    const t = setInterval(() => {
+      api.getPipelineStatus().then(setPipelineStatus).catch(() => {});
+    }, 8000);
+    return () => clearInterval(t);
+  }, []);
+
+  // 快捷操作
+  const handleQuickPipeline = async () => {
+    setQuickActionLoading('pipeline');
+    setActiveTab('schedule');
+    showToast('正在触发采集管道...');
+    try {
+      await api.triggerPipeline();
+      setTimeout(() => {
+        setQuickActionLoading('');
+        api.getPipelineStatus().then(setPipelineStatus).catch(() => {});
+      }, 2000);
+    } catch (e) {
+      showToast('触发失败: ' + (e as Error).message);
+      setQuickActionLoading('');
+    }
+  };
+
+  const handleQuickRetryAll = async () => {
+    if (!confirm(`确定重试所有 ${failedTotal} 篇失败文章？同源文章间隔 5-10 秒。`)) return;
+    setQuickActionLoading('retry');
+    try {
+      const res = await api.retryArticlesBatch({ retry_all: true } as any);
+      if (res.ok) {
+        showToast(`开始批量重试 ${res.total} 篇`);
+        setBatchState({ running: true, total: res.total, done: 0, failed: 0, current: '', log: [] });
+        batchTimer.current = setInterval(pollBatch, 2000);
+      }
+    } catch (e) {
+      showToast('重试失败: ' + (e as Error).message);
+    }
+    setQuickActionLoading('');
+  };
+
+  const handleNavigateToDashboard = () => {
+    navigate('/');
+  };
 
   const pollBatch = useCallback(async () => {
     try {
@@ -259,19 +322,105 @@ export default function FetchMonitor() {
         </h2>
       </div>
 
-      {/* ═══ 区块 1: 总览栏 ═══ */}
+      {/* Toast */}
+      {toast && (
+        <div style={{
+          marginBottom: 16,
+          padding: '10px 14px',
+          background: 'rgba(0, 212, 255, 0.1)',
+          border: '1px solid rgba(0, 212, 255, 0.25)',
+          borderRadius: 8,
+          color: 'var(--accent)',
+          fontSize: 12,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          animation: 'ui-fadeIn 0.3s ease',
+        }}>
+          <i className="fas fa-info-circle" />
+          {toast}
+        </div>
+      )}
+
+      {/* ═══ 区块 1: 总览栏（可点击）═══ */}
       <div style={{
         display: 'grid',
         gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
         gap: 14,
-        marginBottom: 24,
+        marginBottom: 16,
       }}>
-        <StatCard icon="fa-rss" label="RSS 源" value={`${overview.rss.healthy} 正常 / ${overview.rss.degraded + overview.rss.failing} 异常`} color="var(--accent)" />
-        <StatCard icon="fa-fire" label="平台热榜" value={`${overview.hotlist.healthy} 正常`} color="var(--accent-orange)" />
-        <StatCard icon="fa-database" label="缓存覆盖率" value={`${overview.cache.cached_pct}%`} color="var(--accent-tertiary)" />
-        <StatCard icon="fa-file-arrow-down" label="今日新增" value={`${overview.rss.articles_today + overview.hotlist.articles_today} 篇`} color="var(--accent-green)" />
-        <StatCard icon="fa-clock" label="待下载" value={`${overview.cache.pending} 篇`} color="var(--accent-orange)" />
-        <StatCard icon="fa-triangle-exclamation" label="下载失败" value={`${overview.cache.failed} 篇`} color="var(--accent-red)" />
+        <StatCard icon="fa-rss" label="RSS 源"
+          value={`${overview.rss.healthy} 正常 / ${overview.rss.degraded + overview.rss.failing} 异常`}
+          color="var(--accent)" hint="点击筛选 RSS 源列表"
+          onClick={() => { setActiveTab('overview'); setSourceFilter('rss'); }} />
+        <StatCard icon="fa-fire" label="平台热榜"
+          value={`${overview.hotlist.healthy} 正常`}
+          color="var(--accent-orange)" hint="点击筛选平台热榜"
+          onClick={() => { setActiveTab('overview'); setSourceFilter('hotlist'); }} />
+        <StatCard icon="fa-database" label="缓存覆盖率"
+          value={`${overview.cache.cached_pct}%`}
+          color="var(--accent-tertiary)"
+          hint={`${overview.cache.cached}/${overview.cache.total_articles} 篇已缓存`} />
+        <StatCard icon="fa-file-arrow-down" label="今日新增"
+          value={`${overview.rss.articles_today + overview.hotlist.articles_today} 篇`}
+          color="var(--accent-green)"
+          trend={calcTrend(overview.rss.articles_today + overview.hotlist.articles_today, overview.rss.articles_yesterday + overview.hotlist.articles_yesterday)}
+          hint={`昨日: ${overview.rss.articles_yesterday + overview.hotlist.articles_yesterday} 篇`} />
+        <StatCard icon="fa-clock" label="待下载"
+          value={`${overview.cache.pending} 篇`}
+          color="var(--accent-orange)" hint="点击触发采集管道下载"
+          onClick={handleQuickPipeline} />
+        <StatCard icon="fa-triangle-exclamation" label="下载失败"
+          value={`${overview.cache.failed} 篇`}
+          color="var(--accent-red)" hint="点击滚动到失败列表"
+          onClick={() => { setActiveTab('overview'); setTimeout(() => failedSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100); }} />
+      </div>
+
+      {/* ═══ 快捷操作行 ═══ */}
+      <div style={{
+        marginBottom: 20,
+        padding: '14px 18px',
+        background: 'var(--bg-secondary)',
+        borderRadius: 'var(--radius-lg)',
+        border: '1px solid var(--border)',
+        display: 'flex',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        gap: 10,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginRight: 6 }}>
+          <i className="fas fa-bolt" style={{ color: 'var(--accent)', fontSize: 14 }} />
+          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)' }}>快捷操作</span>
+        </div>
+        <Button variant="primary" size="sm" icon="fa-cloud-arrow-down"
+          onClick={handleQuickPipeline}
+          loading={quickActionLoading === 'pipeline'}
+          disabled={quickActionLoading !== ''}>
+          开始批量缓存
+        </Button>
+        <Button variant="orange" size="sm" icon="fa-redo"
+          onClick={handleQuickRetryAll}
+          loading={quickActionLoading === 'retry'}
+          disabled={quickActionLoading !== ''}>
+          重试全部失败
+        </Button>
+        <Button variant="ghost" size="sm" icon="fa-robot"
+          onClick={handleNavigateToDashboard}>
+          AI 仪表盘
+        </Button>
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 'auto', display: 'flex', gap: 14 }}>
+          <span><i className="fas fa-hourglass-half" style={{ marginRight: 4, opacity: 0.6 }} />
+            待缓存 <strong style={{ color: 'var(--accent-orange)' }}>{overview.cache.pending}</strong>
+          </span>
+          <span><i className="fas fa-times-circle" style={{ marginRight: 4, opacity: 0.6 }} />
+            已失败 <strong style={{ color: 'var(--accent-red)' }}>{overview.cache.failed}</strong>
+          </span>
+          <span><i className="fas fa-tachometer-alt" style={{ marginRight: 4, opacity: 0.6 }} />
+            管道 <strong style={{ color: pipelineStatus.running ? 'var(--accent-tertiary)' : 'var(--text-muted)' }}>
+              {pipelineStatus.running ? '运行中' : '空闲'}
+            </strong>
+          </span>
+        </div>
       </div>
 
       {/* ═══ Tab 切换 ═══ */}
@@ -981,6 +1130,59 @@ export default function FetchMonitor() {
           </div>
         </>
       )}
+
+      {/* ═══ AI 处理接力 ═══ */}
+      <Card flat style={{
+        marginTop: 28,
+        padding: '16px 20px',
+        border: '1px solid rgba(129, 199, 132, 0.15)',
+        background: 'linear-gradient(135deg, rgba(129, 199, 132, 0.04), rgba(0, 212, 255, 0.03))',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+          <div style={{
+            width: 36, height: 36, borderRadius: '50%',
+            background: 'rgba(129, 199, 132, 0.12)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexShrink: 0,
+          }}>
+            <i className="fas fa-arrow-right-arrow-left" style={{ color: 'var(--accent-tertiary)', fontSize: 16 }} />
+          </div>
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)', marginBottom: 2 }}>
+              采集管道接力 — 下一步
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+              {pipelineStatus.running
+                ? `采集管道运行中: ${pipelineStatus.current_step || '处理中...'}`
+                : `数据采集完成后，前往仪表盘进行 AI 翻译、分析、分类、评分等全流程处理`}
+            </div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            {pipelineStatus.running ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--accent-tertiary)' }}>
+                <i className="fas fa-spinner fa-spin" />
+                管道运行中
+              </div>
+            ) : (
+              <>
+                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                  管道: 空闲
+                  {pipelineStatus.last_run && (
+                    <> · 上次: {formatTime(pipelineStatus.last_run)}</>
+                  )}
+                  {pipelineStatus.last_status && (
+                    <> · {pipelineStatus.last_status === 'success' ? '成功' : '失败'}</>
+                  )}
+                </span>
+                <Button variant="green" size="sm" icon="fa-robot"
+                  onClick={handleNavigateToDashboard}>
+                  前往 AI 仪表盘
+                </Button>
+              </>
+            )}
+          </div>
+        </div>
+      </Card>
     </div>
   );
 }

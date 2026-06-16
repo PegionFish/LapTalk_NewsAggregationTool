@@ -1488,7 +1488,8 @@ class NewsDB:
                     COUNT(DISTINCT source_name) as total,
                     COUNT(DISTINCT CASE WHEN status='ok' THEN source_name END) as ok_sources,
                     MAX(started_at) as last_run,
-                    SUM(CASE WHEN date(started_at)=? THEN articles_new ELSE 0 END) as today_new
+                    SUM(CASE WHEN date(started_at)=? THEN articles_new ELSE 0 END) as today_new,
+                    SUM(CASE WHEN date(started_at)=date('now','-1 day') THEN articles_new ELSE 0 END) as yesterday_new
                 FROM fetch_logs WHERE source_type='rss'
             """, (today,)).fetchone()
             rss_health = self._compute_source_health(conn, 'rss')
@@ -1498,7 +1499,8 @@ class NewsDB:
                 SELECT
                     COUNT(DISTINCT source_name) as total,
                     MAX(started_at) as last_run,
-                    SUM(CASE WHEN date(started_at)=? THEN articles_new ELSE 0 END) as today_new
+                    SUM(CASE WHEN date(started_at)=? THEN articles_new ELSE 0 END) as today_new,
+                    SUM(CASE WHEN date(started_at)=date('now','-1 day') THEN articles_new ELSE 0 END) as yesterday_new
                 FROM fetch_logs WHERE source_type='hotlist'
             """, (today,)).fetchone()
             hl_health = self._compute_source_health(conn, 'hotlist')
@@ -1526,6 +1528,7 @@ class NewsDB:
                 'failing': rss_health.get('failing', 0),
                 'last_run': rss_stats[2],
                 'articles_today': rss_stats[3] or 0,
+                'articles_yesterday': rss_stats[4] or 0,
             },
             'hotlist': {
                 'total_sources': hl_stats[0] or 0,
@@ -1534,6 +1537,7 @@ class NewsDB:
                 'failing': hl_health.get('failing', 0),
                 'last_run': hl_stats[1],
                 'articles_today': hl_stats[2] or 0,
+                'articles_yesterday': hl_stats[3] or 0,
             },
             'cache': {
                 'total_articles': total,

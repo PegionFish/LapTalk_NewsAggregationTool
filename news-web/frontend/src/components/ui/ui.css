@@ -312,6 +312,14 @@
   border-color: var(--border-hover);
   box-shadow: var(--shadow-glow);
 }
+.ui-stat--clickable:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-glow), 0 0 20px rgba(0, 212, 255, 0.08);
+  transform: translateY(-1px);
+}
+.ui-stat--clickable:active {
+  transform: translateY(0);
+}
 .ui-stat__icon {
   font-size: 24px;
   width: 36px;
@@ -322,11 +330,55 @@
   font-size: 28px;
   font-weight: 700;
   line-height: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .ui-stat__label {
   font-size: 12px;
   color: var(--text-muted);
   margin-top: 4px;
+}
+.ui-stat__trend {
+  font-size: 12px;
+  opacity: 0.7;
+}
+.ui-stat__trend--up { color: var(--accent-tertiary); }
+.ui-stat__trend--down { color: var(--accent-red); }
+.ui-stat__trend--flat { color: var(--text-muted); opacity: 0.4; }
+.ui-stat--clickable {
+  cursor: pointer;
+  width: 100%;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  font: inherit;
+  text-align: left;
+}
+.ui-stat--clickable:hover {
+  border-color: var(--accent) !important;
+  box-shadow: var(--shadow-glow), 0 0 20px rgba(0, 212, 255, 0.08) !important;
+  transform: translateY(-1px);
+}
+.ui-stat--clickable:active {
+  transform: translateY(0);
+}
+.ui-stat--clickable:hover .ui-stat__arrow {
+  opacity: 1 !important;
+}
+.ui-stat__arrow {
+  font-size: 10px;
+  color: var(--text-muted);
+  opacity: 0.3;
+  transition: opacity var(--transition-fast), transform var(--transition-fast);
+}
+.ui-stat--clickable:hover .ui-stat__arrow {
+  transform: translateX(3px);
+}
+.ui-stat__hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  opacity: 0.4;
+  cursor: help;
 }
 
 /* ── 标签 ───────────────────────────────────────────── */
