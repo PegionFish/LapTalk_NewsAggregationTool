@@ -267,7 +267,9 @@ class NewsDB:
                                ('ai_tags','TEXT DEFAULT \'\''),
                                ('ai_priority_score','REAL DEFAULT 0.0'),
                                # AI 预筛选：0=未筛选, 1=通过, -1=拒绝
-                               ('ai_filtered','INTEGER DEFAULT 0')]:
+                               ('ai_filtered','INTEGER DEFAULT 0'),
+                               # 主题分类（硬件/AI/游戏/移动/发布/其他）
+                               ('topic_category','TEXT DEFAULT \'\'')]:
                 try:
                     conn.execute(f"ALTER TABLE articles ADD COLUMN {col} {dtype}")
                 except sqlite3.OperationalError:
@@ -283,6 +285,29 @@ class NewsDB:
                 conn.execute("ALTER TABLE events ADD COLUMN priority_label TEXT DEFAULT 'medium'")
             except sqlite3.OperationalError:
                 pass
+            # 新增：评语表 + 点赞表
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS article_comments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+                    user_id INTEGER,
+                    username TEXT DEFAULT 'anonymous',
+                    parent_id INTEGER REFERENCES article_comments(id) ON DELETE CASCADE,
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS comment_likes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    comment_id INTEGER NOT NULL REFERENCES article_comments(id) ON DELETE CASCADE,
+                    user_id INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(comment_id, user_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_comments_article ON article_comments(article_id);
+                CREATE INDEX IF NOT EXISTS idx_comments_parent ON article_comments(parent_id);
+                CREATE INDEX IF NOT EXISTS idx_comment_likes_comment ON comment_likes(comment_id);
+            """)
             conn.commit()
 
     # ═══════════════════════════════════════════════════════
@@ -1024,6 +1049,207 @@ class NewsDB:
             'drift_active_sources': drift_active,
             'articles_total': self.get_stats()['articles'],
         }
+
+    # ═══════════════════════════════════════════════════════
+    # 评语系统
+    # ═══════════════════════════════════════════════════════
+
+    TOPIC_CATEGORY_MAP = {
+        'PC/Hardware': '硬件',
+        'AI/LLM': 'AI',
+        'Game/New': '游戏',
+        'Game/Platform': '游戏',
+        'Mobile': '移动',
+        'Product Launch': '发布',
+        'Other': '其他',
+    }
+
+    def _build_comment_tree(self, comments: list, user_id: int = 0) -> list:
+        """将平评论列表构建为树形结构（含点赞数和当前用户是否点赞）。"""
+        by_parent = {}
+        for c in comments:
+            pid = c['parent_id']
+            by_parent.setdefault(pid, []).append(c)
+        def _attach(children):
+            for c in children:
+                c['replies'] = _attach(by_parent.get(c['id'], []))
+            return children
+        return _attach(by_parent.get(None, []))
+
+    def add_comment(self, article_id: int, user_id: int, username: str,
+                    content: str, parent_id: int = None) -> dict:
+        """添加评语。parent_id 非空时为回复。"""
+        now = datetime.now().isoformat(timespec='seconds')
+        with self._conn() as conn:
+            cur = conn.execute("""
+                INSERT INTO article_comments
+                    (article_id, user_id, username, parent_id, content, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (article_id, user_id, username, parent_id, content, now, now))
+            conn.commit()
+            cid = cur.lastrowid
+        return {'id': cid, 'article_id': article_id, 'user_id': user_id,
+                'username': username, 'parent_id': parent_id, 'content': content,
+                'created_at': now, 'updated_at': now, 'like_count': 0, 'liked_by_me': False}
+
+    def get_comments(self, article_id: int, user_id: int = 0) -> list:
+        """获取文章评语（树形），含点赞统计。"""
+        with self._conn() as conn:
+            rows = conn.execute("""
+                SELECT c.id, c.article_id, c.user_id, c.username, c.parent_id,
+                       c.content, c.created_at, c.updated_at
+                FROM article_comments c WHERE c.article_id=?
+                ORDER BY c.created_at ASC
+            """, (article_id,)).fetchall()
+            comments = []
+            for r in rows:
+                like_count = conn.execute(
+                    "SELECT COUNT(*) FROM comment_likes WHERE comment_id=?", (r[0],)
+                ).fetchone()[0]
+                liked = False
+                if user_id:
+                    liked = conn.execute(
+                        "SELECT 1 FROM comment_likes WHERE comment_id=? AND user_id=?",
+                        (r[0], user_id)
+                    ).fetchone() is not None
+                comments.append({
+                    'id': r[0], 'article_id': r[1], 'user_id': r[2],
+                    'username': r[3], 'parent_id': r[4], 'content': r[5],
+                    'created_at': r[6], 'updated_at': r[7],
+                    'like_count': like_count, 'liked_by_me': liked,
+                })
+        return self._build_comment_tree(comments, user_id)
+
+    def edit_comment(self, comment_id: int, user_id: int, content: str) -> bool:
+        """编辑评语（仅作者本人）。"""
+        now = datetime.now().isoformat(timespec='seconds')
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT user_id FROM article_comments WHERE id=?", (comment_id,)
+            ).fetchone()
+            if not row or row[0] != user_id:
+                return False
+            conn.execute(
+                "UPDATE article_comments SET content=?, updated_at=? WHERE id=?",
+                (content, now, comment_id)
+            )
+            conn.commit()
+        return True
+
+    def delete_comment(self, comment_id: int, user_id: int) -> bool:
+        """删除评语（仅作者本人）。级联删除子评语由 DB ON DELETE CASCADE 处理。"""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT user_id FROM article_comments WHERE id=?", (comment_id,)
+            ).fetchone()
+            if not row or row[0] != user_id:
+                return False
+            conn.execute("DELETE FROM article_comments WHERE id=?", (comment_id,))
+            conn.commit()
+        return True
+
+    def toggle_comment_like(self, comment_id: int, user_id: int) -> dict:
+        """点赞/取消点赞。返回 {liked: bool, count: int}。"""
+        now = datetime.now().isoformat(timespec='seconds')
+        with self._conn() as conn:
+            existing = conn.execute(
+                "SELECT id FROM comment_likes WHERE comment_id=? AND user_id=?",
+                (comment_id, user_id)
+            ).fetchone()
+            if existing:
+                conn.execute("DELETE FROM comment_likes WHERE id=?", (existing[0],))
+                liked = False
+            else:
+                conn.execute(
+                    "INSERT INTO comment_likes (comment_id, user_id, created_at) VALUES (?, ?, ?)",
+                    (comment_id, user_id, now)
+                )
+                liked = True
+            count = conn.execute(
+                "SELECT COUNT(*) FROM comment_likes WHERE comment_id=?", (comment_id,)
+            ).fetchone()[0]
+            conn.commit()
+        return {'liked': liked, 'count': count}
+
+    def get_comment_stats(self, article_ids: list) -> dict:
+        """批量获取文章评语数。返回 {article_id: count}。"""
+        if not article_ids:
+            return {}
+        with self._conn() as conn:
+            rows = conn.execute(f"""
+                SELECT article_id, COUNT(*) FROM article_comments
+                WHERE article_id IN ({','.join('?' * len(article_ids))})
+                GROUP BY article_id
+            """, article_ids).fetchall()
+        return dict(rows)
+
+    # ═══════════════════════════════════════════════════════
+    # 低分清理
+    # ═══════════════════════════════════════════════════════
+
+    def preview_cleanup(self, threshold: float = 0.2) -> dict:
+        """预览将被清理的文章（不执行删除）。"""
+        with self._conn() as conn:
+            count = conn.execute("""
+                SELECT COUNT(*) FROM articles
+                WHERE priority_score < ? AND human_processed = 0 AND human_verified = 0
+                  AND category NOT IN ('platform_hotlists', 'bilibili_videos')
+            """, (threshold,)).fetchone()[0]
+        return {'count': count, 'threshold': threshold}
+
+    def cleanup_low_score(self, threshold: float = 0.2) -> dict:
+        """删除评分低于阈值且未被人工处理的文章。返回 {deleted: int}。"""
+        with self._conn() as conn:
+            # 先删除关联的评语
+            ids = conn.execute("""
+                SELECT id FROM articles
+                WHERE priority_score < ? AND human_processed = 0 AND human_verified = 0
+                  AND category NOT IN ('platform_hotlists', 'bilibili_videos')
+            """, (threshold,)).fetchall()
+            aid_list = [r[0] for r in ids]
+            if not aid_list:
+                return {'deleted': 0}
+            placeholders = ','.join('?' * len(aid_list))
+            conn.execute(f"DELETE FROM comment_likes WHERE comment_id IN "
+                         f"(SELECT id FROM article_comments WHERE article_id IN ({placeholders}))",
+                         aid_list)
+            conn.execute(f"DELETE FROM article_comments WHERE article_id IN ({placeholders})", aid_list)
+            conn.execute(f"DELETE FROM article_events WHERE article_id IN ({placeholders})", aid_list)
+            conn.execute(f"DELETE FROM human_feedback WHERE article_id IN ({placeholders})", aid_list)
+            conn.execute(f"DELETE FROM articles WHERE id IN ({placeholders})", aid_list)
+            conn.commit()
+        return {'deleted': len(aid_list)}
+
+    # ═══════════════════════════════════════════════════════
+    # 主题分类
+    # ═══════════════════════════════════════════════════════
+
+    def populate_topic_categories(self) -> int:
+        """为所有文章填充 topic_category。返回更新数量。"""
+        updated = 0
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT id, title, source, category, topic_category FROM articles "
+                "WHERE topic_category = '' AND category NOT IN ('platform_hotlists', 'bilibili_videos')"
+            ).fetchall()
+            for aid, title, source, category, _ in rows:
+                _, label = topic_score(title)
+                tc = self.TOPIC_CATEGORY_MAP.get(label, '其他')
+                conn.execute("UPDATE articles SET topic_category=? WHERE id=?", (tc, aid))
+                updated += 1
+            conn.commit()
+        return updated
+
+    def get_topic_stats(self) -> dict:
+        """返回各主题分类的文章数。"""
+        with self._conn() as conn:
+            rows = conn.execute("""
+                SELECT topic_category, COUNT(*) FROM articles
+                WHERE category NOT IN ('platform_hotlists', 'bilibili_videos')
+                  AND topic_category != ''
+                GROUP BY topic_category ORDER BY COUNT(*) DESC
+            """).fetchall()
+        return dict(rows)
 
     def get_unmatched_events(self, min_articles: int = 1) -> list:
         """获取没有事件关系的事件（孤立事件），供 UI 建议关联"""
