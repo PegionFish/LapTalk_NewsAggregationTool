@@ -189,6 +189,7 @@ export default function ArticleSearch() {
                 <tr
                   key={a.id}
                   onClick={() => setSelected(a)}
+                  onDoubleClick={() => setReading(a)}
                   style={{
                     cursor: 'pointer',
                     borderBottom: '1px solid var(--border)',
