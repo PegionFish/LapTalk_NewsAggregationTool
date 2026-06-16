@@ -143,6 +143,8 @@ export const api = {
   getSettings: () => fetchJSON<{
     db_path: string; user_agent: string;
     openai_base_url?: string; openai_api_key?: string; openai_model?: string;
+    ai_enable_thinking?: boolean; ai_thinking_budget?: number;
+    ai_deep_thinking_max_tokens?: number; ai_json_response_format?: boolean;
     pipeline_schedule_enabled?: boolean;
     translation_enabled?: boolean; translation_base_url?: string;
     translation_api_key?: string; translation_model?: string;
@@ -150,7 +152,7 @@ export const api = {
     proxy_enabled?: boolean; proxy_url?: string;
   }>('/settings'),
 
-  updateSettings: (data: Record<string, string | boolean>) =>
+  updateSettings: (data: Record<string, string | number | boolean>) =>
     fetchJSON<{ db_path: string; user_agent: string }>('/settings', { method: 'PUT', body: JSON.stringify(data) }),
 
   triggerPipeline: () => fetchJSON<{ status: string }>('/pipeline/run', { method: 'POST' }),

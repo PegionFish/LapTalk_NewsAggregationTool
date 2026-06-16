@@ -6,9 +6,13 @@ DEFAULT_CONFIG = {
     'db_path': '',
     'user_agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 '
                   '(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-    'openai_base_url': 'https://api.openai.com/v1',
+    'openai_base_url': 'https://api.siliconflow.cn/v1',
     'openai_api_key': '',
-    'openai_model': 'gpt-4o-mini',
+    'openai_model': 'deepseek-ai/DeepSeek-V3.2',
+    'ai_enable_thinking': True,
+    'ai_thinking_budget': 32768,
+    'ai_deep_thinking_max_tokens': 8192,
+    'ai_json_response_format': True,
     'pipeline_schedule_enabled': True,
     'pipeline_cron_hours': [10, 17],      # 每天运行的小时数（0-23）
     'pipeline_cron_minutes': [0, 0],      # 对应每个小时的分钟数
@@ -16,7 +20,7 @@ DEFAULT_CONFIG = {
     'translation_enabled': False,
     'translation_base_url': 'https://api.siliconflow.cn/v1',
     'translation_api_key': '',
-    'translation_model': 'deepseek-ai/DeepSeek-V3-0324',
+    'translation_model': 'deepseek-ai/DeepSeek-V3.2',
     'translation_target_lang': 'zh-CN',
     # 内容缓存目录 — 默认为 DB 同级的 content/ 目录
     'content_cache_path': '',
@@ -92,6 +96,50 @@ class AppConfig:
     @openai_model.setter
     def openai_model(self, val: str):
         self._data['openai_model'] = val
+        self.save()
+
+    @property
+    def ai_enable_thinking(self) -> bool:
+        return self._data.get('ai_enable_thinking', True) is True
+
+    @ai_enable_thinking.setter
+    def ai_enable_thinking(self, val: bool):
+        self._data['ai_enable_thinking'] = bool(val)
+        self.save()
+
+    @property
+    def ai_thinking_budget(self) -> int:
+        val = self._data.get('ai_thinking_budget', 32768)
+        try:
+            return max(128, min(32768, int(val)))
+        except (TypeError, ValueError):
+            return 32768
+
+    @ai_thinking_budget.setter
+    def ai_thinking_budget(self, val: int):
+        self._data['ai_thinking_budget'] = self.ai_thinking_budget if val is None else int(val)
+        self.save()
+
+    @property
+    def ai_deep_thinking_max_tokens(self) -> int:
+        val = self._data.get('ai_deep_thinking_max_tokens', 8192)
+        try:
+            return max(1024, int(val))
+        except (TypeError, ValueError):
+            return 8192
+
+    @ai_deep_thinking_max_tokens.setter
+    def ai_deep_thinking_max_tokens(self, val: int):
+        self._data['ai_deep_thinking_max_tokens'] = int(val)
+        self.save()
+
+    @property
+    def ai_json_response_format(self) -> bool:
+        return self._data.get('ai_json_response_format', True) is True
+
+    @ai_json_response_format.setter
+    def ai_json_response_format(self, val: bool):
+        self._data['ai_json_response_format'] = bool(val)
         self.save()
 
     @property

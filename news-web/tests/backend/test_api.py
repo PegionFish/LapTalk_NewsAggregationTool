@@ -11,7 +11,7 @@ os.environ['NEWS_WEB_TESTING'] = '1'
 from main import app
 from config import config
 from utils.text import extract_text_from_html
-from ai_client import analyze_article, extract_keywords_ai
+from ai_client import _ai_json, analyze_article, chat, extract_keywords_ai
 from api import pipeline as pipeline_api
 import translation_client
 
@@ -150,7 +150,58 @@ def test_analyze_article_sends_full_text(monkeypatch):
 
     assert result == "分析完成"
     assert "正文：" in captured["messages"][1]["content"]
+    assert "思考流程" in captured["messages"][1]["content"]
     assert len(captured["messages"][1]["content"]) > 9000
+
+
+def test_chat_sends_deep_thinking_params(monkeypatch):
+    """AI 请求应默认启用 SiliconFlow 深度思考与 JSON 结构约束。"""
+    captured = {}
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="OK"))])
+
+    class FakeClient:
+        chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setattr("ai_client.get_client", lambda: FakeClient())
+    config._data['ai_enable_thinking'] = True
+    config._data['ai_thinking_budget'] = 32768
+    config._data['ai_json_response_format'] = True
+
+    result = chat("分析这篇文章", max_tokens=128)
+
+    assert result == "OK"
+    assert captured["enable_thinking"] is True
+    assert captured["thinking_budget"] == 32768
+    assert captured["response_format"] == {"type": "json_object"}
+
+
+def test_ai_json_strips_markdown_and_uses_json_object(monkeypatch):
+    """结构化 AI 调用应使用 json_object 并能解析 markdown 包裹。"""
+    captured = {}
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="```json\n{\"ok\": true}\n```"))])
+
+    class FakeClient:
+        chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setattr("ai_client.get_client", lambda: FakeClient())
+    config._data['ai_enable_thinking'] = True
+    config._data['ai_thinking_budget'] = 32768
+    config._data['ai_json_response_format'] = True
+
+    result = _ai_json("返回 JSON", "system")
+
+    assert result == {"ok": True}
+    assert captured["response_format"] == {"type": "json_object"}
+    assert captured["enable_thinking"] is True
+    assert captured["thinking_budget"] == 32768
 
 
 def test_extract_keywords_ai_sends_full_text(monkeypatch):
@@ -158,10 +209,11 @@ def test_extract_keywords_ai_sends_full_text(monkeypatch):
     captured = {}
     text = "B" * 7000
 
-    def fake_ai_json(prompt, system_prompt, max_tokens=1024):
+    def fake_ai_json(prompt, system_prompt, max_tokens=1024, **kwargs):
         captured["prompt"] = prompt
         captured["system_prompt"] = system_prompt
         captured["max_tokens"] = max_tokens
+        captured["kwargs"] = kwargs
         return ["GPU"]
 
     monkeypatch.setattr("ai_client._ai_json", fake_ai_json)

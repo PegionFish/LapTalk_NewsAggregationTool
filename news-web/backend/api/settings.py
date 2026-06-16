@@ -75,7 +75,7 @@ def test_ai():
     if not config.openai_api_key:
         return {'ok': False, 'error': 'API Key 未配置'}
     try:
-        result = chat("Hello! Reply with just 'OK'.", system_prompt="You only reply 'OK'.")
+        result = chat("Hello! Reply with just 'OK'.", system_prompt="You only reply 'OK'.", max_tokens=64, enable_thinking=False)
         return {'ok': True, 'response': result[:200], 'model': config.openai_model}
     except Exception as e:
         return {'ok': False, 'error': str(e)[:200]}

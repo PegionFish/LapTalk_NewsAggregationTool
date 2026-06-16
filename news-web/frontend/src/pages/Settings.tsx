@@ -48,6 +48,10 @@ export default function Settings() {
   const [openaiBaseUrl, setOpenaiBaseUrl] = useState('');
   const [openaiApiKey, setOpenaiApiKey] = useState('');
   const [openaiModel, setOpenaiModel] = useState('');
+  const [aiEnableThinking, setAiEnableThinking] = useState(true);
+  const [aiThinkingBudget, setAiThinkingBudget] = useState(32768);
+  const [aiDeepThinkingMaxTokens, setAiDeepThinkingMaxTokens] = useState(8192);
+  const [aiJsonResponseFormat, setAiJsonResponseFormat] = useState(true);
 
   // 翻译
   const [translationEnabled, setTranslationEnabled] = useState(false);
@@ -73,12 +77,16 @@ export default function Settings() {
       setUserAgent(s.user_agent || '');
       setOpenaiBaseUrl(s.openai_base_url || 'https://api.openai.com/v1');
       setOpenaiApiKey(s.openai_api_key || '');
-      setOpenaiModel(s.openai_model || 'gpt-4o-mini');
+      setOpenaiModel(s.openai_model || 'deepseek-ai/DeepSeek-V3.2');
+      setAiEnableThinking(s.ai_enable_thinking !== false);
+      setAiThinkingBudget(Number(s.ai_thinking_budget || 32768));
+      setAiDeepThinkingMaxTokens(Number(s.ai_deep_thinking_max_tokens || 8192));
+      setAiJsonResponseFormat(s.ai_json_response_format !== false);
       setPipelineEnabled(s.pipeline_schedule_enabled !== false);
       setTranslationEnabled(s.translation_enabled === true);
       setTranslationBaseUrl(s.translation_base_url || 'https://api.siliconflow.cn/v1');
       setTranslationApiKey(s.translation_api_key || '');
-      setTranslationModel(s.translation_model || 'deepseek-ai/DeepSeek-V3-0324');
+      setTranslationModel(s.translation_model || 'deepseek-ai/DeepSeek-V3.2');
       setCachePath(s.content_cache_path || '');
       setProxyEnabled(s.proxy_enabled === true);
       setProxyUrl(s.proxy_url || '');
@@ -97,6 +105,10 @@ export default function Settings() {
         openai_base_url: openaiBaseUrl,
         openai_api_key: openaiApiKey,
         openai_model: openaiModel,
+        ai_enable_thinking: aiEnableThinking,
+        ai_thinking_budget: aiThinkingBudget,
+        ai_deep_thinking_max_tokens: aiDeepThinkingMaxTokens,
+        ai_json_response_format: aiJsonResponseFormat,
         pipeline_schedule_enabled: pipelineEnabled,
         translation_enabled: translationEnabled,
         translation_base_url: translationBaseUrl,
@@ -155,6 +167,10 @@ export default function Settings() {
           baseUrl={openaiBaseUrl} setBaseUrl={setOpenaiBaseUrl}
           apiKey={openaiApiKey} setApiKey={setOpenaiApiKey}
           model={openaiModel} setModel={setOpenaiModel}
+          enableThinking={aiEnableThinking} setEnableThinking={setAiEnableThinking}
+          thinkingBudget={aiThinkingBudget} setThinkingBudget={setAiThinkingBudget}
+          deepThinkingMaxTokens={aiDeepThinkingMaxTokens} setDeepThinkingMaxTokens={setAiDeepThinkingMaxTokens}
+          jsonResponseFormat={aiJsonResponseFormat} setJsonResponseFormat={setAiJsonResponseFormat}
         />;
       case 'translation':
         return <TranslationSettings
