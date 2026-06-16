@@ -151,7 +151,8 @@ export default function CommentPanel({ articleId }: { articleId: number }) {
         </div>
       ) : comments.length === 0 ? (
         <div style={{ textAlign: 'center', padding: 16, color: 'var(--text-muted)', fontSize: 12 }}>
-          暂无评语，快来抢沙发
+          <i className="far fa-comment-dots" style={{ fontSize: 20, display: 'block', marginBottom: 8, opacity: 0.5 }} />
+          还没有评语，写下你的第一条评论吧
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

@@ -4,6 +4,7 @@ import type { Article } from '../types';
 import { Input, Select, Button, Badge, Loading, Tabs, Tab } from '../components/ui';
 import ArticlePane from '../components/ArticlePane';
 import CommentPanel from '../components/CommentPanel';
+import { decodeHTMLEntities } from '../utils/html';
 
 const PER_PAGE = 50;
 
@@ -61,9 +62,10 @@ export default function ArticleSearch() {
 
   useEffect(() => { fetchArticles(); }, [fetchArticles]);
 
-  // 加载主题分类统计（仅当切换分类或首次加载时刷新）
+  // 加载主题分类统计（首次加载时自动回填 + 查询统计）
   const loadCategoryStats = useCallback(async () => {
     try {
+      await api.populateTopicCategories();
       const res = await api.getTopicCategories();
       setCategoryStats(res.categories || {});
     } catch { /* ignore */ }
@@ -179,7 +181,7 @@ export default function ArticleSearch() {
                 <th style={{ ...thStyle, width: 40 }}>翻译</th>
                 <th style={{ ...thStyle, width: 40 }}>分析</th>
                 <th style={{ ...thStyle, width: 48 }}>审核</th>
-                <th style={{ ...thStyle, width: 60 }}>日期</th>
+                <th style={{ ...thStyle, width: 72, whiteSpace: 'nowrap' }}>日期</th>
               </tr>
             </thead>
             <tbody>
@@ -212,7 +214,7 @@ export default function ArticleSearch() {
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap',
                   }}>
-                    {a.title}
+                    {decodeHTMLEntities(a.title)}
                   </td>
                   <td style={{ padding: '10px 12px', color: 'var(--text-secondary)', fontSize: 11 }}>{a.source}</td>
                   <td style={{ padding: '10px 12px', textAlign: 'center', fontSize: 11 }}>
@@ -251,7 +253,7 @@ export default function ArticleSearch() {
                       {a.human_processed ? '人工' : a.verified ? '已审' : '待审'}
                     </Badge>
                   </td>
-                  <td style={{ padding: '10px 12px', color: 'var(--text-muted)', fontSize: 11 }}>
+                  <td style={{ padding: '10px 12px', color: 'var(--text-muted)', fontSize: 11, whiteSpace: 'nowrap' }}>
                     {a.published?.slice(5, 10) || a.fetched?.slice(5, 10)}
                   </td>
                 </tr>
@@ -326,7 +328,7 @@ export default function ArticleSearch() {
               flex: 1,
               paddingRight: 12,
             }}>
-              {selected.title}
+              {decodeHTMLEntities(selected.title)}
             </h3>
             <button
               onClick={() => setSelected(null)}
@@ -361,9 +363,13 @@ export default function ArticleSearch() {
             flexWrap: 'wrap',
             fontSize: 12,
             color: 'var(--text-secondary)',
+            alignItems: 'center',
           }}>
             <span><i className="fas fa-newspaper" style={{ marginRight: 4 }} />{selected.source}</span>
             <span><i className="fas fa-calendar" style={{ marginRight: 4 }} />{selected.fetched?.slice(0, 10)}</span>
+            {selected.topic_category && (
+              <Badge variant="blue" icon="fa-folder">{selected.topic_category}</Badge>
+            )}
             <span style={{
               color: selected.score > 0.7 ? 'var(--accent-tertiary)' : 'var(--accent-orange)',
               fontWeight: 600,
@@ -495,18 +501,15 @@ export default function ArticleSearch() {
           </div>
           {analyzing && !aiAnalysis ? (
             <div style={{
+              fontSize: 12,
+              color: 'var(--text-muted)',
+              padding: '8px 12px',
               display: 'flex',
               alignItems: 'center',
-              gap: 10,
-              padding: 16,
-              color: 'var(--text-muted)',
-              fontSize: 12,
-              background: 'var(--bg-card)',
-              borderRadius: 8,
-              border: '1px solid var(--border)',
+              gap: 6,
             }}>
-              <i className="fas fa-spinner fa-spin" style={{ color: 'var(--accent)' }} />
-              正在分析文章内容...
+              <i className="fas fa-spinner fa-spin" style={{ color: 'var(--accent)', fontSize: 11 }} />
+              分析中...
             </div>
           ) : aiAnalysis ? (
             <div style={{
