@@ -258,6 +258,13 @@ def main():
     except Exception as e:
         print(f"   DB ⚠️ 写入失败: {e}")
 
+    # AI 预筛选（静默嵌入，不暴露独立步骤）
+    try:
+        from ai_filter import run_ai_filter  # noqa: F811
+        run_ai_filter(db_path)
+    except Exception as e:
+        print(f"   AI ⚠️ 预筛选异常: {e}")
+
     return sources
 
 if __name__ == '__main__':

@@ -16,7 +16,8 @@ def get_db() -> NewsDB:
 def list_events(status: str = "", min_articles: int = Query(1, ge=1), page: int = Query(1, ge=1), limit: int = Query(50, ge=1, le=200)):
     db = get_db()
     with db._conn() as conn:
-        clauses = ["1=1"]
+        clauses = ["1=1",
+            "EXISTS (SELECT 1 FROM article_events ae JOIN articles a ON a.id = ae.article_id WHERE ae.event_id = e.id AND (a.ai_filtered IS NULL OR a.ai_filtered != -1))"]
         params = []
         if status:
             clauses.append("e.status = ?")

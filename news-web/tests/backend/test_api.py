@@ -174,8 +174,8 @@ def test_chat_sends_deep_thinking_params(monkeypatch):
     result = chat("分析这篇文章", max_tokens=128)
 
     assert result == "OK"
-    assert captured["enable_thinking"] is True
-    assert captured["thinking_budget"] == 32768
+    assert captured["extra_body"]["enable_thinking"] is True
+    assert captured["extra_body"]["thinking_budget"] == 32768
     assert captured["response_format"] == {"type": "json_object"}
 
 
@@ -200,8 +200,8 @@ def test_ai_json_strips_markdown_and_uses_json_object(monkeypatch):
 
     assert result == {"ok": True}
     assert captured["response_format"] == {"type": "json_object"}
-    assert captured["enable_thinking"] is True
-    assert captured["thinking_budget"] == 32768
+    assert captured["extra_body"]["enable_thinking"] is True
+    assert captured["extra_body"]["thinking_budget"] == 32768
 
 
 def test_extract_keywords_ai_sends_full_text(monkeypatch):

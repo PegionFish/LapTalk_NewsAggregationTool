@@ -334,6 +334,21 @@ class NewsDB:
                 meta = json.dumps(art.get('metadata', {}), ensure_ascii=False)
                 keywords = json.dumps(extract_keywords(title, source, category), ensure_ascii=False)
                 try:
+                    # 同平台同标题去重：检查是否已有相同标题+来源的文章（不论 URL）
+                    existing = conn.execute(
+                        "SELECT id, url, ai_filtered FROM articles WHERE title=? AND source=? LIMIT 1",
+                        (title, source)
+                    ).fetchone()
+                    if existing:
+                        # 如果现有文章无 URL 或被拒绝，但新文章有 URL，则更新
+                        eid, eurl, eaf = existing
+                        if url and (not eurl or eaf == -1):
+                            conn.execute("UPDATE articles SET url=?, ai_filtered=0 WHERE id=?", (url[:500], eid))
+                            saved += 1
+                        else:
+                            skipped += 1
+                        continue
+                    # 无重复 — 正常插入
                     conn.execute("""
                         INSERT OR IGNORE INTO articles
                             (title, source, url, category, published_date, fetched_at, metadata, keywords)
@@ -569,6 +584,7 @@ class NewsDB:
                 FROM articles a
                 LEFT JOIN article_events ae ON a.id = ae.article_id
                 WHERE ae.article_id IS NULL
+                AND a.category NOT IN ('platform_hotlists', 'bilibili_videos')
             """).fetchall()
             if not unlinked:
                 return 0
@@ -942,13 +958,13 @@ class NewsDB:
         获取事件时间线：该事件的文章列表 + 关联事件
         """
         with self._conn() as conn:
-            # 文章列表
+            # 文章列表（排除 AI 已拒绝的文章）
             articles = conn.execute("""
                 SELECT a.id, a.title, a.source, a.url, a.fetched_at, a.priority_score,
                        a.human_verified, a.keywords
                 FROM article_events ae
                 JOIN articles a ON a.id = ae.article_id
-                WHERE ae.event_id=?
+                WHERE ae.event_id=? AND (a.ai_filtered IS NULL OR a.ai_filtered != -1)
                 ORDER BY a.fetched_at ASC
             """, (event_id,)).fetchall()
             # 事件本身信息
@@ -1309,18 +1325,34 @@ class NewsDB:
         with self._conn() as conn:
             articles = conn.execute(
                 "SELECT COUNT(*) FROM articles WHERE category NOT IN ('platform_hotlists', 'bilibili_videos')"
+                " AND (ai_filtered IS NULL OR ai_filtered != -1)"
             ).fetchone()[0]
-            events = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-            active = conn.execute("SELECT COUNT(*) FROM events WHERE status='active'").fetchone()[0]
+            # 仅统计 RSS 文章关联的事件，排除热榜/B站视频 + AI 已拒绝的文章
+            events = conn.execute("""
+                SELECT COUNT(DISTINCT ae.event_id) FROM article_events ae
+                JOIN articles a ON a.id = ae.article_id
+                WHERE a.category NOT IN ('platform_hotlists', 'bilibili_videos')
+                AND (a.ai_filtered IS NULL OR a.ai_filtered != -1)
+            """).fetchone()[0]
+            active = conn.execute("""
+                SELECT COUNT(DISTINCT ae.event_id) FROM article_events ae
+                JOIN articles a ON a.id = ae.article_id
+                JOIN events e ON e.id = ae.event_id
+                WHERE a.category NOT IN ('platform_hotlists', 'bilibili_videos')
+                AND (a.ai_filtered IS NULL OR a.ai_filtered != -1)
+                AND e.status = 'active'
+            """).fetchone()[0]
             verified = conn.execute(
                 "SELECT COUNT(*) FROM articles WHERE human_verified!=0 AND category NOT IN ('platform_hotlists', 'bilibili_videos')"
             ).fetchone()[0]
             by_cat = conn.execute(
-                "SELECT category, COUNT(*) FROM articles WHERE category NOT IN ('platform_hotlists', 'bilibili_videos') GROUP BY category"
+                "SELECT category, COUNT(*) FROM articles WHERE category NOT IN ('platform_hotlists', 'bilibili_videos')"
+                " AND (ai_filtered IS NULL OR ai_filtered != -1) GROUP BY category"
             ).fetchall()
             # 来源分布 — 按实际媒体名统计（如 Ars Technica、36Kr、IT之家），不按 category 聚合
             by_source = conn.execute(
-                "SELECT source, COUNT(*) FROM articles WHERE category NOT IN ('platform_hotlists', 'bilibili_videos') GROUP BY source ORDER BY COUNT(*) DESC"
+                "SELECT source, COUNT(*) FROM articles WHERE category NOT IN ('platform_hotlists', 'bilibili_videos')"
+                " AND (ai_filtered IS NULL OR ai_filtered != -1) GROUP BY source ORDER BY COUNT(*) DESC"
             ).fetchall()
             # 缓存状态统计 — 与 cache.py 保持一致的口径
             # HTML 已下载到磁盘（有 local_path 且非错误标记）
@@ -1339,11 +1371,12 @@ class NewsDB:
             cache_failed = conn.execute(
                 "SELECT COUNT(*) FROM articles WHERE local_path LIKE '[ERR:%' AND category NOT IN ('platform_hotlists', 'bilibili_videos')"
             ).fetchone()[0]
-            # 从未尝试下载
-            total_for_cache = conn.execute(
+            # 从未尝试下载（排除 AI 已拒绝的文章）
+            cache_pending = conn.execute(
                 "SELECT COUNT(*) FROM articles WHERE category NOT IN ('platform_hotlists', 'bilibili_videos')"
+                " AND (local_path IS NULL OR local_path = '')"
+                " AND (ai_filtered IS NULL OR ai_filtered != -1)"
             ).fetchone()[0]
-            cache_pending = total_for_cache - cache_cached - cache_failed
             return {
                 'articles': articles,
                 'events': events,

@@ -35,7 +35,7 @@ except Exception:
 
 DELAY = 0.5
 TIMEOUT = 300
-BLOCKED = ['expreview.com', 'solidot.org', 'weibo.com', 'douyin.com']
+BLOCKED = ['weibo.com', 'douyin.com']
 
 
 def sanitize_html(html: str) -> str:

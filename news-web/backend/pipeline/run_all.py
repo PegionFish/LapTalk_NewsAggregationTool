@@ -10,7 +10,6 @@ STEP_TIMEOUTS = {
     'fetch_english_news.py': 300,
     'fetch_platform_hotlists.py': 300,
     'collect_data.py': 300,
-    'ai_filter.py': 900,
     'fetch_content.py': 1800,
     'translate_content.py': 900,
     'analyze.py': 900,
@@ -62,9 +61,6 @@ def run_pipeline(db_path: str = "", user_agent: str = "", callback=None, run_typ
     steps.append(('collect_data.py', '去重聚类'))
 
     from config import config
-    if config.openai_api_key:
-        steps.append(('ai_filter.py', 'AI 筛选'))
-
     steps.append(('fetch_content.py', '页面归档'))
     if config.translation_enabled and config.translation_api_key:
         steps.append(('translate_content.py', 'AI 翻译'))

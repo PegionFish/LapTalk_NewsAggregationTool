@@ -11,6 +11,14 @@ from typing import Any
 from openai import OpenAI
 
 from config import config
+from utils.text import extract_text_from_html
+
+
+def _prepare_content(text: str) -> str:
+    """将 HTML 正文提取纯文本，去除标签后大幅降低 token 占用。"""
+    if not text:
+        return ""
+    return extract_text_from_html(text)
 
 
 _DEEP_THINKING_INSTRUCTION = (
@@ -72,10 +80,13 @@ def _request_options(
 
     enabled = _thinking_enabled(enable_thinking)
     budget = _thinking_budget(thinking_budget)
+    extra_body: dict[str, Any] = {}
     if enabled:
-        options["enable_thinking"] = True
+        extra_body["enable_thinking"] = True
         if budget is not None:
-            options["thinking_budget"] = budget
+            extra_body["thinking_budget"] = budget
+    if extra_body:
+        options["extra_body"] = extra_body
 
     fmt = _json_response_format(response_format)
     if fmt is not None:
@@ -188,12 +199,13 @@ def build_chain_title(events_text: str) -> str:
 
 
 def analyze_article(title: str, text: str) -> str:
-    """对单篇科技新闻文章生成中文分析摘要。完整正文直接传入 160K 上下文。"""
+    """对单篇科技新闻文章生成中文分析摘要。HTML 提取纯文本后传入 160K 上下文。"""
+    content = _prepare_content(text)
     return chat(
         _with_deep_thinking(
             f"请深入分析以下科技新闻，输出结构化摘要（800-1200 字，必要时可更长）：\n\n"
             f"标题：{title}\n"
-            f"正文：{text}\n\n"
+            f"正文：{content}\n\n"
             f"输出格式：\n"
             f"📌要点：核心事实（5-8 条要点，优先保留原文中的数字、产品、公司、技术名）\n"
             f"🔬背景：技术/行业背景与来龙去脉\n"
@@ -218,10 +230,11 @@ def analyze_article(title: str, text: str) -> str:
 
 
 def extract_keywords_ai(title: str, text: str, source: str = "") -> list[str]:
-    """AI 从标题+正文中提取技术关键词。完整正文直接传入 160K 上下文。"""
+    """AI 从标题+正文中提取技术关键词。HTML 提取纯文本后传入 160K 上下文。"""
+    content = _prepare_content(text)
     result = _ai_json(
         _with_deep_thinking(
-            f"标题：{title}\n来源：{source}\n正文：{text}\n\n"
+            f"标题：{title}\n来源：{source}\n正文：{content}\n\n"
             f"提取 5-15 个技术关键词，返回 JSON 数组。关键词应覆盖：产品名、公司名、技术名、核心概念。"
         ),
         "你是科技新闻关键词提取引擎。只输出 JSON 数组，如 [\"GPU\",\"NVIDIA\",\"Blackwell\",\"AI训练\"]。"
@@ -231,14 +244,21 @@ def extract_keywords_ai(title: str, text: str, source: str = "") -> list[str]:
     )
     if isinstance(result, list) and len(result) > 0:
         return [str(k) for k in result if isinstance(k, str)]
+    if isinstance(result, dict):
+        kws = result.get("keywords") or result.get("关键词")
+        if isinstance(kws, list) and len(kws) > 0:
+            return [str(k) for k in kws if isinstance(k, str)]
+        if len(result) > 0:
+            return list(result.keys())
     return None
 
 
 def classify_article_ai(title: str, text: str) -> dict | None:
-    """AI 分类文章主题。完整正文直接传入 160K 上下文。"""
+    """AI 分类文章主题。HTML 提取纯文本后传入 160K 上下文。"""
+    content = _prepare_content(text)
     result = _ai_json(
         _with_deep_thinking(
-            f"标题：{title}\n正文：{text}\n\n"
+            f"标题：{title}\n正文：{content}\n\n"
             "请输出 JSON："
             '{"category":"细分领域（AI/LLM, PC/Hardware, Mobile, Gaming, Security, Semiconductors, Enterprise, Automotive, Space, Chip/Wafer, OpenSource, Regulation, Other）",'
             '"tags":["标签1","标签2","标签3","标签4","标签5"],'
@@ -254,10 +274,11 @@ def classify_article_ai(title: str, text: str) -> dict | None:
 
 
 def score_priority_ai(title: str, text: str, source: str, days_old: int = 0) -> dict | None:
-    """AI 评估文章优先级。完整正文直接传入 160K 上下文。"""
+    """AI 评估文章优先级。HTML 提取纯文本后传入 160K 上下文。"""
+    content = _prepare_content(text)
     result = _ai_json(
         _with_deep_thinking(
-            f"标题：{title}\n来源：{source}\n发布天数：{days_old}\n正文：{text}\n\n"
+            f"标题：{title}\n来源：{source}\n发布天数：{days_old}\n正文：{content}\n\n"
             f"请输出 JSON：{{"
             f'"score":0.0-1.0（综合评分：来源权威性30% + 内容重要性40% + 时效性30%），'
             f'"label":"high/medium/low（高/中/低优先级。high:>=0.7, medium:0.35-0.7, low:<0.35）",'
