@@ -17,7 +17,22 @@ export interface Article {
   ai_analyzed: boolean;   // AI 是否已完成内容分析
   human_processed: boolean; // 是否已人工处理
   has_translation: boolean; // 是否已有译文
+  topic_category?: string; // 主题分类: 硬件/AI/游戏/移动/发布/其他
   event?: { id: number; title: string } | null;
+}
+
+export interface Comment {
+  id: number;
+  article_id: number;
+  user_id: number;
+  username: string;
+  parent_id: number | null;
+  content: string;
+  created_at: string;
+  updated_at: string;
+  like_count: number;
+  liked_by_me: boolean;
+  replies?: Comment[];
 }
 
 export interface Event {

@@ -1,15 +1,16 @@
-import type { Article, Event, EventDetail, LogicChain, ChainDetail, ChainEvent, Stats, PaginatedResponse } from '../types';
+import type { Article, Event, EventDetail, LogicChain, ChainDetail, ChainEvent, Stats, PaginatedResponse, Comment } from '../types';
+import { getAuthHeaders } from '../contexts/AuthContext';
 
 const BASE = '/api';
 
 async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${url}`, {
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders(), ...init?.headers },
     ...init,
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || `HTTP ${res.status}`);
+    throw new Error(body.error || body.detail || `HTTP ${res.status}`);
   }
   return res.json();
 }
@@ -38,6 +39,40 @@ export const api = {
 
   analyzeArticle: (id: number) =>
     fetchJSON<{ ok: boolean; cached: boolean; analysis: string }>(`/articles/${id}/analyze`, { method: 'POST' }),
+
+  // ── 主题分类 ──────────────────────────────────────────
+  getTopicCategories: () =>
+    fetchJSON<{ categories: Record<string, number> }>('/articles/categories'),
+
+  // ── 低分新闻清理 ──────────────────────────────────────
+  previewCleanup: (threshold: number) =>
+    fetchJSON<{ count: number; threshold: number }>(`/articles/cleanup/preview?threshold=${threshold}`),
+
+  executeCleanup: (threshold: number) =>
+    fetchJSON<{ deleted: number; threshold: number; would_delete: number }>(
+      '/articles/cleanup', { method: 'POST', body: JSON.stringify({ threshold }) }
+    ),
+
+  // ── 文章评语 + 点赞 ──────────────────────────────────
+  getArticleComments: (articleId: number) =>
+    fetchJSON<{ comments: Comment[] }>(`/articles/${articleId}/comments`),
+
+  addArticleComment: (articleId: number, content: string, parentId?: number) =>
+    fetchJSON<Comment>(`/articles/${articleId}/comments`, {
+      method: 'POST',
+      body: JSON.stringify({ content, parent_id: parentId ?? null }),
+    }),
+
+  editComment: (id: number, content: string) =>
+    fetchJSON<{ ok: boolean }>(`/comments/${id}`, {
+      method: 'PATCH', body: JSON.stringify({ content }),
+    }),
+
+  deleteComment: (id: number) =>
+    fetchJSON<{ ok: boolean }>(`/comments/${id}`, { method: 'DELETE' }),
+
+  toggleCommentLike: (id: number) =>
+    fetchJSON<{ liked: boolean; count: number }>(`/comments/${id}/like`, { method: 'POST' }),
 
   listEvents: (params: Record<string, string | number> = {}) => {
     const qs = new URLSearchParams();

@@ -1,10 +1,29 @@
 import { useEffect, useState, useCallback } from 'react';
 import { api } from '../api/client';
 import type { Article } from '../types';
-import { Input, Select, Button, Badge, Loading } from '../components/ui';
+import { Input, Select, Button, Badge, Loading, Tabs, Tab } from '../components/ui';
 import ArticlePane from '../components/ArticlePane';
+import CommentPanel from '../components/CommentPanel';
 
 const PER_PAGE = 50;
+
+// 主题分类 Tab 配置（顺序即展示顺序）
+const CATEGORY_TABS = [
+  { key: '', label: '全部', icon: 'fa-layer-group', color: 'var(--accent)' },
+  { key: '硬件', label: '硬件', icon: 'fa-microchip', color: 'var(--accent-tertiary)' },
+  { key: 'AI', label: 'AI', icon: 'fa-brain', color: 'var(--accent)' },
+  { key: '游戏', label: '游戏', icon: 'fa-gamepad', color: 'var(--accent-purple)' },
+  { key: '移动', label: '移动', icon: 'fa-mobile-screen', color: 'var(--accent-orange)' },
+  { key: '发布', label: '发布', icon: 'fa-bullhorn', color: 'var(--accent-tertiary)' },
+  { key: '其他', label: '其他', icon: 'fa-ellipsis', color: 'var(--text-muted)' },
+];
+
+const SORT_OPTIONS = [
+  { value: 'fetched_desc', label: '默认排序' },
+  { value: 'score_desc', label: '评分最高' },
+  { value: 'score_asc', label: '评分最低' },
+  { value: 'date_desc', label: '最新发布' },
+];
 
 export default function ArticleSearch() {
   const [articles, setArticles] = useState<Article[]>([]);
@@ -13,6 +32,9 @@ export default function ArticleSearch() {
   const [search, setSearch] = useState('');
   const [priority, setPriority] = useState('');
   const [verified, setVerified] = useState('');
+  const [topicCategory, setTopicCategory] = useState('');
+  const [sort, setSort] = useState('fetched_desc');
+  const [categoryStats, setCategoryStats] = useState<Record<string, number>>({});
   const [selected, setSelected] = useState<Article | null>(null);
   const [reading, setReading] = useState<Article | null>(null);
   const [loading, setLoading] = useState(false);
@@ -28,14 +50,26 @@ export default function ArticleSearch() {
       if (priority) params.priority = priority;
       if (verified === 'yes') params.verified = 'yes';
       else if (verified === 'no') params.verified = 'no';
+      if (topicCategory) params.topic_category = topicCategory;
+      if (sort && sort !== 'fetched_desc') params.sort = sort;
       const res = await api.searchArticles(params);
       setArticles(res.articles || []);
       setTotal(res.total || 0);
     } catch { setArticles([]); }
     setLoading(false);
-  }, [page, search, priority, verified]);
+  }, [page, search, priority, verified, topicCategory, sort]);
 
   useEffect(() => { fetchArticles(); }, [fetchArticles]);
+
+  // 加载主题分类统计（仅当切换分类或首次加载时刷新）
+  const loadCategoryStats = useCallback(async () => {
+    try {
+      const res = await api.getTopicCategories();
+      setCategoryStats(res.categories || {});
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => { loadCategoryStats(); }, [loadCategoryStats]);
 
   useEffect(() => {
     if (!selected) { setAiAnalysis(''); setAnalysisMeta({}); return; }
@@ -99,8 +133,30 @@ export default function ArticleSearch() {
             <option value="yes">已审核</option>
             <option value="no">待审核</option>
           </Select>
+          <Select value={sort} onChange={e => { setSort(e.target.value); setPage(1); }}>
+            {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </Select>
           {loading && <i className="fas fa-spinner fa-spin" style={{ color: 'var(--accent)', fontSize: 14 }} />}
         </div>
+
+        {/* 主题分类 Tab */}
+        <Tabs style={{ marginBottom: 16, flexWrap: 'wrap' }}>
+          {CATEGORY_TABS.map(t => {
+            const count = t.key === '' ? Object.values(categoryStats).reduce((s, n) => s + n, 0) : (categoryStats[t.key] || 0);
+            return (
+              <Tab
+                key={t.key || 'all'}
+                active={topicCategory === t.key}
+                icon={t.icon}
+                color={t.color}
+                count={count}
+                onClick={() => { setTopicCategory(t.key); setPage(1); }}
+              >
+                {t.label}
+              </Tab>
+            );
+          })}
+        </Tabs>
 
         {/* 表格 */}
         <div style={{
@@ -479,6 +535,10 @@ export default function ArticleSearch() {
               该文章暂无法分析（可能尚未完成内容提取）。
             </div>
           )}
+
+          {/* 分隔线 + 审核评语 */}
+          <div style={{ borderTop: '1px solid var(--border)', margin: '16px 0' }} />
+          <CommentPanel articleId={selected.id} />
         </div>
       )}
 

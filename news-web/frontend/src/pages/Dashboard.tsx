@@ -31,6 +31,39 @@ export default function Dashboard() {
   const [fullState, setFullState] = useState<BatchState>(emptyBatch);
   const [filterRunning, setFilterRunning] = useState(false); const [filterState, setFilterState] = useState<BatchState>(emptyBatch);
 
+  // 低分清理
+  const [cleanupThreshold, setCleanupThreshold] = useState('0.2');
+  const [cleanupPreview, setCleanupPreview] = useState<number | null>(null);
+  const [cleanupLoading, setCleanupLoading] = useState(false);
+  const [cleanupResult, setCleanupResult] = useState<{ deleted: number } | null>(null);
+  const [cleanupConfirming, setCleanupConfirming] = useState(false);
+
+  const handlePreviewCleanup = async () => {
+    const threshold = parseFloat(cleanupThreshold);
+    if (isNaN(threshold) || threshold < 0 || threshold > 1) { showToast('阈值需在 0 ~ 1 之间'); return; }
+    setCleanupLoading(true);
+    setCleanupResult(null);
+    try {
+      const res = await api.previewCleanup(threshold);
+      setCleanupPreview(res.count);
+    } catch (e) { showToast('预览失败: ' + (e as Error).message); }
+    setCleanupLoading(false);
+  };
+
+  const handleExecuteCleanup = async () => {
+    const threshold = parseFloat(cleanupThreshold);
+    setCleanupConfirming(false);
+    setCleanupLoading(true);
+    try {
+      const res = await api.executeCleanup(threshold);
+      setCleanupResult({ deleted: res.deleted });
+      setCleanupPreview(null);
+      showToast(`已清理 ${res.deleted} 篇低分文章`);
+      api.getStats().then(setStats).catch(() => {});
+    } catch (e) { showToast('清理失败: ' + (e as Error).message); }
+    setCleanupLoading(false);
+  };
+
   const transTimer = useRef<ReturnType<typeof setInterval>>();
   const analyTimer  = useRef<ReturnType<typeof setInterval>>();
   const chainTimer  = useRef<ReturnType<typeof setInterval>>();
@@ -399,6 +432,126 @@ export default function Dashboard() {
           onClick={handleSummarizeEvents}
           label="生成摘要"
         />
+      </div>
+
+      {/* ═══ 低分新闻手动清理 ═══ */}
+      <div style={{ marginTop: 24 }}>
+        <Card style={{
+          background: 'linear-gradient(135deg, rgba(239, 83, 80, 0.06), rgba(255, 193, 7, 0.04))',
+          border: '1px solid rgba(239, 83, 80, 0.2)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 14 }}>
+            <i className="fas fa-broom" style={{ color: 'var(--accent-red)', fontSize: 22 }} />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 700, fontSize: 15 }}>低分新闻清理</div>
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                删除评分低于阈值且未被人工处理的文章（已审核 / 已处理的文章受保护）
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <label style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+              评分阈值
+              <input
+                type="number"
+                step="0.05"
+                min="0"
+                max="1"
+                value={cleanupThreshold}
+                onChange={e => { setCleanupThreshold(e.target.value); setCleanupPreview(null); setCleanupResult(null); }}
+                style={{
+                  width: 80,
+                  padding: '6px 8px',
+                  background: 'var(--bg-primary)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 6,
+                  color: 'var(--text-primary)',
+                  fontSize: 12,
+                  outline: 'none',
+                }}
+              />
+            </label>
+
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={cleanupLoading ? undefined : 'fa-eye'}
+              onClick={handlePreviewCleanup}
+              disabled={cleanupLoading}
+              loading={cleanupLoading}
+            >
+              预览
+            </Button>
+
+            {cleanupPreview !== null && !cleanupConfirming && (
+              <Button
+                variant="ghost"
+                size="sm"
+                icon="fa-trash"
+                onClick={() => setCleanupConfirming(true)}
+                style={{ borderColor: 'var(--accent-red)', color: 'var(--accent-red)' }}
+              >
+                执行清理
+              </Button>
+            )}
+          </div>
+
+          {/* 预览结果 */}
+          {cleanupPreview !== null && (
+            <div style={{
+              marginTop: 12, padding: '10px 14px',
+              background: cleanupPreview > 0 ? 'rgba(255, 193, 7, 0.1)' : 'rgba(129, 199, 132, 0.1)',
+              border: `1px solid ${cleanupPreview > 0 ? 'rgba(255, 193, 7, 0.3)' : 'rgba(129, 199, 132, 0.3)'}`,
+              borderRadius: 8, fontSize: 12, color: 'var(--text-secondary)',
+              display: 'flex', alignItems: 'center', gap: 8,
+            }}>
+              <i className={`fas ${cleanupPreview > 0 ? 'fa-exclamation-triangle' : 'fa-check-circle'}`}
+                 style={{ color: cleanupPreview > 0 ? 'var(--accent-orange)' : 'var(--accent-tertiary)' }} />
+              {cleanupPreview > 0
+                ? `将清理 ${cleanupPreview} 篇评分低于 ${cleanupThreshold} 的文章`
+                : `没有符合条件（评分 < ${cleanupThreshold}）的可清理文章`}
+            </div>
+          )}
+
+          {/* 二次确认 */}
+          {cleanupConfirming && (
+            <div style={{
+              marginTop: 12, padding: 14,
+              background: 'rgba(239, 83, 80, 0.08)',
+              border: '1px solid rgba(239, 83, 80, 0.3)',
+              borderRadius: 8,
+            }}>
+              <div style={{ fontSize: 12, color: 'var(--accent-red)', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <i className="fas fa-exclamation-circle" />
+                确认删除 {cleanupPreview} 篇文章？此操作不可撤销，将一并清除其评语、事件关联等数据。
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <Button variant="ghost" size="sm" icon="fa-check" onClick={handleExecuteCleanup}
+                  style={{ borderColor: 'var(--accent-red)', color: 'var(--accent-red)' }}>
+                  确认删除
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setCleanupConfirming(false)}>
+                  取消
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* 执行结果 */}
+          {cleanupResult && !cleanupConfirming && (
+            <div style={{
+              marginTop: 12, padding: '10px 14px',
+              background: 'rgba(129, 199, 132, 0.1)',
+              border: '1px solid rgba(129, 199, 132, 0.3)',
+              borderRadius: 8, fontSize: 12, color: 'var(--accent-tertiary)',
+              display: 'flex', alignItems: 'center', gap: 8,
+            }}>
+              <i className="fas fa-check-circle" />
+              已成功清理 {cleanupResult.deleted} 篇低分文章
+            </div>
+          )}
+        </Card>
       </div>
 
       {/* 数据分类与来源分布 */}

@@ -22,10 +22,15 @@ def list_articles(
     date_to: str = "",
     priority: str = "",
     verified: str = "",
+    topic_category: str = "",
+    sort: str = "fetched_desc",
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=500),
 ):
-    """Search articles with multi-dimensional filtering."""
+    """Search articles with multi-dimensional filtering + 排序。
+
+    sort: fetched_desc(默认) | score_desc | score_asc | date_desc
+    """
     db = get_db()
     with db._conn() as conn:
         # 默认排除热榜/视频趋势数据（有独立展示页面）
@@ -50,19 +55,31 @@ def list_articles(
             clauses.append("a.human_verified != 0")
         elif verified == 'no':
             clauses.append("a.human_verified = 0")
+        if topic_category:
+            clauses.append("a.topic_category = ?")
+            params.append(topic_category)
 
         where = " AND ".join(clauses) if clauses else "1=1"
         offset = (page - 1) * limit
+
+        # 排序：score_* 优先按 priority_score；date_desc 按发布日期；其余按 fetched_at
+        order_map = {
+            'score_desc': "a.priority_score DESC, a.fetched_at DESC",
+            'score_asc': "a.priority_score ASC, a.fetched_at DESC",
+            'date_desc': "a.published_date DESC, a.fetched_at DESC",
+            'fetched_desc': "a.fetched_at DESC",
+        }
+        order_by = order_map.get(sort, order_map['fetched_desc'])
 
         count = conn.execute(f"SELECT COUNT(*) FROM articles a WHERE {where}", params).fetchone()[0]
         rows = conn.execute(f"""
             SELECT a.id, a.title, a.source, a.url, a.published_date, a.fetched_at,
                    a.priority_score, a.priority_label, a.human_verified, a.keywords, a.human_tags,
                    a.content_status, a.content_fetched_at,
-                   a.content_lang, a.ai_analyzed, a.human_processed,
+                   a.content_lang, a.ai_analyzed, a.human_processed, a.topic_category,
                    CASE WHEN a.translated_content != '' THEN 1 ELSE 0 END as has_translation
             FROM articles a WHERE {where}
-            ORDER BY a.fetched_at DESC
+            ORDER BY {order_by}
             LIMIT ? OFFSET ?
         """, params + [limit, offset]).fetchall()
 
@@ -78,10 +95,43 @@ def list_articles(
         'content_lang': r[13] or '',
         'ai_analyzed': bool(r[14]),
         'human_processed': bool(r[15]),
-        'has_translation': bool(r[16]),
+        'topic_category': r[16] or '',
+        'has_translation': bool(r[17]),
     } for r in rows]
 
     return {'articles': articles, 'total': count, 'page': page, 'limit': limit}
+
+
+@router.get("/categories")
+def list_categories():
+    """返回各主题分类的文章数统计（供前端 Tab badge）。"""
+    db = get_db()
+    return {'categories': db.get_topic_stats()}
+
+
+# ── 低分新闻清理 ────────────────────────────────────────
+
+@router.get("/cleanup/preview")
+def cleanup_preview(threshold: float = Query(0.2, ge=0.0, le=1.0)):
+    """预览将被清理的文章数（不执行删除）。"""
+    db = get_db()
+    return db.preview_cleanup(threshold)
+
+
+class CleanupRequest(BaseModel):
+    threshold: float = 0.2
+
+
+@router.post("/cleanup")
+def cleanup_execute(body: CleanupRequest):
+    """执行低分新闻清理。删除评分低于阈值且未被人工处理的文章及其关联数据。"""
+    if body.threshold < 0.0 or body.threshold > 1.0:
+        raise HTTPException(400, "threshold_out_of_range")
+    db = get_db()
+    preview = db.preview_cleanup(body.threshold)
+    result = db.cleanup_low_score(body.threshold)
+    return {'deleted': result['deleted'], 'threshold': body.threshold, 'would_delete': preview['count']}
+
 
 @router.get("/{article_id}")
 def get_article(article_id: int):

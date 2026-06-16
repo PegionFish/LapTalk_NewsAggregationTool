@@ -38,7 +38,7 @@ Pipeline 子进程:
 |----|--------|
 | 后端 | Python 3.11+, FastAPI, SQLite, APScheduler, bcrypt, PyJWT, openai |
 | 前端 | React 18, Vite 5, TypeScript, React Router 6, React Flow (xyflow 12) |
-| 测试 | pytest (后端 15 用例), Vitest + Testing Library (前端 16 用例), Playwright (E2E 5 用例) |
+| 测试 | pytest (后端 29 用例), Vitest + Testing Library (前端 16 用例), Playwright (E2E 5 用例) |
 | 部署 | systemd (Linux), launchd (macOS), run_prod.sh |
 
 ## 项目结构
@@ -56,7 +56,8 @@ news-web/
 │   ├── api/
 │   │   ├── settings.py      # GET/PUT /api/settings
 │   │   ├── stats.py         # GET /api/stats (仪表盘统计)
-│   │   ├── articles.py      # 文章搜索/详情/更新/原文代理
+│   │   ├── articles.py      # 文章搜索/详情/更新/原文代理 + 分类筛选/排序/低分清理
+│   │   ├── comments.py      # 文章多级评语 (CRUD + 点赞)
 │   │   ├── events.py        # 事件 CRUD/合并/拆分
 │   │   ├── chains.py        # 逻辑链 CRUD/拼接/拆分/重排/递归时间线
 │   │   ├── relations.py     # 事件关系 (推荐/确认/拒绝/批量查询)
@@ -64,8 +65,8 @@ news-web/
 │   │   ├── audit.py         # GET 审计日志
 │   │   └── notifications.py # 通知偏好/列表/已读标记
 │   ├── db/
-│   │   ├── news_db.py       # Skill 仓库 ORM 层 (1025 行)
-│   │   ├── migrations.py    # logic_chains + users + audit 表迁移
+│   │   ├── news_db.py       # Skill 仓库 ORM 层 (含评语/清理/分类方法)
+│   │   ├── migrations.py    # logic_chains + users + audit + 评语/点赞 表迁移
 │   │   └── audit.py         # 审计日志写入/查询
 │   └── pipeline/
 │       ├── run_all.py       # 编排器 (fetch → cluster → archive → AI)
@@ -83,7 +84,7 @@ news-web/
 │   │   ├── pages/
 │   │   │   ├── Dashboard.tsx     # 📊 统计卡片 + 来源分布
 │   │   │   ├── Workspace.tsx     # 核心工作台 (搜索栏 + 画布)
-│   │   │   ├── ArticleSearch.tsx # 📄 多维度文章检索
+│   │   │   ├── ArticleSearch.tsx # 📄 多维度文章检索 + 分类Tab + 排序 + 评语面板
 │   │   │   ├── ChainList.tsx     # 📋 逻辑链列表
 │   │   │   ├── Settings.tsx      # ⚙ 数据库/AI/调度配置
 │   │   │   └── Login.tsx         # 登录/注册
@@ -94,12 +95,13 @@ news-web/
 │   │   │   ├── SearchPanel.tsx   # 左栏搜索面板
 │   │   │   ├── RelationDialog.tsx # 连线关系选择弹窗
 │   │   │   ├── NavSidebar.tsx    # 侧边栏导航 + 用户信息
-│   │   │   └── DashboardCards.tsx # 仪表盘统计卡片
-│   │   ├── api/client.ts     # 全量 API 客户端 (36 端点)
+│   │   │   ├── DashboardCards.tsx # 仪表盘统计卡片
+│   │   │   └── CommentPanel.tsx   # 文章审核评语 (树形/回复/点赞)
+│   │   ├── api/client.ts     # 全量 API 客户端 (40+ 端点)
 │   │   └── types/index.ts    # TypeScript 类型定义
 │   ├── e2e/                   # Playwright E2E 测试
 │   └── vite.config.ts         # Vite + 代理 + Vitest 配置
-├── tests/backend/             # pytest 集成测试 (15 用例)
+├── tests/backend/             # pytest 集成测试 (29 用例)
 ├── config.json                # 运行时配置
 ├── run_prod.sh                # 一键生产部署脚本
 └── deploy/                    # systemd / launchd 服务模板
@@ -117,11 +119,11 @@ news-web/
 上级逻辑链 (Parent)     ← 多条子链汇聚为完整生命周期
 ```
 
-### 12 张数据库表
+### 14 张数据库表
 
 | 表 | 用途 | Phase |
 |----|------|-------|
-| `articles` | 新闻条目 (含关键词、优先级、人工标记) | 1 |
+| `articles` | 新闻条目 (含关键词、优先级、人工标记、主题分类) | 1 |
 | `events` | 聚类事件 (含优先级标签) | 1 |
 | `article_events` | 文章↔事件多对多关联 | 1 |
 | `human_feedback` | 人工反馈历史 | 1 |
@@ -133,6 +135,8 @@ news-web/
 | `users` | 用户账户 (bcrypt 哈希 + JWT) | 2 |
 | `audit_log` | 操作审计日志 | 3 |
 | `notifications` + `notification_prefs` | 通知与偏好 | 4 |
+| `article_comments` | 文章审核评语 (树形，支持多级回复) | 5 |
+| `comment_likes` | 评语点赞 (UNIQUE comment_id+user_id) | 5 |
 
 ## 核心工作流
 
@@ -155,6 +159,12 @@ news-web/
 
 6. Ctrl+Z / Ctrl+Shift+Z 撤销/重做
    └→ 自动草稿保存 (localStorage 2s debounce)
+
+7. 文章详情 → 评语审核
+   └→ 发表评语/回复 → 点赞/编辑/删除
+
+8. 仪表盘 → 低分新闻清理
+   └→ 设置阈值 → 预览 → 二次确认 → 批量删除
 ```
 
 ## API 端点
@@ -168,10 +178,22 @@ news-web/
 ### 文章
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/articles` | 多维度搜索 (关键词/来源/日期/优先级/状态) |
+| GET | `/api/articles` | 多维度搜索 (关键词/来源/日期/优先级/状态/分类/排序) |
+| GET | `/api/articles/categories` | 主题分类统计 (各分类文章数) |
+| GET | `/api/articles/cleanup/preview` | 预览低分清理 (?threshold=0.2) |
+| POST | `/api/articles/cleanup` | 执行低分清理 {threshold} |
 | GET | `/api/articles/:id` | 文章详情 + 所属事件 |
 | PATCH | `/api/articles/:id` | 更新优先级/标签/审核状态 |
-| GET | `/api/articles/:id/content` | 代理获取原文 |
+| GET | `/api/articles/:id/content` | 代理获取原文 + AI摘要 |
+
+### 评语
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/articles/:id/comments` | 文章评语列表 (树形，含点赞数) |
+| POST | `/api/articles/:id/comments` | 添加评语/回复 {content, parent_id?} |
+| PATCH | `/api/comments/:id` | 编辑评语 (仅作者) |
+| DELETE | `/api/comments/:id` | 删除评语 (仅作者，级联子评语) |
+| POST | `/api/comments/:id/like` | 点赞/取消点赞 |
 
 ### 事件
 | 方法 | 路径 | 说明 |
@@ -226,7 +248,7 @@ news-web/
 ## 测试
 
 ```bash
-# 后端 (15 用例)
+# 后端 (29 用例)
 python -m pytest news-web/tests/backend/test_api.py -v
 
 # 前端单元 (16 用例)
@@ -251,6 +273,7 @@ cd news-web/frontend && npx playwright test
 - **Phase 2** ✅ 用户认证 (bcrypt + JWT, 3 端点)
 - **Phase 3** ✅ 多用户审计日志 (1 端点)
 - **Phase 4** ✅ 通知系统 (5 端点)
+- **Phase 5** ✅ 审核评语 + 低分清理 + 分类Tab筛选 + 评分排序 (11 端点)
 - **后续** QNAP NAS LDAP/SSO 集成 / WebSocket 实时协作
 
 ## 部署

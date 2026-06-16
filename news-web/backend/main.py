@@ -73,6 +73,7 @@ def pipeline_status():
 from api.settings import router as settings_router
 from api.stats import router as stats_router
 from api.articles import router as articles_router
+from api.comments import router as comments_router
 from api.events import router as events_router
 from api.chains import router as chains_router
 from api.relations import router as relations_router
@@ -90,6 +91,7 @@ from api.tasks import router as tasks_router
 app.include_router(settings_router)
 app.include_router(stats_router)
 app.include_router(articles_router)
+app.include_router(comments_router)
 app.include_router(events_router)
 app.include_router(chains_router)
 app.include_router(relations_router)

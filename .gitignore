@@ -19,3 +19,4 @@ pids/
 tools/dist/
 tools/build/
 tools/*.spec
+.pytest-tmp/
