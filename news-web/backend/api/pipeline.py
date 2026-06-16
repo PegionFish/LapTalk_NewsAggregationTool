@@ -79,8 +79,7 @@ def _conn():
 
 def _batch_translate():
     global _translate_state
-    _translate_state = _new_state()
-    _translate_state["running"] = True
+    _translate_state = {"running": True, "total": 0, "done": 0, "failed": 0, "current": "", "log": []}
 
     try:
         cache_dir = config.content_cache_path
@@ -236,8 +235,7 @@ def _batch_translate():
 
 def _batch_analyze():
     global _analyze_state
-    _analyze_state = _new_state()
-    _analyze_state["running"] = True
+    _analyze_state = {"running": True, "total": 0, "done": 0, "failed": 0, "current": "", "log": []}
 
     try:
         db = _conn()
@@ -425,7 +423,7 @@ def _build_logic_chains():
 def _batch_ai_rank_events():
     """基于全景图对所有事件做全局优先级排序。"""
     global _rank_state
-    _rank_state = _new_state(); _rank_state["running"] = True
+    _rank_state = {"running": True, "total": 0, "done": 0, "failed": 0, "current": "", "log": []}
     try:
         db = _conn()
         from ai_client import build_panoramic_context, rank_events_panoramic
@@ -613,7 +611,7 @@ _filter_state     = _new_state()
 
 def _batch_ai_keywords():
     global _kw_state
-    _kw_state = _new_state(); _kw_state["running"] = True
+    _kw_state = {"running": True, "total": 0, "done": 0, "failed": 0, "current": "", "log": []}
     try:
         db = _conn()
         rows = db.execute("SELECT id, title, text_content, source FROM articles WHERE text_content != '' AND (ai_keywords IS NULL OR ai_keywords = '') AND category NOT IN ('platform_hotlists', 'bilibili_videos') ORDER BY id DESC").fetchall(); db.close()
@@ -676,7 +674,7 @@ def _batch_ai_keywords():
 
 def _batch_ai_classify():
     global _cls_state
-    _cls_state = _new_state(); _cls_state["running"] = True
+    _cls_state = {"running": True, "total": 0, "done": 0, "failed": 0, "current": "", "log": []}
     try:
         db = _conn()
         rows = db.execute("SELECT id, title, text_content FROM articles WHERE text_content != '' AND (ai_category IS NULL OR ai_category = '') AND category NOT IN ('platform_hotlists', 'bilibili_videos') ORDER BY id DESC").fetchall(); db.close()
@@ -739,7 +737,7 @@ def _batch_ai_classify():
 
 def _batch_ai_score():
     global _score_state
-    _score_state = _new_state(); _score_state["running"] = True
+    _score_state = {"running": True, "total": 0, "done": 0, "failed": 0, "current": "", "log": []}
     try:
         db = _conn()
         rows = db.execute("SELECT id, title, text_content, source, fetched_at FROM articles WHERE text_content != '' AND (ai_priority_score IS NULL OR ai_priority_score = 0.0) AND category NOT IN ('platform_hotlists', 'bilibili_videos') ORDER BY id DESC").fetchall(); db.close()
@@ -810,7 +808,7 @@ def _batch_ai_score():
 
 def _batch_ai_recluster():
     global _recluster_state
-    _recluster_state = _new_state(); _recluster_state["running"] = True
+    _recluster_state = {"running": True, "total": 0, "done": 0, "failed": 0, "current": "", "log": []}
     try:
         db = _conn()
         unlinked = db.execute("SELECT a.id, a.title FROM articles a LEFT JOIN article_events ae ON a.id=ae.article_id WHERE ae.article_id IS NULL AND a.text_content!='' AND a.category NOT IN ('platform_hotlists', 'bilibili_videos')").fetchall()
@@ -900,7 +898,7 @@ def _batch_ai_recluster():
 
 def _batch_ai_summarize_events():
     global _evt_sum_state
-    _evt_sum_state = _new_state(); _evt_sum_state["running"] = True
+    _evt_sum_state = {"running": True, "total": 0, "done": 0, "failed": 0, "current": "", "log": []}
     try:
         db = _conn()
         events = db.execute("SELECT id, article_count FROM events WHERE article_count >= 2 AND (ai_summary IS NULL OR ai_summary = '')").fetchall(); db.close()
@@ -976,7 +974,7 @@ def _batch_ai_summarize_events():
 def _batch_ai_filter():
     """对未筛选的文章标题批量调用 AI，标记通过/拒绝。"""
     global _filter_state
-    _filter_state = _new_state(); _filter_state["running"] = True
+    _filter_state = {"running": True, "total": 0, "done": 0, "failed": 0, "current": "", "log": []}
     try:
         db = _conn()
         rows = db.execute("""
@@ -1159,8 +1157,7 @@ _full_state = _new_state()
 def _batch_ai_full():
     """顺序执行全部 AI 处理步骤。每步检查是否有待处理项，无则跳过。"""
     global _full_state
-    _full_state = _new_state(); _full_state["running"] = True
-    _full_state["steps"] = []
+    _full_state = {"running": True, "total": 0, "done": 0, "failed": 0, "current": "", "log": [], "steps": []}
     step_names = ["翻译", "AI 分析", "关键词提取", "智能分类", "优先级评分", "事件重聚类", "事件摘要", "全景图排序", "构筑逻辑链"]
     steps = [
         ("翻译", _batch_translate, _translate_state),
