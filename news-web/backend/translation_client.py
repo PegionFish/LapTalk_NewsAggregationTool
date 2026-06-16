@@ -22,7 +22,7 @@ def get_client() -> OpenAI:
     return OpenAI(
         base_url=config.translation_base_url,
         api_key=config.translation_api_key or 'sk-placeholder',
-        timeout=120.0,
+        timeout=300.0,
     )
 
 

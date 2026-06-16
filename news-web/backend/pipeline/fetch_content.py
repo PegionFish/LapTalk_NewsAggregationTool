@@ -17,6 +17,7 @@ import os, sys, re, time, sqlite3, urllib.request, urllib.error
 from datetime import datetime, timedelta
 from urllib.parse import urlparse, urljoin, urlunparse
 from html.parser import HTMLParser
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PARENT_DIR = os.path.dirname(SCRIPT_DIR)
@@ -33,7 +34,7 @@ except Exception:
     pass
 
 DELAY = 0.5
-TIMEOUT = 15
+TIMEOUT = 300
 BLOCKED = ['expreview.com', 'solidot.org', 'weibo.com', 'douyin.com']
 
 
@@ -217,8 +218,87 @@ def fetch_article_content(url: str, article_id: int, db_path: str = None) -> dic
         conn.close()
 
 
+MAX_WORKERS = 8  # 并行下载线程数
+
+
+def _fetch_single(args):
+    """单篇文章下载（供线程池调用）。"""
+    aid, title, url, src, content_dir, db_path = args
+    if not can_fetch(url):
+        return {'aid': aid, 'status': 'skip', 'msg': 'blocked'}
+
+    res = download_page(url)
+    if res['error']:
+        conn = sqlite3.connect(db_path)
+        conn.execute("UPDATE articles SET local_path=? WHERE id=?",
+                     (f'[ERR:{res["error"]}]', aid))
+        conn.commit()
+        conn.close()
+        return {'aid': aid, 'status': 'error', 'msg': res['error'][:80]}
+
+    if not res['html']:
+        return {'aid': aid, 'status': 'skip', 'msg': 'empty'}
+
+    html = sanitize_html(res['html'])
+
+    # 下载图片
+    imgs = 0
+    try:
+        img_urls = extract_img_srcs(html, url)
+        if img_urls:
+            article_img_dir = os.path.join(content_dir, str(aid), 'images')
+            imgs = download_images(img_urls, article_img_dir, url)
+    except Exception:
+        pass
+
+    # 保存 HTML
+    file_path = os.path.join(content_dir, f'{aid}.html')
+    with open(file_path, 'w', encoding='utf-8') as f:
+        f.write(html)
+    size = len(html.encode('utf-8'))
+
+    # 提取文本 + 语言检测
+    text = extract_text_from_html(html, max_length=FULL_TEXT_MAX_LENGTH)
+    lang = detect_language(text)
+    now = datetime.now().isoformat(timespec='seconds')
+    rel_path = f'{os.path.basename(content_dir)}/{aid}.html'
+
+    # 内联翻译
+    translated = False
+    if lang == 'en' and config.translation_enabled and config.translation_api_key:
+        try:
+            from translation_client import translate_to_chinese
+            translation = translate_to_chinese(text)
+            if translation:
+                translated = True
+        except Exception:
+            pass
+
+    # 写入 DB
+    conn = sqlite3.connect(db_path)
+    conn.execute("""
+        UPDATE articles SET
+            local_path=?, content_fetched_at=?,
+            text_content=?, content_lang=?, content_status='fetched'
+        WHERE id=?
+    """, (rel_path, now, text, lang, aid))
+    if translated:
+        conn.execute("""
+            UPDATE articles SET
+                translated_content=?, content_status='translated', translated_at=?
+            WHERE id=?
+        """, (translation, now, aid))
+    conn.commit()
+    conn.close()
+
+    return {
+        'aid': aid, 'status': 'ok', 'src': src, 'title': title[:40],
+        'size': size, 'lang': lang, 'imgs': imgs, 'translated': translated,
+    }
+
+
 def archive_pages(db_path: str, limit: int = 0, source: str = None, recent: int = 0):
-    """遍历 articles，找出尚未存档的页面，下载并保存 HTML 文件"""
+    """遍历 articles，找出尚未存档的页面，多线程并行下载并保存 HTML 文件"""
 
     # ── 准备 DB + 目录 ──
     conn = sqlite3.connect(db_path)
@@ -230,8 +310,7 @@ def archive_pages(db_path: str, limit: int = 0, source: str = None, recent: int 
     content_dir = config.content_cache_path
     os.makedirs(content_dir, exist_ok=True)
 
-    # ── 查询未存档文章（仅缓存 AI 已通过的普通 RSS 文章）──
-    # ai_filtered: 0=未筛选(跳过), 1=AI通过, -1=AI拒绝(跳过)
+    # ── 查询未存档文章 ──
     where = [
         "(local_path IS NULL OR local_path = '')",
         "category NOT IN ('platform_hotlists', 'bilibili_videos')",
@@ -261,79 +340,30 @@ def archive_pages(db_path: str, limit: int = 0, source: str = None, recent: int 
         print("✅ 所有文章已有本地存档")
         return
 
-    print(f"📡 需要存档 {total} 篇文章")
+    print(f"📡 需要存档 {total} 篇文章（{MAX_WORKERS} 线程并行下载）")
+
+    # 构建任务参数
+    tasks = [
+        (aid, title, url, src, content_dir, db_path)
+        for aid, title, url, src in rows
+        if url and url.startswith('http')
+    ]
 
     ok = err = skip = 0
-    for idx, (aid, title, url, src) in enumerate(rows, 1):
-        if not can_fetch(url):
-            skip += 1
-            continue
-
-        print(f"  [{idx}/{total}] {src:20s} {title[:45]:45s}", end=" ", flush=True)
-        res = download_page(url)
-
-        conn2 = sqlite3.connect(db_path)
-        if res['error']:
-            print(f"❌ {res['error']}")
-            conn2.execute("UPDATE articles SET local_path=? WHERE id=?",
-                         (f'[ERR:{res["error"]}]', aid))
-            err += 1
-        elif res['html']:
-            html = sanitize_html(res['html'])
-            # 下载页面图片
-            imgs = 0
-            try:
-                img_urls = extract_img_srcs(html, url)
-                if img_urls:
-                    article_img_dir = os.path.join(content_dir, str(aid), 'images')
-                    imgs = download_images(img_urls, article_img_dir, url)
-            except Exception:
-                pass
-
-            # 保存 HTML 到磁盘
-            file_path = os.path.join(content_dir, f'{aid}.html')
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write(html)
-            size = len(html.encode('utf-8'))
-            # 提取纯文本 + 语言检测
-            text = extract_text_from_html(html, max_length=FULL_TEXT_MAX_LENGTH)
-            lang = detect_language(text)
-            now = datetime.now().isoformat(timespec='seconds')
-            rel_path = f'{os.path.basename(content_dir)}/{aid}.html'
-            conn2.execute("""
-                UPDATE articles SET
-                    local_path=?, content_fetched_at=?,
-                    text_content=?, content_lang=?, content_status='fetched'
-                WHERE id=?
-            """, (rel_path, now, text, lang, aid))
-            img_info = f' 🖼{imgs}张' if imgs > 0 else ''
-            print(f"✅ {size//1024}KB [{lang}]{img_info}", end="")
-            # 内联翻译：英文文章且翻译功能已启用时立即翻译
-            translated = False
-            if lang == 'en' and config.translation_enabled and config.translation_api_key:
-                try:
-                    from translation_client import translate_to_chinese
-                    translation = translate_to_chinese(text)
-                    if translation:
-                        conn2.execute("""
-                            UPDATE articles SET
-                                translated_content=?, content_status='translated', translated_at=?
-                            WHERE id=?
-                        """, (translation, datetime.now().isoformat(timespec='seconds'), aid))
-                        translated = True
-                except Exception as e:
-                    print(f" [译❌]", end="")
-            if translated:
-                print(" [译✅]", end="")
-            print()
-            ok += 1
-        else:
-            print("⚠️ 空")
-            skip += 1
-
-        conn2.commit()
-        conn2.close()
-        time.sleep(DELAY)
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = {executor.submit(_fetch_single, t): t for t in tasks}
+        for idx, future in enumerate(as_completed(futures), 1):
+            r = future.result()
+            if r['status'] == 'ok':
+                img_info = f" 🖼{r['imgs']}张" if r.get('imgs', 0) > 0 else ''
+                tr_info = " [译✅]" if r.get('translated') else ''
+                print(f"  [{idx}/{total}] ✅ {r['src']:20s} {r['title']:40s} {r['size']//1024}KB [{r['lang']}]{img_info}{tr_info}")
+                ok += 1
+            elif r['status'] == 'error':
+                print(f"  [{idx}/{total}] ❌ #{r['aid']} {r['msg']}")
+                err += 1
+            else:
+                skip += 1
 
     print(f"\n📊 完成: {ok} 成功, {err} 失败, {skip} 跳过 | 存档目录: {content_dir}")
 

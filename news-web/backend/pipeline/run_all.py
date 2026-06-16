@@ -10,10 +10,10 @@ STEP_TIMEOUTS = {
     'fetch_english_news.py': 300,
     'fetch_platform_hotlists.py': 300,
     'collect_data.py': 300,
-    'ai_filter.py': 600,
-    'fetch_content.py': 900,
-    'translate_content.py': 600,
-    'analyze.py': 600,
+    'ai_filter.py': 900,
+    'fetch_content.py': 1800,
+    'translate_content.py': 900,
+    'analyze.py': 900,
 }
 
 PIPELINE_DIR = os.path.dirname(os.path.abspath(__file__))
