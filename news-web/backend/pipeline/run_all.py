@@ -145,6 +145,18 @@ def run_pipeline(db_path: str = "", user_agent: str = "", callback=None, run_typ
 
     if callback:
         callback('complete', '全部完成')
+
+    # Pipeline 完成后，回填所有文章的 topic_category
+    if db_path:
+        try:
+            from db.news_db import NewsDB as _NDB3
+            _ndb3 = _NDB3(db_path)
+            updated = _ndb3.populate_topic_categories()
+            if updated and callback:
+                callback('running', f"主题分类回填: {updated} 篇文章")
+        except Exception as _tce:
+            logger.warning(f"topic_category populate failed: {_tce}")
+
     return True
 
 

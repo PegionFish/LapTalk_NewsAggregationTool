@@ -463,8 +463,10 @@ class NewsDB:
             if hp or (label != 'unset' and label in ('high', 'medium', 'low')):
                 label_scores = {'high': 0.9, 'medium': 0.6, 'low': 0.3}
                 score = label_scores.get(label, 0.5)
-                conn.execute("UPDATE articles SET priority_score=? WHERE id=?",
-                             (score, article_id))
+                _, c_label = topic_score(title)
+                tc = self.TOPIC_CATEGORY_MAP.get(c_label, '其他')
+                conn.execute("UPDATE articles SET priority_score=?, topic_category=? WHERE id=?",
+                             (score, tc, article_id))
                 if close:
                     conn.commit()
                 return score
@@ -510,8 +512,11 @@ class NewsDB:
             final = round(a_score * 0.20 + b_score * 0.15 + c_score * 0.40 + d_score * 0.10 + max(0, e_score) * 0.15, 4)
             final = max(0.0, min(1.0, final))
 
-            conn.execute("UPDATE articles SET priority_score=? WHERE id=?",
-                         (final, article_id))
+            # 同步写入 topic_category
+            tc = self.TOPIC_CATEGORY_MAP.get(c_label, '其他')
+
+            conn.execute("UPDATE articles SET priority_score=?, topic_category=? WHERE id=?",
+                         (final, tc, article_id))
             if close:
                 conn.commit()
             return final

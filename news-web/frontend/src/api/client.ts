@@ -44,6 +44,11 @@ export const api = {
   getTopicCategories: () =>
     fetchJSON<{ categories: Record<string, number> }>('/articles/categories'),
 
+  populateTopicCategories: () =>
+    fetchJSON<{ ok: boolean; updated: number; categories: Record<string, number> }>(
+      '/articles/categories/populate', { method: 'POST' }
+    ),
+
   // ── 低分新闻清理 ──────────────────────────────────────
   previewCleanup: (threshold: number) =>
     fetchJSON<{ count: number; threshold: number }>(`/articles/cleanup/preview?threshold=${threshold}`),

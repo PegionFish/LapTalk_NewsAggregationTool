@@ -109,6 +109,14 @@ def list_categories():
     return {'categories': db.get_topic_stats()}
 
 
+@router.post("/categories/populate")
+def populate_categories():
+    """为所有已有文章填充 topic_category（批量回填）。"""
+    db = get_db()
+    updated = db.populate_topic_categories()
+    return {'ok': True, 'updated': updated, 'categories': db.get_topic_stats()}
+
+
 # ── 低分新闻清理 ────────────────────────────────────────
 
 @router.get("/cleanup/preview")
