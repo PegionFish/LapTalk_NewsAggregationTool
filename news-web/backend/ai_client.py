@@ -229,14 +229,17 @@ def analyze_article(title: str, text: str) -> str:
 # ══════════════════════════════════════════════════════════════
 
 
-def extract_keywords_ai(title: str, text: str, source: str = "") -> list[str]:
-    """AI 从标题+正文中提取技术关键词。HTML 提取纯文本后传入 160K 上下文。"""
+def extract_keywords_ai(title: str, text: str = "", source: str = "") -> list[str]:
+    """AI 从标题+正文中提取技术关键词。text 为空时仅用标题。"""
     content = _prepare_content(text)
+    user_prompt = f"标题：{title}\n来源：{source}\n"
+    if content:
+        user_prompt += f"正文：{content}\n\n"
+    else:
+        user_prompt += "\n"
+    user_prompt += "提取 5-15 个技术关键词，返回 JSON 数组。关键词应覆盖：产品名、公司名、技术名、核心概念。"
     result = _ai_json(
-        _with_deep_thinking(
-            f"标题：{title}\n来源：{source}\n正文：{content}\n\n"
-            f"提取 5-15 个技术关键词，返回 JSON 数组。关键词应覆盖：产品名、公司名、技术名、核心概念。"
-        ),
+        _with_deep_thinking(user_prompt),
         "你是科技新闻关键词提取引擎。只输出 JSON 数组，如 [\"GPU\",\"NVIDIA\",\"Blackwell\",\"AI训练\"]。"
         "技术名词、产品名、公司名保留英文原文。关键词按重要性排序。",
         max_tokens=512,

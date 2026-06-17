@@ -12,21 +12,49 @@ sys.path.insert(0, PARENT_DIR)
 logger = logging.getLogger(__name__)
 
 from config import config
-from ai_client import chat, summarize_events
-from db.news_db import extract_entities, extract_keywords
+from ai_client import chat, summarize_events, extract_keywords_ai
 
 
-def analyze_events(db_path: str) -> int:
+def analyze_events(db_path: str) -> tuple:
     """
     Analyze events using AI:
+    0. Extract keywords for articles with content (AI-powered, replaces rule engine)
     1. Re-summarize event titles for events with ≥2 articles (improve clustering titles)
     2. Generate cross-event relation suggestions for recent events
     Returns the number of events improved.
     """
     conn = sqlite3.connect(db_path)
     improved = 0
+    keywords_extracted = 0
 
     try:
+        # ── 0. AI 关键词提取 ─────────────────────────────────
+        pending_articles = conn.execute("""
+            SELECT a.id, a.title, a.text_content, a.source
+            FROM articles a
+            WHERE (a.ai_keywords IS NULL OR a.ai_keywords = '')
+            AND a.category NOT IN ('platform_hotlists', 'bilibili_videos')
+            ORDER BY a.id DESC LIMIT 100
+        """).fetchall()
+
+        if pending_articles:
+            logger.info(f"AI 关键词提取: {len(pending_articles)} 篇待处理")
+            import json as _json
+            for aid, title, text, source in pending_articles:
+                try:
+                    kws = extract_keywords_ai(title, text or '', source or '')
+                    if kws:
+                        conn.execute(
+                            "UPDATE articles SET keywords=?, ai_keywords=? WHERE id=?",
+                            (_json.dumps(kws, ensure_ascii=False),
+                             _json.dumps(kws, ensure_ascii=False), aid)
+                        )
+                        keywords_extracted += 1
+                except Exception as e:
+                    logger.warning(f"  extract_keywords_ai failed for #{aid}: {e}")
+            conn.commit()
+            logger.info(f"AI 关键词提取完成: {keywords_extracted}/{len(pending_articles)} 篇")
+
         # ── 1. Improve event titles ──────────────────────────
         events = conn.execute("""
             SELECT e.id, e.title, e.article_count
@@ -135,7 +163,7 @@ def analyze_events(db_path: str) -> int:
     finally:
         conn.close()
 
-    return improved
+    return improved, keywords_extracted
 
 
 if __name__ == '__main__':
@@ -144,5 +172,5 @@ if __name__ == '__main__':
     if not db:
         print("Error: NEWS_DB_PATH not set and config.db_path is empty")
         sys.exit(1)
-    n = analyze_events(db)
-    print(f"AI analysis complete — {n} events improved")
+    n, n_kw = analyze_events(db)
+    print(f"AI analysis complete — {n} events improved, {n_kw} keywords extracted")

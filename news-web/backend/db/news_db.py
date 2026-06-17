@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-新闻数据库模块 — SQLite 存储 + 事件关联 + 关键词提取 + 优先级评分 + 人工反馈
+新闻数据库模块 — SQLite 存储 + 事件关联 + 优先级评分 + 人工反馈 + 评语系统
 
 三层架构：
   1. 数据层 — articles / events / article_events
-  2. 分析层 — extract_keywords / calculate_priority
+  2. 分析层 — calculate_priority（关键词由 AI 提取，非规则引擎）
   3. 反馈层 — human_feedback / event_relations / tag_propagation
 
 用法：
@@ -20,7 +20,7 @@ Web UI 查询：
   db.get_feedback_stats()     # 反馈统计
 """
 
-import os, json, sqlite3, re, math
+import os, json, sqlite3, re
 from datetime import datetime, date
 from typing import Optional
 
@@ -28,7 +28,7 @@ DB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'hot_reports')
 DB_PATH = os.path.join(DB_DIR, 'news.db')
 
 # ══════════════════════════════════════════════════════════════
-# 关键词/实体工具
+# 标题相似度工具（bigram Jaccard）
 # ══════════════════════════════════════════════════════════════
 
 def title_bigrams(title: str) -> set:
@@ -40,63 +40,6 @@ def title_similarity(t1: str, t2: str) -> float:
     if not a or not b:
         return 0.0
     return len(a & b) / len(a | b)
-
-def extract_entities(title: str) -> list:
-    """提取标题中的实体（英文专有名词 + 中文词 + 代号）"""
-    en = re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', title)
-    cn = re.findall(r'[\u4e00-\u9fff]{2,6}', title)
-    mix = re.findall(r'\b[A-Z0-9]+\d+[A-Za-z0-9]*\b', title)
-    return list(set(en + cn + mix))
-
-def extract_keywords(title: str, source: str = '', category: str = '') -> list:
-    """
-    关键词提取 — 标题实体 + 来源特征 + 分类特征
-    返回去重排序后的关键词列表（按权重降序）。
-    """
-    result = {}
-    
-    # 1. 标题实体 (权重 0.6)
-    entities = extract_entities(title)
-    for e in entities:
-        result[e] = result.get(e, 0) + 0.6
-    
-    # 2. 来源关键词 (权重 0.2)
-    source_lower = source.lower()
-    source_kw_map = {
-        'guru3d': ['guru3d', 'hardware'],
-        'pc gamer': ['pcgamer', 'gaming', 'pc'],
-        'eurogamer': ['eurogamer', 'gaming'],
-        'gamespot': ['gamespot', 'gaming'],
-        'nintendo everything': ['nintendo', 'gaming'],
-        'vg247': ['vg247', 'gaming'],
-        'rock paper shotgun': ['rockpapershotgun', 'gaming', 'pc'],
-        'ithome': ['ithome', 'tech', 'china'],
-        'zdnet': ['zdnet', 'tech'],
-        'cnet': ['cnet', 'tech'],
-        '9to5mac': ['9to5mac', 'apple'],
-        'macrumors': ['macrumors', 'apple'],
-        'arstechnica': ['arstechnica', 'tech'],
-        'techcrunch': ['techcrunch', 'tech', 'startup'],
-        'guru3d': ['guru3d', 'hardware'],
-        'phoronix': ['phoronix', 'linux', 'hardware'],
-        'tom\'s hardware': ['tomshardware', 'hardware'],
-        'techpowerup': ['techpowerup', 'hardware', 'gpu'],
-        'servethehome': ['servethehome', 'server', 'hardware'],
-    }
-    for pat, kws in source_kw_map.items():
-        if pat in source_lower:
-            for kw in kws:
-                result[kw] = result.get(kw, 0) + 0.2
-    
-    # 3. 分类关键词 (权重 0.2)
-    if category:
-        result[category] = result.get(category, 0) + 0.2
-        if category == 'rss_news':
-            result['news'] = result.get('news', 0) + 0.1
-    
-    # 4. 按权重排序
-    sorted_kw = sorted(result.items(), key=lambda x: -x[1])
-    return [kw for kw, _ in sorted_kw[:15]]
 
 
 # ══════════════════════════════════════════════════════════════
@@ -332,7 +275,7 @@ class NewsDB:
                 if not pub_date:
                     pub_date = art.get('published_date', '')
                 meta = json.dumps(art.get('metadata', {}), ensure_ascii=False)
-                keywords = json.dumps(extract_keywords(title, source, category), ensure_ascii=False)
+                keywords = json.dumps([], ensure_ascii=False)  # AI 关键词由 pipeline/analyze.py 提取
                 try:
                     # 同平台同标题去重：检查是否已有相同标题+来源的文章（不论 URL）
                     existing = conn.execute(
@@ -426,31 +369,8 @@ class NewsDB:
         return updated
 
     # ═══════════════════════════════════════════════════════
-    # 关键词提取 + 优先级评分
+    # 优先级评分（关键词由 AI 提取）
     # ═══════════════════════════════════════════════════════
-
-    def extract_keywords_for(self, article_id: int) -> list:
-        """为指定文章提取关键词并更新 DB。人工已处理则跳过覆写。"""
-        with self._conn() as conn:
-            row = conn.execute(
-                "SELECT title, source, category, human_processed, keywords FROM articles WHERE id=?",
-                (article_id,)
-            ).fetchone()
-            if not row:
-                return []
-            title, source, category, hp, existing_kws = row
-            # 人工已处理 → 保留人工标注，不覆写
-            if hp:
-                try:
-                    return json.loads(existing_kws) if existing_kws else []
-                except (json.JSONDecodeError, TypeError):
-                    return []
-        kws = extract_keywords(title, source, category)
-        with self._conn() as conn:
-            conn.execute("UPDATE articles SET keywords=? WHERE id=?",
-                         (json.dumps(kws, ensure_ascii=False), article_id))
-            conn.commit()
-        return kws
 
     def calculate_priority(self, article_id: int, conn: Optional[sqlite3.Connection] = None) -> float:
         """
@@ -597,10 +517,10 @@ class NewsDB:
                 event_date = (pub_date or '')[:10] if pub_date else fetched_at[:10]
                 best_event = None
                 best_score = 0
-                art_entities = extract_entities(art_title)
+                art_entities = art_title.lower().split()  # 简单分词，替换 extract_entities
                 for evt_id, evt_title in active_events:
                     sim = title_similarity(art_title, evt_title)
-                    evt_entities = extract_entities(evt_title)
+                    evt_entities = evt_title.lower().split()  # 简单分词
                     entity_overlap = len(set(art_entities) & set(evt_entities))
                     score = sim * 0.6 + (entity_overlap / max(len(art_entities), 1)) * 0.4
                     if score > best_score:
@@ -771,20 +691,16 @@ class NewsDB:
             return False
 
     def suggest_event_relations(self, max_days: int = 7,
-                                entity_threshold: int = 1,
-                                time_weight: float = 0.3,
-                                entity_weight: float = 0.5,
-                                title_weight: float = 0.2) -> int:
+                                time_weight: float = 0.4,
+                                title_weight: float = 0.6) -> int:
         """
-        自动扫描所有事件对，根据实体重叠、时间接近度、标题相似度
+        自动扫描所有事件对，根据时间接近度、标题相似度
         推荐可能的事件关系。结果写入 event_relations(created_by='auto')。
         已有关系的事件对不会重复推荐。
 
         Args:
             max_days: 时间接近度阈值（天）
-            entity_threshold: 最少共享实体数
             time_weight: 时间接近度权重
-            entity_weight: 实体重叠权重
             title_weight: 标题相似度权重
 
         Returns: 新推荐的关系数
@@ -809,10 +725,6 @@ class NewsDB:
             now_date = date.today()
 
             for i, (eid1, title1, first1, last1, cnt1) in enumerate(events):
-                # 用关键词匹配代替纯实体提取
-                kws1 = set(extract_keywords(title1, '', ''))
-                kws1.update(e.lower() for e in extract_entities(title1)
-                           if not e.isdigit() and len(e) > 1)
                 for j, (eid2, title2, first2, last2, cnt2) in enumerate(events):
                     if i >= j:
                         continue
@@ -830,29 +742,20 @@ class NewsDB:
                         continue
                     t_score = max(0, 1.0 - day_diff / max_days)
 
-                    # 关键词重叠
-                    kws2 = set(extract_keywords(title2, '', ''))
-                    kws2.update(e.lower() for e in extract_entities(title2)
-                               if not e.isdigit() and len(e) > 1)
-                    overlap = kws1 & kws2
-                    e_score = len(overlap) / max(len(kws1 | kws2), 1)
-                    if len(overlap) < entity_threshold and e_score < 0.15:
-                        continue
-
                     # 标题相似度
                     s_score = title_similarity(title1, title2)
+                    if s_score < 0.15:
+                        continue
 
-                    # 综合评分
-                    combined = t_score * time_weight + e_score * entity_weight + s_score * title_weight
+                    # 综合评分（时间接近度 + 标题相似度）
+                    combined = t_score * time_weight + s_score * title_weight
 
                     if combined >= 0.2:
                         # 确定关系类型
-                        if s_score > 0.3 and len(overlap) >= 2:
+                        if s_score > 0.5:
                             rel = 'related'
                         elif day_diff <= 1:
                             rel = 'update'
-                        elif len(overlap) >= 2:
-                            rel = 'related'
                         else:
                             rel = 'related'
 
@@ -1296,7 +1199,7 @@ class NewsDB:
         with self._conn() as conn:
             all_entities = set()
             for t in today_titles:
-                all_entities.update(extract_entities(t))
+                all_entities.update(t.lower().split())
             events = conn.execute("""
                 SELECT e.id, e.title, e.first_seen, e.last_seen, e.article_count
                 FROM events e WHERE e.status='active'
@@ -1304,7 +1207,7 @@ class NewsDB:
             """, (max_events * 3,)).fetchall()
             relevant = []
             for evt_id, evt_title, first, last, count in events:
-                evt_entities = extract_entities(evt_title)
+                evt_entities = evt_title.lower().split()  # 简单分词
                 overlap = len(all_entities & set(evt_entities))
                 if overlap > 0 or any(title_similarity(evt_title, t) > 0.3 for t in today_titles):
                     timeline = conn.execute("""
