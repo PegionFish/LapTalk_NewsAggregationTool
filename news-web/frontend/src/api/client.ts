@@ -92,15 +92,15 @@ export const api = {
   getArticleComments: (articleId: number) =>
     fetchJSON<{ comments: Comment[] }>(`/articles/${articleId}/comments`),
 
-  addArticleComment: (articleId: number, content: string, parentId?: number) =>
+  addArticleComment: (articleId: number, content: string, parentId?: number, rating?: number) =>
     fetchJSON<Comment>(`/articles/${articleId}/comments`, {
       method: 'POST',
-      body: JSON.stringify({ content, parent_id: parentId ?? null }),
+      body: JSON.stringify({ content, parent_id: parentId ?? null, rating: rating ?? null }),
     }),
 
-  editComment: (id: number, content: string) =>
+  editComment: (id: number, content: string, rating?: number) =>
     fetchJSON<{ ok: boolean }>(`/comments/${id}`, {
-      method: 'PATCH', body: JSON.stringify({ content }),
+      method: 'PATCH', body: JSON.stringify({ content, rating: rating ?? null }),
     }),
 
   deleteComment: (id: number) =>

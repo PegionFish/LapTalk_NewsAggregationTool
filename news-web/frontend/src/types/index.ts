@@ -28,6 +28,7 @@ export interface Comment {
   username: string;
   parent_id: number | null;
   content: string;
+  rating: number | null;  // 0-100 百分制评分，null 表示未评分
   created_at: string;
   updated_at: string;
   like_count: number;

@@ -237,6 +237,7 @@ class NewsDB:
                     username TEXT DEFAULT 'anonymous',
                     parent_id INTEGER REFERENCES article_comments(id) ON DELETE CASCADE,
                     content TEXT NOT NULL,
+                    rating INTEGER DEFAULT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -1001,27 +1002,31 @@ class NewsDB:
         return _attach(by_parent.get(None, []))
 
     def add_comment(self, article_id: int, user_id: int, username: str,
-                    content: str, parent_id: int = None) -> dict:
-        """添加评语。parent_id 非空时为回复。"""
+                    content: str, parent_id: int = None, rating: int = None) -> dict:
+        """添加评语。parent_id 非空时为回复。rating 可选 (0-100 百分制)。"""
         now = datetime.now().isoformat(timespec='seconds')
         with self._conn() as conn:
             cur = conn.execute("""
                 INSERT INTO article_comments
-                    (article_id, user_id, username, parent_id, content, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (article_id, user_id, username, parent_id, content, now, now))
+                    (article_id, user_id, username, parent_id, content, rating, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (article_id, user_id, username, parent_id, content, rating, now, now))
             conn.commit()
             cid = cur.lastrowid
+            # 如果有评分，重算文章平均分
+            if rating is not None:
+                self._recalc_article_rating(article_id, conn)
         return {'id': cid, 'article_id': article_id, 'user_id': user_id,
                 'username': username, 'parent_id': parent_id, 'content': content,
-                'created_at': now, 'updated_at': now, 'like_count': 0, 'liked_by_me': False}
+                'rating': rating, 'created_at': now, 'updated_at': now,
+                'like_count': 0, 'liked_by_me': False}
 
     def get_comments(self, article_id: int, user_id: int = 0) -> list:
-        """获取文章评语（树形），含点赞统计。"""
+        """获取文章评语（树形），含点赞统计与评分。"""
         with self._conn() as conn:
             rows = conn.execute("""
                 SELECT c.id, c.article_id, c.user_id, c.username, c.parent_id,
-                       c.content, c.created_at, c.updated_at
+                       c.content, c.rating, c.created_at, c.updated_at
                 FROM article_comments c WHERE c.article_id=?
                 ORDER BY c.created_at ASC
             """, (article_id,)).fetchall()
@@ -1039,37 +1044,45 @@ class NewsDB:
                 comments.append({
                     'id': r[0], 'article_id': r[1], 'user_id': r[2],
                     'username': r[3], 'parent_id': r[4], 'content': r[5],
-                    'created_at': r[6], 'updated_at': r[7],
+                    'rating': r[6],
+                    'created_at': r[7], 'updated_at': r[8],
                     'like_count': like_count, 'liked_by_me': liked,
                 })
         return self._build_comment_tree(comments, user_id)
 
-    def edit_comment(self, comment_id: int, user_id: int, content: str) -> bool:
-        """编辑评语（仅作者本人）。"""
+    def edit_comment(self, comment_id: int, user_id: int, content: str,
+                     rating: int = None) -> bool:
+        """编辑评语（仅作者本人）。rating 可选 (0-100 百分制)。"""
         now = datetime.now().isoformat(timespec='seconds')
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT user_id FROM article_comments WHERE id=?", (comment_id,)
+                "SELECT user_id, article_id FROM article_comments WHERE id=?", (comment_id,)
             ).fetchone()
             if not row or row[0] != user_id:
                 return False
+            article_id = row[1]
             conn.execute(
-                "UPDATE article_comments SET content=?, updated_at=? WHERE id=?",
-                (content, now, comment_id)
+                "UPDATE article_comments SET content=?, rating=?, updated_at=? WHERE id=?",
+                (content, rating, now, comment_id)
             )
             conn.commit()
+            # 评分变更时重算文章平均分
+            self._recalc_article_rating(article_id, conn)
         return True
 
     def delete_comment(self, comment_id: int, user_id: int) -> bool:
         """删除评语（仅作者本人）。级联删除子评语由 DB ON DELETE CASCADE 处理。"""
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT user_id FROM article_comments WHERE id=?", (comment_id,)
+                "SELECT user_id, article_id FROM article_comments WHERE id=?", (comment_id,)
             ).fetchone()
             if not row or row[0] != user_id:
                 return False
+            article_id = row[1]
             conn.execute("DELETE FROM article_comments WHERE id=?", (comment_id,))
             conn.commit()
+            # 删除后重算文章平均分
+            self._recalc_article_rating(article_id, conn)
         return True
 
     def toggle_comment_like(self, comment_id: int, user_id: int) -> dict:
@@ -1094,6 +1107,31 @@ class NewsDB:
             ).fetchone()[0]
             conn.commit()
         return {'liked': liked, 'count': count}
+
+    def _recalc_article_rating(self, article_id: int, conn) -> None:
+        """
+        根据该文章所有带评分的评语，计算用户平均分并更新文章的 priority_score。
+        无评分时保持现有分数不变。
+        """
+        rows = conn.execute(
+            "SELECT rating FROM article_comments WHERE article_id=? AND rating IS NOT NULL",
+            (article_id,)
+        ).fetchall()
+        if not rows:
+            return  # 无评分评语，不覆盖已有分数
+        avg = round(sum(r[0] for r in rows) / len(rows), 1)
+        # 百分制阈值
+        if avg >= 70:
+            label = 'high'
+        elif avg >= 40:
+            label = 'medium'
+        else:
+            label = 'low'
+        conn.execute(
+            "UPDATE articles SET priority_score=?, priority_label=?, human_processed=1 WHERE id=?",
+            (avg, label, article_id)
+        )
+        conn.commit()
 
     def get_comment_stats(self, article_ids: list) -> dict:
         """批量获取文章评语数。返回 {article_id: count}。"""

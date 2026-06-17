@@ -4,18 +4,24 @@ import type { Comment } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 
 /**
- * 文章评语面板 — 树形评语 + 点赞 + 回复/编辑/删除。
+ * 文章评语面板 — 树形评语 + 点赞 + 回复/编辑/删除 + 星级评分。
  * 挂载于 ArticleSearch 右侧详情面板底部。
+ *
+ * 评分机制：1-5 星 → 百分制 (★×20)。用户可选是否打分。
+ * 文章最终分数 = 所有带评分评语的用户平均分。
  */
 export default function CommentPanel({ articleId }: { articleId: number }) {
   const { user } = useAuth();
   const [comments, setComments] = useState<Comment[]>([]);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState('');
+  const [draftRating, setDraftRating] = useState<number>(0);
   const [replyTo, setReplyTo] = useState<number | null>(null);
   const [replyDraft, setReplyDraft] = useState('');
+  const [replyRating, setReplyRating] = useState<number>(0);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState('');
+  const [editRating, setEditRating] = useState<number>(0);
   const [submitting, setSubmitting] = useState(false);
 
   const load = useCallback(async () => {
@@ -34,8 +40,10 @@ export default function CommentPanel({ articleId }: { articleId: number }) {
     if (!text) return;
     setSubmitting(true);
     try {
-      await api.addArticleComment(articleId, text);
+      await api.addArticleComment(articleId, text, undefined,
+        draftRating > 0 ? draftRating * 20 : undefined);
       setDraft('');
+      setDraftRating(0);
       await load();
     } catch (e) {
       alert('发布失败: ' + (e as Error).message);
@@ -48,8 +56,10 @@ export default function CommentPanel({ articleId }: { articleId: number }) {
     if (!text) return;
     setSubmitting(true);
     try {
-      await api.addArticleComment(articleId, text, parentId);
+      await api.addArticleComment(articleId, text, parentId,
+        replyRating > 0 ? replyRating * 20 : undefined);
       setReplyDraft('');
+      setReplyRating(0);
       setReplyTo(null);
       await load();
     } catch (e) {
@@ -61,7 +71,6 @@ export default function CommentPanel({ articleId }: { articleId: number }) {
   const handleLike = async (commentId: number) => {
     try {
       const res = await api.toggleCommentLike(commentId);
-      // 本地更新，避免整列表重载
       setComments(prev => updateLike(prev, commentId, res.liked, res.count));
     } catch { /* ignore */ }
   };
@@ -80,7 +89,8 @@ export default function CommentPanel({ articleId }: { articleId: number }) {
     const text = editDraft.trim();
     if (!text) return;
     try {
-      await api.editComment(commentId, text);
+      await api.editComment(commentId, text,
+        editRating > 0 ? editRating * 20 : undefined);
       setEditingId(null);
       await load();
     } catch (e) {
@@ -123,9 +133,12 @@ export default function CommentPanel({ articleId }: { articleId: number }) {
           }}
         />
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 }}>
-          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-            {user ? `以「${user.display_name || user.username}」发布` : '未登录'}
-          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+              {user ? `以「${user.display_name || user.username}」发布` : '未登录'}
+            </span>
+            <StarInput value={draftRating} onChange={setDraftRating} disabled={!user} />
+          </div>
           <button
             onClick={handleSubmit}
             disabled={!user || !draft.trim() || submitting}
@@ -163,18 +176,22 @@ export default function CommentPanel({ articleId }: { articleId: number }) {
               depth={0}
               currentUserId={user?.id}
               onLike={handleLike}
-              onReply={(id) => { setReplyTo(id); setReplyDraft(''); }}
+              onReply={(id) => { setReplyTo(id); setReplyDraft(''); setReplyRating(0); }}
               onDelete={handleDelete}
-              onEdit={(c) => { setEditingId(c.id); setEditDraft(c.content); }}
+              onEdit={(c) => { setEditingId(c.id); setEditDraft(c.content); setEditRating(c.rating ? Math.round(c.rating / 20) : 0); }}
               replyTo={replyTo}
               replyDraft={replyDraft}
+              replyRating={replyRating}
               setReplyDraft={setReplyDraft}
+              setReplyRating={setReplyRating}
               onReplySubmit={handleReply}
               onCancelReply={() => setReplyTo(null)}
               submitting={submitting}
               editingId={editingId}
               editDraft={editDraft}
+              editRating={editRating}
               setEditDraft={setEditDraft}
+              setEditRating={setEditRating}
               onEditSave={handleEditSave}
               onCancelEdit={() => setEditingId(null)}
               canReply={!!user}
@@ -197,13 +214,17 @@ interface ItemProps {
   onEdit: (c: Comment) => void;
   replyTo: number | null;
   replyDraft: string;
+  replyRating: number;
   setReplyDraft: (v: string) => void;
+  setReplyRating: (v: number) => void;
   onReplySubmit: (id: number) => void;
   onCancelReply: () => void;
   submitting: boolean;
   editingId: number | null;
   editDraft: string;
+  editRating: number;
   setEditDraft: (v: string) => void;
+  setEditRating: (v: number) => void;
   onEditSave: (id: number) => void;
   onCancelEdit: () => void;
   canReply: boolean;
@@ -229,6 +250,9 @@ function CommentItem(props: ItemProps) {
             {c.username}
             {isMine && <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>（我）</span>}
           </span>
+          {c.rating != null && (
+            <StarDisplay rating={c.rating} />
+          )}
           <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
             {formatTime(c.created_at)}
           </span>
@@ -246,9 +270,12 @@ function CommentItem(props: ItemProps) {
               rows={2}
               style={textareaStyle}
             />
-            <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
-              <MiniBtn onClick={() => props.onEditSave(c.id)} primary>保存</MiniBtn>
-              <MiniBtn onClick={props.onCancelEdit}>取消</MiniBtn>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
+              <StarInput value={props.editRating} onChange={props.setEditRating} />
+              <div style={{ display: 'flex', gap: 6 }}>
+                <MiniBtn onClick={() => props.onEditSave(c.id)} primary>保存</MiniBtn>
+                <MiniBtn onClick={props.onCancelEdit}>取消</MiniBtn>
+              </div>
             </div>
           </div>
         ) : (
@@ -293,15 +320,18 @@ function CommentItem(props: ItemProps) {
               style={textareaStyle}
               autoFocus
             />
-            <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
-              <MiniBtn
-                onClick={() => props.onReplySubmit(c.id)}
-                primary
-                disabled={!props.replyDraft.trim() || props.submitting}
-              >
-                回复
-              </MiniBtn>
-              <MiniBtn onClick={props.onCancelReply}>取消</MiniBtn>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
+              <StarInput value={props.replyRating} onChange={props.setReplyRating} />
+              <div style={{ display: 'flex', gap: 6 }}>
+                <MiniBtn
+                  onClick={() => props.onReplySubmit(c.id)}
+                  primary
+                  disabled={!props.replyDraft.trim() || props.submitting}
+                >
+                  回复
+                </MiniBtn>
+                <MiniBtn onClick={props.onCancelReply}>取消</MiniBtn>
+              </div>
             </div>
           </div>
         )}
@@ -312,6 +342,59 @@ function CommentItem(props: ItemProps) {
         c.replies.map(r => <CommentItem key={r.id} {...props} comment={r} depth={depth + 1} />)
       )}
     </div>
+  );
+}
+
+// ── 星级评分组件 ──────────────────────────────────────────
+
+/** 交互式星级输入 (0-5) */
+function StarInput({ value, onChange, disabled }: {
+  value: number;
+  onChange: (v: number) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <span style={{ display: 'inline-flex', gap: 2, alignItems: 'center' }}>
+      {[1, 2, 3, 4, 5].map(n => (
+        <i
+          key={n}
+          className={n <= value ? 'fas fa-star' : 'far fa-star'}
+          onClick={() => {
+            if (disabled) return;
+            onChange(n === value ? 0 : n);
+          }}
+          style={{
+            fontSize: 12,
+            color: n <= value ? 'var(--accent-orange)' : 'var(--text-muted)',
+            cursor: disabled ? 'default' : 'pointer',
+            transition: 'color 0.15s',
+          }}
+          title={n <= value ? `${n} 星 (${n * 20} 分)` : undefined}
+        />
+      ))}
+    </span>
+  );
+}
+
+/** 只读星级展示 (0-100 → 星星) */
+function StarDisplay({ rating }: { rating: number }) {
+  const stars = Math.round(rating / 20);  // 0-100 → 0-5 星
+  return (
+    <span style={{ display: 'inline-flex', gap: 1, alignItems: 'center' }}>
+      {[1, 2, 3, 4, 5].map(n => (
+        <i
+          key={n}
+          className={n <= stars ? 'fas fa-star' : 'far fa-star'}
+          style={{
+            fontSize: 10,
+            color: n <= stars ? 'var(--accent-orange)' : 'var(--text-muted)',
+          }}
+        />
+      ))}
+      <span style={{ fontSize: 10, color: 'var(--text-muted)', marginLeft: 2 }}>
+        {rating}
+      </span>
+    </span>
   );
 }
 

@@ -66,6 +66,18 @@ def ensure_schema(db_path: str):
         conn.commit()
     conn.close()
 
+    # ── v3 迁移：article_comments 添加 rating 列 ─────────
+    conn = sqlite3.connect(db_path)
+    cur_ver = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] or 0
+    if cur_ver < 3:
+        # SQLite 不支持 ALTER TABLE ADD COLUMN IF NOT EXISTS，手动检查
+        cols = [c[1] for c in conn.execute("PRAGMA table_info(article_comments)").fetchall()]
+        if 'rating' not in cols:
+            conn.execute("ALTER TABLE article_comments ADD COLUMN rating INTEGER DEFAULT NULL")
+        conn.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (3)")
+        conn.commit()
+    conn.close()
+
     # Users table migration
     from auth.models import ensure_users_table
     ensure_users_table(db_path)

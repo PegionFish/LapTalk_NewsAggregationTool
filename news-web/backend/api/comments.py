@@ -43,6 +43,7 @@ def list_comments(article_id: int, user: Optional[dict] = Depends(optional_user)
 class CommentCreate(BaseModel):
     content: str = Field(..., min_length=1, max_length=2000)
     parent_id: Optional[int] = None
+    rating: Optional[int] = Field(None, ge=0, le=100)
 
 
 @router.post("/api/articles/{article_id}/comments")
@@ -65,7 +66,7 @@ def add_comment(article_id: int, body: CommentCreate, user: dict = Depends(get_c
             raise HTTPException(400, "parent_comment_mismatch")
     return db.add_comment(
         article_id, int(user['id']), user.get('display_name') or user.get('username') or 'anonymous',
-        content, body.parent_id
+        content, body.parent_id, body.rating
     )
 
 
@@ -73,6 +74,7 @@ def add_comment(article_id: int, body: CommentCreate, user: dict = Depends(get_c
 
 class CommentEdit(BaseModel):
     content: str = Field(..., min_length=1, max_length=2000)
+    rating: Optional[int] = Field(None, ge=0, le=100)
 
 
 @router.patch("/api/comments/{comment_id}")
@@ -82,7 +84,7 @@ def edit_comment(comment_id: int, body: CommentEdit, user: dict = Depends(get_cu
     if not content:
         raise HTTPException(400, "content_empty")
     db = get_db()
-    ok = db.edit_comment(comment_id, int(user['id']), content)
+    ok = db.edit_comment(comment_id, int(user['id']), content, body.rating)
     if not ok:
         raise HTTPException(403, "not_author_or_not_found")
     return {'ok': True}
