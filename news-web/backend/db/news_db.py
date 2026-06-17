@@ -1128,7 +1128,7 @@ class NewsDB:
         else:
             label = 'low'
         conn.execute(
-            "UPDATE articles SET priority_score=?, priority_label=?, human_processed=1 WHERE id=?",
+            "UPDATE articles SET priority_score=?, priority_label=?, human_processed=1, human_verified=1 WHERE id=?",
             (avg, label, article_id)
         )
         conn.commit()
