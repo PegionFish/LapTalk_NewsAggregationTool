@@ -299,11 +299,13 @@ async def get_article_content(article_id: int):
         except Exception:
             pass
 
-        # 3b. HTTP 失败 → Playwright 浏览器兜底
+        # 3b. HTTP 失败 → Playwright 浏览器兜底（带真实指纹 + 挑战检测）
         try:
             from pipeline.browser_capture import fetch_with_fallback, cache_article_html
             pw_result = fetch_with_fallback(url, article_id)
-            if pw_result.get('html'):
+            challenge = pw_result.get('challenge', {})
+
+            if pw_result.get('html') and not challenge.get('is_challenge'):
                 cache_article_html(article_id, pw_result['html'])
                 content_dir = config.content_cache_path
                 file_path = os.path.join(content_dir, f'{article_id}.html')
@@ -321,6 +323,18 @@ async def get_article_content(article_id: int):
                         "source": pw_result.get('source', 'playwright'),
                         "has_pdf": _has_pdf(),
                     }
+            elif challenge.get('is_challenge'):
+                return {
+                    "url": url or "",
+                    "content": "",
+                    "translation": "",
+                    "lang": "",
+                    "status": "challenge",
+                    "source": "challenge",
+                    "challenge_type": challenge.get('type', 'unknown'),
+                    "challenge_reason": challenge.get('reason', '需要人机验证'),
+                    "has_pdf": _has_pdf(),
+                }
         except Exception:
             pass
 
@@ -433,14 +447,16 @@ async def serve_article_html(article_id: int):
         except Exception:
             pass
 
-    # 3. HTTP 下载失败 → Playwright 浏览器渲染兜底
+    # 3. HTTP 下载失败 → Playwright 浏览器渲染兜底（带真实指纹）
     if url and url.startswith('http'):
         try:
             from pipeline.browser_capture import fetch_with_fallback, cache_article_html
             pw_result = fetch_with_fallback(url, article_id)
-            if pw_result.get('html'):
+            challenge = pw_result.get('challenge', {})
+
+            if pw_result.get('html') and not challenge.get('is_challenge'):
+                # 成功获取 → 缓存并返回
                 cache_article_html(article_id, pw_result['html'])
-                # 重新读取刚缓存的文件来 serve
                 cache_dir = config.content_cache_path
                 file_path = os.path.join(cache_dir, f'{article_id}.html')
                 if os.path.isfile(file_path):
@@ -454,6 +470,41 @@ async def serve_article_html(article_id: int):
                         media_type="text/html",
                         headers={"X-Capture-Source": pw_result.get('source', 'playwright')},
                     )
+            elif challenge.get('is_challenge'):
+                # 检测到人机验证 → 返回带验证提示的 fallback 页
+                chal_type = challenge.get('type', 'unknown')
+                chal_reason = challenge.get('reason', '需要人机验证')
+                chal_fallback = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="x-challenge" content="{chal_type}"><style>
+                    body {{ font-family: -apple-system, sans-serif; display: flex; align-items: center; justify-content: center;
+                           height: 100vh; margin: 0; background: #f5f5f5; color: #333; flex-direction: column; gap: 12px; text-align: center; padding: 24px; }}
+                    .icon {{ font-size: 48px; color: #e68a00; }}
+                    h3 {{ margin: 0; font-size: 16px; font-weight: 600; }}
+                    p {{ margin: 0; font-size: 13px; color: #666; line-height: 1.5; }}
+                    .btn {{ display: inline-block; padding: 10px 24px; background: #00d4ff; color: #fff; border-radius: 8px;
+                           text-decoration: none; font-size: 14px; font-weight: 500; margin-top: 8px; }}
+                    .btn:hover {{ background: #00b8e6; }}
+                    .hint {{ color: #999; font-size: 11px; }}
+                    .manual {{ margin-top: 16px; border-top: 1px solid #ddd; padding-top: 16px; width: 100%; max-width: 400px; }}
+                    textarea {{ width: 100%; min-height: 80px; border: 1px solid #ccc; border-radius: 6px; padding: 8px; font-size: 12px; }}
+                </style></head><body>
+                    <div class="icon"><i class="fas fa-shield-halved"></i></div>
+                    <h3>需要人机验证</h3>
+                    <p>{chal_reason}<br>请用你的浏览器打开原站完成验证</p>
+                    <a class="btn" href="{url}" target="_blank" rel="noopener" onclick="window.open('{url}','_blank')">
+                        打开原站验证 <i class="fas fa-external-link-alt"></i>
+                    </a>
+                    <p class="hint">验证通过后，返回此页面刷新即可加载内容</p>
+                    <div class="manual">
+                        <p style="font-size:12px;color:#999;">如果以上方式均无效，请复制页面内容并粘贴：</p>
+                        <textarea id="pasteContent" placeholder="粘贴文章内容后，自动保存到缓存..."></textarea>
+                        <button onclick="(function(){{var t=document.getElementById('pasteContent');if(t.value.length>50)fetch('/api/articles/{article_id}/cache-html',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{html:t.value}})}}).then(r=>r.json()).then(d=>alert(d.ok?'已保存':'保存失败:'+JSON.stringify(d))).catch(e=>alert('请求失败:'+e.message));else alert('内容太短，请粘贴完整的文章内容')}})()" style="margin-top:8px;padding:8px 16px;background:#e8e8e8;border:none;border-radius:6px;cursor:pointer;font-size:12px;">保存到缓存</button>
+                    </div>
+                </body></html>"""
+                return HTMLResponse(
+                    content=chal_fallback,
+                    media_type="text/html",
+                    headers={"X-Challenge-Type": chal_type},
+                )
         except Exception:
             pass
 

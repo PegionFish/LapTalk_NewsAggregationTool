@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-浏览器级页面捕获 — Playwright 渲染 JS 页面 + PDF 兜底。
-当 fetch_content.py 的 HTTP 请求无法获取内容时自动降级到此模块。
+浏览器级页面捕获 — Playwright 渲染 JS 页面。
+当 HTTP 请求被反爬/验证码拦截时自动降级到 headless Chromium，
+使用客户端真实浏览器指纹隐身，并检测 CAPTCHA/挑战页。
 
 用法:
   python3 browser_capture.py --article-id 42
   python3 browser_capture.py --limit 10
 """
 
-import os, sys, sqlite3, re
+import os, sys, sqlite3, re, json, logging
 from datetime import datetime
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -17,12 +18,9 @@ sys.path.insert(0, PARENT_DIR)
 
 from config import config
 
+logger = logging.getLogger(__name__)
+
 TIMEOUT = 60000
-BROWSER_UA = (
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-    'AppleWebKit/537.36 (KHTML, like Gecko) '
-    'Chrome/125.0.0.0 Safari/537.36'
-)
 STEALTH_ARGS = [
     '--disable-blink-features=AutomationControlled',
     '--disable-automation',
@@ -33,17 +31,31 @@ STEALTH_ARGS = [
     '--disable-infobars',
 ]
 
-
-def _stealth_page(page) -> None:
-    """注入隐身脚本，降低被反爬虫检测的风险。"""
-    page.add_init_script("""
-        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-        Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
-        Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh', 'en'] });
-        window.chrome = { runtime: {} };
-        Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
-        Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
-    """)
+# ── 人机验证/反爬检测关键词 ─────────────────────────────
+CHALLENGE_PATTERNS = [
+    'verify you are human',
+    'please verify',
+    'verify your identity',
+    'captcha',
+    'cf-challenge',
+    'cf-browser-verification',
+    'challenge-platform',
+    'unable to load',
+    'access denied',
+    'please enable javascript',
+    'cookies are required',
+    'just a moment',
+    'checking your browser',
+    'DDoS protection',
+    '_cf_chl_opt',
+    'Turnstile',
+    'hCaptcha',
+    'recaptcha',
+    'g-recaptcha',
+    'cf-turnstile',
+    'robot',
+    'are you a human',
+]
 
 
 def _sanitize_html(html: str) -> str:
@@ -55,36 +67,116 @@ def _sanitize_html(html: str) -> str:
     return html
 
 
+def detect_challenge(html: str, url: str = '') -> dict:
+    """检测页面是否为反爬/验证码挑战页。
+
+    Returns:
+        {'is_challenge': bool, 'type': str|None, 'reason': str|None}
+        type: 'cloudflare' | 'captcha' | 'access_denied' | 'jstest' | None
+    """
+    if not html or len(html) < 200:
+        return {'is_challenge': False, 'type': None, 'reason': 'empty_or_too_small'}
+
+    html_lower = html.lower()
+    text = re.sub(r'<[^>]+>', ' ', html_lower)
+    text = re.sub(r'\s+', ' ', text).strip()
+
+    matched = []
+    for pattern in CHALLENGE_PATTERNS:
+        if pattern in text or pattern in html_lower:
+            matched.append(pattern)
+
+    if not matched:
+        return {'is_challenge': False, 'type': None, 'reason': None}
+
+    # 按类型归类
+    if any(k in html_lower for k in ['cf-challenge', 'cf-browser-verification', '_cf_chl_opt', 'cf-turnstile']):
+        return {'is_challenge': True, 'type': 'cloudflare', 'reason': 'Cloudflare 挑战页'}
+    if any(k in text for k in ['captcha', 'recaptcha', 'hcaptcha', 'g-recaptcha', 'turnstile']):
+        return {'is_challenge': True, 'type': 'captcha', 'reason': '人机验证 (CAPTCHA)'}
+    if any(k in text for k in ['access denied', 'unable to load', 'please enable javascript']):
+        return {'is_challenge': True, 'type': 'access_denied', 'reason': '访问被拒绝'}
+    if any(k in text for k in ['just a moment', 'checking your browser', 'ddos protection']):
+        return {'is_challenge': True, 'type': 'jstest', 'reason': 'JS 浏览器检查'}
+
+    return {'is_challenge': True, 'type': 'unknown', 'reason': f'检测到挑战关键词: {matched[:3]}'}
+
+
+def _get_proxy_config() -> dict | None:
+    """从全局配置读取代理设置，返回 Playwright 兼容格式。"""
+    if not config.proxy_enabled or not config.proxy_url:
+        return None
+    url = config.proxy_url.strip()
+    if url.startswith('socks'):
+        url = url.replace('socks5://', 'http://').replace('socks5h://', 'http://')
+    return {'server': url}
+
+
 def capture_page_playwright(url: str, article_id: int = 0) -> dict:
-    """Playwright 渲染页面，返回 HTML + PDF。"""
+    """Playwright 渲染页面 — 使用客户端真实指纹隐身。
+
+    Returns:
+        {'html': str, 'pdf_path': str|None, 'error': str|None, 'challenge': dict}
+    """
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
-        return {'html': '', 'pdf_path': None, 'error': 'Playwright not installed'}
+        return {'html': '', 'pdf_path': None, 'error': 'Playwright not installed', 'challenge': {}}
+
+    # 加载客户端指纹
+    from fingerprint_store import load_fingerprint, build_playwright_config
+    fp = load_fingerprint()
+    pw_config = build_playwright_config(fp)
 
     html = ''
     pdf_path = None
     error = None
+    challenge = {}
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=True,
-                args=STEALTH_ARGS,
-            )
-            context = browser.new_context(
-                user_agent=BROWSER_UA,
-                viewport={'width': 1920, 'height': 1080},
-                locale='zh-CN',
-            )
+            launch_kwargs = {'headless': True, 'args': STEALTH_ARGS}
+            proxy_cfg = _get_proxy_config()
+            if proxy_cfg:
+                launch_kwargs['proxy'] = proxy_cfg
+                logger.info(f"[browser_capture] Playwright 使用代理: {proxy_cfg['server']}")
+
+            browser = p.chromium.launch(**launch_kwargs)
+
+            context_kwargs = {
+                'user_agent': pw_config.get('user_agent') or (
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                    'AppleWebKit/537.36 (KHTML, like Gecko) '
+                    'Chrome/125.0.0.0 Safari/537.36'
+                ),
+                'viewport': pw_config.get('viewport', {'width': 1920, 'height': 1080}),
+                'locale': pw_config.get('locale', 'zh-CN'),
+                'timezone_id': pw_config.get('timezone_id', 'Asia/Shanghai'),
+            }
+            context = browser.new_context(**context_kwargs)
+
             page = context.new_page()
-            _stealth_page(page)
+
+            stealth = pw_config.get('stealth_script', '')
+            if stealth:
+                page.add_init_script(stealth)
+            else:
+                # 兜底隐身
+                page.add_init_script("""
+                    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                    Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
+                    window.chrome = { runtime: {} };
+                """)
+
             try:
                 page.goto(url, wait_until='networkidle', timeout=TIMEOUT)
                 page.wait_for_timeout(3000)
                 html = page.content()
 
-                if article_id:
+                # 检测是否挑战页
+                challenge = detect_challenge(html, url)
+
+                if article_id and not challenge.get('is_challenge'):
                     cache_dir = config.content_cache_path
                     os.makedirs(cache_dir, exist_ok=True)
                     pdf_path = os.path.join(cache_dir, f'{article_id}.pdf')
@@ -93,6 +185,8 @@ def capture_page_playwright(url: str, article_id: int = 0) -> dict:
                 error = str(e)[:300]
                 try:
                     html = page.content()
+                    if not challenge:
+                        challenge = detect_challenge(html, url)
                 except Exception:
                     pass
             finally:
@@ -101,49 +195,84 @@ def capture_page_playwright(url: str, article_id: int = 0) -> dict:
     except Exception as e:
         error = str(e)[:300]
 
-    return {'html': html, 'pdf_path': pdf_path, 'error': error}
+    return {
+        'html': html,
+        'pdf_path': pdf_path,
+        'error': error,
+        'challenge': challenge,
+    }
 
 
 def fetch_with_fallback(url: str, article_id: int = 0) -> dict:
-    """三级回退抓取：HTTP → Playwright HTML → Playwright PDF。
+    """三级回退抓取：HTTP → Playwright（含指纹隐身）→ 等待用户验证。
 
     Returns:
-        {'html': str, 'source': str, 'pdf_path': str|None, 'error': str|None}
-        source: 'http' | 'playwright' | 'pdf_only' | 'failed'
+        {'html': str, 'source': str, 'pdf_path': str|None,
+         'error': str|None, 'challenge': dict}
+        source: 'http' | 'playwright' | 'challenge' | 'failed'
+        当检测到挑战页时，html 仍为挑战页内容（供上层判断），source='challenge'
     """
     from pipeline.fetch_content import download_page, sanitize_html
 
+    # 1. HTTP 下载
     result = download_page(url, retries=2)
     if result.get('html') and not result.get('error'):
+        html = sanitize_html(result['html'])
+        chal = detect_challenge(html, url)
+        if chal.get('is_challenge'):
+            return {
+                'html': html,
+                'source': 'challenge',
+                'pdf_path': None,
+                'error': chal.get('reason', 'HTTP returned challenge page'),
+                'challenge': chal,
+            }
         return {
-            'html': sanitize_html(result['html']),
+            'html': html,
             'source': 'http',
             'pdf_path': None,
             'error': None,
+            'challenge': {},
         }
 
+    # 2. Playwright 渲染（带客户端真实指纹）
     pw_result = capture_page_playwright(url, article_id)
     if pw_result.get('html'):
+        html = _sanitize_html(pw_result['html'])
+        challenge = pw_result.get('challenge', {})
+        if challenge.get('is_challenge'):
+            return {
+                'html': html,
+                'source': 'challenge',
+                'pdf_path': pw_result.get('pdf_path'),
+                'error': challenge.get('reason', 'Playwright hit challenge'),
+                'challenge': challenge,
+            }
         return {
-            'html': _sanitize_html(pw_result['html']),
+            'html': html,
             'source': 'playwright',
             'pdf_path': pw_result.get('pdf_path'),
             'error': None,
+            'challenge': {},
         }
 
+    # 3. 只有 PDF（备用）
     if pw_result.get('pdf_path') and os.path.isfile(pw_result['pdf_path']):
         return {
             'html': '',
             'source': 'pdf_only',
             'pdf_path': pw_result['pdf_path'],
             'error': 'Only PDF captured',
+            'challenge': {},
         }
 
+    # 4. 全部失败
     return {
         'html': '',
         'source': 'failed',
         'pdf_path': None,
         'error': pw_result.get('error') or result.get('error') or 'All capture methods failed',
+        'challenge': pw_result.get('challenge', {}),
     }
 
 
@@ -177,6 +306,17 @@ def cache_article_html(article_id: int, html: str) -> dict:
     return {'ok': True, 'local_path': rel_path}
 
 
+def retry_playwright(article_id: int, url: str) -> dict:
+    """用户标记已通过验证后，重新用 Playwright 获取。"""
+    result = capture_page_playwright(url, article_id)
+    if result.get('html') and not result.get('challenge', {}).get('is_challenge'):
+        cache_article_html(article_id, _sanitize_html(result['html']))
+        return {'ok': True, 'source': result.get('source', 'playwright'), 'error': None}
+    if result.get('challenge', {}).get('is_challenge'):
+        return {'ok': False, 'error': result['challenge'].get('reason', 'Still challenged'), 'challenge': result['challenge']}
+    return {'ok': False, 'error': result.get('error', 'Unknown error')}
+
+
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description='浏览器级页面捕获')
@@ -198,15 +338,19 @@ if __name__ == '__main__':
     conn.close()
 
     success = 0
+    challenged = 0
     for aid, url in rows:
         print(f'[{aid}] {url[:60]}...', end=' ', flush=True)
         result = fetch_with_fallback(url, aid)
-        if result['html']:
+        if result['html'] and result['source'] != 'challenge':
             cache_article_html(aid, result['html'])
             print(f'✓ {result["source"]}')
             success += 1
+        elif result['source'] == 'challenge':
+            print(f'⚠ {result["error"]}')
+            challenged += 1
         else:
             extra = f' (PDF: {result["pdf_path"]})' if result['pdf_path'] else ''
             print(f'✗ {result["error"]}{extra}')
 
-    print(f'\n完成: {success}/{len(rows)}')
+    print(f'\n完成: {success}/{len(rows)}, 需验证: {challenged}')

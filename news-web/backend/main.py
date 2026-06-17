@@ -87,6 +87,7 @@ from api.hotlists import router as hotlists_router
 from api.fetch import router as fetch_router
 from api.update import router as update_router
 from api.tasks import router as tasks_router
+from api.browser import router as browser_router
 
 app.include_router(settings_router)
 app.include_router(stats_router)
@@ -105,6 +106,7 @@ app.include_router(hotlists_router)
 app.include_router(fetch_router)
 app.include_router(update_router)
 app.include_router(tasks_router)
+app.include_router(browser_router)
 
 # ── SPA fallback + static mount (must be last) ──────────
 from fastapi.responses import FileResponse

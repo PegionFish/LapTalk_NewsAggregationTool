@@ -11,6 +11,9 @@ interface ArticleContent {
   translation: string;
   lang: string;
   has_pdf?: boolean;
+  status?: string;
+  challenge_type?: string;
+  challenge_reason?: string;
 }
 
 export default function ArticlePane({ article, onClose }: Props) {
@@ -19,7 +22,14 @@ export default function ArticlePane({ article, onClose }: Props) {
   const [content, setContent] = useState<ArticleContent | null>(null);
   const [contentLoading, setContentLoading] = useState(false);
   const [isFallback, setIsFallback] = useState(false);
+  const [isChallenge, setIsChallenge] = useState(false);
+  const [challengeType, setChallengeType] = useState('');
+  const [challengeReason, setChallengeReason] = useState('');
   const [originalUrl, setOriginalUrl] = useState('');
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [pasteMode, setPasteMode] = useState(false);
+  const [pasteContent, setPasteContent] = useState('');
+  const [saveStatus, setSaveStatus] = useState('');
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const translationRef = useRef<HTMLDivElement>(null);
   const syncingRef = useRef(false);
@@ -30,7 +40,14 @@ export default function ArticlePane({ article, onClose }: Props) {
     setShowTranslation(false);
     setContent(null);
     setIsFallback(false);
+    setIsChallenge(false);
+    setChallengeType('');
+    setChallengeReason('');
     setOriginalUrl('');
+    setPasteMode(false);
+    setPasteContent('');
+    setSaveStatus('');
+    setIsRetrying(false);
     fallbackCheckDone.current = false;
   }, [article?.id]);
 
@@ -38,7 +55,14 @@ export default function ArticlePane({ article, onClose }: Props) {
     if (!article) return;
     setContentLoading(true);
     api.getArticleContent(article.id)
-      .then(c => setContent({ translation: c.translation, lang: c.lang, has_pdf: c.has_pdf }))
+      .then(c => {
+        setContent({ translation: c.translation, lang: c.lang, has_pdf: c.has_pdf, status: c.status, challenge_type: (c as any).challenge_type, challenge_reason: (c as any).challenge_reason });
+        if (c.status === 'challenge') {
+          setIsChallenge(true);
+          setChallengeType((c as any).challenge_type || 'unknown');
+          setChallengeReason((c as any).challenge_reason || '需要人机验证');
+        }
+      })
       .catch(() => setContent(null))
       .finally(() => setContentLoading(false));
   }, [article?.id]);
@@ -56,10 +80,21 @@ export default function ArticlePane({ article, onClose }: Props) {
     try {
       const iframe = iframeRef.current;
       if (!iframe?.contentDocument) return;
-      const body = iframe.contentDocument.body?.textContent || '';
+      const doc = iframe.contentDocument;
+      const body = doc.body?.textContent || '';
+
+      // 检测 challenge meta 标签（后端 fallback 页标记）
+      const chalMeta = doc.querySelector('meta[name="x-challenge"]');
+      if (chalMeta) {
+        setIsChallenge(true);
+        setChallengeType(chalMeta.getAttribute('content') || 'unknown');
+        setChallengeReason(doc.body?.querySelector('h3')?.textContent || '需要人机验证');
+        return;
+      }
+
       if (body.includes('内容暂未缓存') || body.includes('无法获取此页面')) {
         setIsFallback(true);
-        const links = iframe.contentDocument.querySelectorAll('a');
+        const links = doc.querySelectorAll('a');
         links.forEach(a => {
           if (a.href && !a.href.includes('localhost') && !a.href.startsWith('http://localhost')) {
             setOriginalUrl(a.href);
@@ -73,6 +108,58 @@ export default function ArticlePane({ article, onClose }: Props) {
     const url = originalUrl || article?.url;
     if (url) window.open(url, '_blank');
   }, [originalUrl, article]);
+
+  const handleRetry = useCallback(async () => {
+    if (!article) return;
+    setIsRetrying(true);
+    try {
+      const res = await api.retryPlaywrightCapture(article.id);
+      if (res.ok) {
+        // 重试成功 — 刷新 iframe
+        fallbackCheckDone.current = false;
+        setIsChallenge(false);
+        setIsFallback(false);
+        setLoaded(false);
+        if (iframeRef.current) {
+          iframeRef.current.src = `/api/articles/${article.id}/html?t=${Date.now()}`;
+        }
+      } else if ((res as any).challenge) {
+        setSaveStatus('验证未通过，请重试或手动粘贴内容');
+      } else {
+        setSaveStatus(res.error || '重试失败');
+      }
+    } catch {
+      setSaveStatus('网络错误');
+    } finally {
+      setIsRetrying(false);
+    }
+  }, [article]);
+
+  const handlePasteSave = useCallback(async () => {
+    if (!article || pasteContent.length < 50) {
+      setSaveStatus('内容太短，请粘贴完整的文章内容');
+      return;
+    }
+    try {
+      const res = await api.cacheArticleHtml(article.id, pasteContent);
+      if (res.ok) {
+        setSaveStatus('已保存！刷新页面加载内容...');
+        setTimeout(() => {
+          fallbackCheckDone.current = false;
+          setIsChallenge(false);
+          setPasteMode(false);
+          setLoaded(false);
+          if (iframeRef.current) {
+            iframeRef.current.src = `/api/articles/${article.id}/html?t=${Date.now()}`;
+          }
+        }, 1000);
+      } else {
+        setSaveStatus('保存失败');
+      }
+    } catch {
+      setSaveStatus('网络错误');
+    }
+  }, [article, pasteContent]);
 
   const handleIframeScroll = useCallback(() => {
     if (syncingRef.current || !showTranslation) return;
@@ -146,6 +233,20 @@ export default function ArticlePane({ article, onClose }: Props) {
             </>
           )}
 
+          {/* 人机验证状态 */}
+          {isChallenge && (
+            <>
+              <span style={{ fontSize: 11, color: '#e68a00', fontWeight: 500 }}>
+                <i className="fas fa-shield-halved" style={{ marginRight: 3 }} />
+                需验证
+              </span>
+              <button onClick={handleOpenOriginal} style={openOriginalBtn} title="打开原站验证">
+                <i className="fas fa-external-link-alt" />
+                <span>验证</span>
+              </button>
+            </>
+          )}
+
           {/* PDF 下载按钮 */}
           {content?.has_pdf && (
             <a href={api.getArticlePdfUrl(article.id)} target="_blank" rel="noopener noreferrer"
@@ -155,7 +256,7 @@ export default function ArticlePane({ article, onClose }: Props) {
             </a>
           )}
 
-          {article.url && !isFallback && (
+          {article.url && !isFallback && !isChallenge && (
             <a href={article.url} target="_blank" rel="noopener noreferrer"
               style={{ color: 'var(--accent)', fontSize: 13, padding: 4 }}
               title="在新标签页打开原文">
@@ -214,7 +315,72 @@ export default function ArticlePane({ article, onClose }: Props) {
             </div>
           )}
 
-          <div style={{ flex: 1, position: 'relative', background: '#fff', display: isFallback ? 'none' : undefined }}>
+          {/* 人机验证状态 — 网站需要验证身份才能访问 */}
+          {isChallenge && (
+            <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-primary)', zIndex: 2, gap: 14, padding: 32 }}>
+              <i className="fas fa-shield-halved" style={{ fontSize: 40, color: '#e68a00' }} />
+              <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)' }}>
+                需要人机验证
+              </div>
+              <div style={{ fontSize: 13, color: 'var(--text-secondary)', textAlign: 'center', lineHeight: 1.6, maxWidth: 400 }}>
+                {challengeReason || '该网站使用了反爬虫验证，请用你的浏览器手动打开完成验证'}
+              </div>
+
+              {/* 打开原站验证 */}
+              <button onClick={handleOpenOriginal} style={{
+                ...openOriginalBtn, padding: '10px 24px', fontSize: 14,
+              }}>
+                <i className="fas fa-external-link-alt" />
+                <span>打开原站验证</span>
+              </button>
+
+              {/* 重试按钮 */}
+              <button onClick={handleRetry} disabled={isRetrying} style={{
+                ...openOriginalBtn, background: 'var(--bg-card)', color: 'var(--text-primary)',
+                border: '1px solid var(--border)', opacity: isRetrying ? 0.6 : 1,
+              }}>
+                <i className={`fas ${isRetrying ? 'fa-spinner fa-spin' : 'fa-redo'}`} />
+                <span>{isRetrying ? '重试中...' : '已通过验证，重新获取'}</span>
+              </button>
+
+              {/* 手动粘贴内容 */}
+              {!pasteMode ? (
+                <button onClick={() => setPasteMode(true)} style={{
+                  ...openOriginalBtn, background: 'transparent', color: 'var(--text-muted)',
+                  border: '1px dashed var(--border)', fontSize: 12,
+                }}>
+                  <i className="fas fa-paste" />
+                  <span>手动粘贴内容</span>
+                </button>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%', maxWidth: 500 }}>
+                  <textarea
+                    value={pasteContent}
+                    onChange={e => setPasteContent(e.target.value)}
+                    placeholder="将文章内容粘贴到这里..."
+                    style={{ width: '100%', minHeight: 120, padding: 10, fontSize: 13, border: '1px solid var(--border)', borderRadius: 8, resize: 'vertical', background: 'var(--bg-card)', color: 'var(--text-primary)' }}
+                  />
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button onClick={handlePasteSave} style={{
+                      ...openOriginalBtn, padding: '8px 16px', fontSize: 13,
+                    }}>
+                      <i className="fas fa-save" />
+                      <span>保存到缓存</span>
+                    </button>
+                    <button onClick={() => setPasteMode(false)} style={{
+                      background: 'none', border: '1px solid var(--border)', borderRadius: 6,
+                      padding: '8px 16px', fontSize: 12, cursor: 'pointer', color: 'var(--text-muted)',
+                    }}>
+                      取消
+                    </button>
+                  </div>
+                  {saveStatus && <span style={{ fontSize: 12, color: saveStatus.includes('已保存') ? 'var(--accent-tertiary)' : '#e68a00' }}>{saveStatus}</span>}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div style={{ flex: 1, position: 'relative', background: '#fff', display: isFallback || isChallenge ? 'none' : undefined }}>
             <iframe
               ref={iframeRef}
               src={`/api/articles/${article.id}/html`}

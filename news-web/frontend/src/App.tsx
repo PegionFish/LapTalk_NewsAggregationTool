@@ -12,6 +12,7 @@ import ArticleReader from './pages/ArticleReader';
 import HotTrends from './pages/HotTrends';
 import FetchMonitor from './pages/FetchMonitor';
 import SystemUpdate from './pages/SystemUpdate';
+import useBrowserFingerprint from './hooks/useBrowserFingerprint';
 
 // ── Workspace 路由适配器 — 将 /chains/:chainId 转为 Workspace 可识别的 search params ──
 function WorkspaceRoute() {
@@ -89,6 +90,7 @@ function AuthedApp() {
 
 // ── Root App ──────────────────────────────────────────────
 export default function App() {
+  useBrowserFingerprint();
   return (
     <ErrorBoundary>
       <AuthProvider>

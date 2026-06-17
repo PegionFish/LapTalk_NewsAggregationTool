@@ -49,6 +49,24 @@ export const api = {
       method: 'POST', body: JSON.stringify({ pdf_base64: pdfBase64 }),
     }),
 
+  // ── 浏览器指纹 ──────────────────────────────────────────
+  setBrowserFingerprint: (fp: {
+    userAgent: string; platform: string; language: string; languages: string[];
+    deviceMemory: number | null; hardwareConcurrency: number;
+    screenWidth: number; screenHeight: number; colorDepth: number;
+    pixelRatio: number; timezone: string; cookiesEnabled: boolean;
+  }) => fetchJSON<{ ok: boolean }>('/browser/fingerprint', {
+    method: 'POST', body: JSON.stringify(fp),
+  }),
+
+  getBrowserFingerprint: () =>
+    fetchJSON<{ ok: boolean; fingerprint: Record<string, unknown> }>('/browser/fingerprint'),
+
+  retryPlaywrightCapture: (articleId: number) =>
+    fetchJSON<{ ok: boolean; source?: string; error?: string }>(
+      `/browser/retry-playwright/${articleId}`, { method: 'POST' }
+    ),
+
   analyzeArticle: (id: number) =>
     fetchJSON<{ ok: boolean; cached: boolean; analysis: string }>(`/articles/${id}/analyze`, { method: 'POST' }),
 
