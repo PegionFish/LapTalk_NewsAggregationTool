@@ -16,6 +16,25 @@ const ANALYSIS_SECTIONS: { key: string; emoji: string; label: string }[] = [
   { key: '不确定性', emoji: '⚠️', label: '不确定性' },
 ];
 
+/** 递归将任意结构化值展平为可显示字符串；对象按 key 分行，嵌套键输出为子标题。 */
+function flattenValue(val: unknown, depth: number = 0): string {
+  if (typeof val === 'string') return val;
+  if (Array.isArray(val)) {
+    return val.map(item => flattenValue(item, depth)).join('\n');
+  }
+  if (val && typeof val === 'object') {
+    return Object.entries(val as Record<string, unknown>)
+      .map(([k, v]) => {
+        const content = flattenValue(v, depth + 1);
+        // 顶级嵌套对象子键加粗标题；更深层不加，避免冗余缩进
+        const prefix = depth === 0 ? `▸ ${k}\n` : `  ${k}: `;
+        return prefix + content;
+      })
+      .join('\n');
+  }
+  return String(val ?? '');
+}
+
 /** 尝试将 AI 摘要解析为结构化分区；失败时返回 null，由调用方回退到纯文本渲染。 */
 function parseAiSummary(raw: string): { sectionKey?: string; content: string }[] | null {
   if (!raw || !raw.trim()) return null;
@@ -28,20 +47,26 @@ function parseAiSummary(raw: string): { sectionKey?: string; content: string }[]
       // 若顶层仅有 analysis 键，展开其值
       const inner = obj.analysis ?? obj;
       if (typeof inner === 'object' && !Array.isArray(inner)) {
+        // AI 输出可能包裹 structured_output 层，解包之
+        const src: Record<string, unknown> =
+          (inner.structured_output && typeof inner.structured_output === 'object' && !Array.isArray(inner.structured_output))
+            ? inner.structured_output as Record<string, unknown>
+            : inner as Record<string, unknown>;
+
         const sections: { sectionKey?: string; content: string }[] = [];
         for (const s of ANALYSIS_SECTIONS) {
-          const val = inner[s.key] ?? inner[s.emoji + s.label];
+          const val = (src as Record<string, unknown>)[s.key] ?? (src as Record<string, unknown>)[s.emoji + s.label];
           if (val) {
-            const content = Array.isArray(val) ? val.map(String).join('\n') : String(val);
+            const content = flattenValue(val);
             if (content.trim()) sections.push({ sectionKey: s.key, content: content.trim() });
           }
         }
         // 若匹配到了预定义分区，直接返回
         if (sections.length > 0) return sections;
-        // 兜底：展平未知 JSON key
-        for (const [k, v] of Object.entries(inner)) {
-          if (k === 'analysis' || ANALYSIS_SECTIONS.some(s => s.key === k)) continue;
-          const content = Array.isArray(v) ? v.map(String).join('\n') : String(v ?? '');
+        // 兜底：展平未知 JSON key（跳过已处理的结构化容器）
+        for (const [k, v] of Object.entries(src)) {
+          if (k === 'analysis' || k === 'structured_output' || ANALYSIS_SECTIONS.some(s => s.key === k)) continue;
+          const content = flattenValue(v);
           if (content.trim()) sections.push({ content: content.trim() });
         }
         return sections.length > 0 ? sections : null;
@@ -49,7 +74,7 @@ function parseAiSummary(raw: string): { sectionKey?: string; content: string }[]
       // 数组
       if (Array.isArray(inner)) {
         return inner.filter(Boolean).map((item: unknown) => ({
-          content: String(item).trim(),
+          content: typeof item === 'string' ? item : JSON.stringify(item),
         }));
       }
     } catch {
