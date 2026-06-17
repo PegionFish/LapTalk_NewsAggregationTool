@@ -204,6 +204,13 @@ async def get_article_content(article_id: int):
 
     url, local_path, text_content, translated_content, content_lang, content_status, ai_summary, ai_analyzed, human_processed = row
 
+    def _has_pdf() -> bool:
+        try:
+            import os
+            return os.path.isfile(os.path.join(config.content_cache_path, f'{article_id}.pdf'))
+        except Exception:
+            return False
+
     # 1. DB 文本缓存已存在 → 直接返回
     if text_content:
         return {
@@ -216,6 +223,7 @@ async def get_article_content(article_id: int):
             "ai_summary": ai_summary or "",
             "ai_analyzed": bool(ai_analyzed),
             "human_processed": bool(human_processed),
+            "has_pdf": _has_pdf(),
         }
 
     # 2. 磁盘 HTML 文件存在 → 实时提取
@@ -245,6 +253,7 @@ async def get_article_content(article_id: int):
                 "lang": lang,
                 "status": "cached",
                 "source": "local",
+                "has_pdf": _has_pdf(),
             }
 
     # 3. 未缓存 → 按需下载并存盘
@@ -285,7 +294,33 @@ async def get_article_content(article_id: int):
                     "lang": lang,
                     "status": "fetched",
                     "source": "on_demand",
+                    "has_pdf": _has_pdf(),
                 }
+        except Exception:
+            pass
+
+        # 3b. HTTP 失败 → Playwright 浏览器兜底
+        try:
+            from pipeline.browser_capture import fetch_with_fallback, cache_article_html
+            pw_result = fetch_with_fallback(url, article_id)
+            if pw_result.get('html'):
+                cache_article_html(article_id, pw_result['html'])
+                content_dir = config.content_cache_path
+                file_path = os.path.join(content_dir, f'{article_id}.html')
+                if os.path.isfile(file_path):
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        html = f.read()
+                    text = extract_text_from_html(html)
+                    lang = detect_language(text)
+                    return {
+                        "url": url,
+                        "content": text,
+                        "translation": "",
+                        "lang": lang,
+                        "status": "fetched",
+                        "source": pw_result.get('source', 'playwright'),
+                        "has_pdf": _has_pdf(),
+                    }
         except Exception:
             pass
 
@@ -297,6 +332,7 @@ async def get_article_content(article_id: int):
         "lang": "",
         "status": "no_cache",
         "source": "link_only",
+        "has_pdf": _has_pdf(),
     }
 
 
@@ -397,17 +433,46 @@ async def serve_article_html(article_id: int):
         except Exception:
             pass
 
-    # 3. 无法获取 → 返回简洁提示页
+    # 3. HTTP 下载失败 → Playwright 浏览器渲染兜底
+    if url and url.startswith('http'):
+        try:
+            from pipeline.browser_capture import fetch_with_fallback, cache_article_html
+            pw_result = fetch_with_fallback(url, article_id)
+            if pw_result.get('html'):
+                cache_article_html(article_id, pw_result['html'])
+                # 重新读取刚缓存的文件来 serve
+                cache_dir = config.content_cache_path
+                file_path = os.path.join(cache_dir, f'{article_id}.html')
+                if os.path.isfile(file_path):
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        html = f.read()
+                    if url:
+                        html = _inject_base(html, url)
+                    html = _sanitize_html(html)
+                    return HTMLResponse(
+                        content=html,
+                        media_type="text/html",
+                        headers={"X-Capture-Source": pw_result.get('source', 'playwright')},
+                    )
+        except Exception:
+            pass
+
+    # 4. 全部无法获取 → 自动打开原站页面的过渡页
+    auto_open_js = ""
+    if url:
+        auto_open_js = f'window.open("{url}", "_blank");'
     fallback = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><style>
         body {{ font-family: -apple-system, sans-serif; display: flex; align-items: center; justify-content: center;
                height: 100vh; margin: 0; background: #f5f5f5; color: #666; flex-direction: column; gap: 16px; }}
         a {{ color: var(--accent, #00d4ff); text-decoration: none; padding: 8px 16px; border: 1px solid currentColor;
              border-radius: 6px; font-size: 13px; }}
         a:hover {{ background: rgba(0,212,255,0.1); }}
+        .loading {{ font-size: 13px; color: #999; display: flex; align-items: center; gap: 8px; }}
     </style></head><body>
-        <i class="fas fa-link" style="font-size:32px; color:#ccc;"></i>
-        <p>内容暂未缓存</p>
-        <a href="{url}" target="_blank" rel="noopener">在原站阅读 <i class="fas fa-external-link-alt"></i></a>
+        <div class="loading"><i class="fas fa-spinner fa-spin"></i> 正在打开原站页面...</div>
+        <p style="font-size:13px;color:#999;margin-top:-8px">服务器无法直接获取此页面内容</p>
+        <a href="{url}" target="_blank" rel="noopener">手动打开 <i class="fas fa-external-link-alt"></i></a>
+        <script>{auto_open_js}</script>
     </body></html>"""
     return HTMLResponse(content=fallback, media_type="text/html")
 
@@ -450,3 +515,54 @@ def analyze_article(article_id: int):
 
     return {"ok": True, "cached": False, "analysis": analysis,
             "ai_analyzed": True}
+
+
+class CacheHtmlRequest(BaseModel):
+    html: str
+
+
+@router.post("/{article_id}/cache-html")
+def cache_article_html_endpoint(article_id: int, body: CacheHtmlRequest):
+    """接收前端/浏览器工具提交的 HTML 内容并缓存到本地。"""
+    from pipeline.browser_capture import cache_article_html
+
+    if not body.html or len(body.html) < 50:
+        raise HTTPException(400, "html_content_too_short")
+
+    try:
+        result = cache_article_html(article_id, body.html)
+        return {"ok": True, **result}
+    except Exception as e:
+        raise HTTPException(500, f"cache_failed: {str(e)[:200]}")
+
+
+class CachePdfRequest(BaseModel):
+    pdf_base64: str
+
+
+@router.post("/{article_id}/cache-pdf")
+def cache_article_pdf(article_id: int, body: CachePdfRequest):
+    """接收前端提交的 PDF（base64）并保存到缓存目录。"""
+    import base64, os
+    try:
+        pdf_data = base64.b64decode(body.pdf_base64)
+        content_dir = config.content_cache_path
+        os.makedirs(content_dir, exist_ok=True)
+        pdf_path = os.path.join(content_dir, f'{article_id}.pdf')
+        with open(pdf_path, 'wb') as f:
+            f.write(pdf_data)
+        return {"ok": True, "pdf_path": pdf_path}
+    except Exception as e:
+        raise HTTPException(500, f"pdf_cache_failed: {str(e)[:200]}")
+
+
+@router.get("/{article_id}/pdf")
+async def serve_article_pdf(article_id: int):
+    """返回文章 PDF 缓存文件。"""
+    import os
+    from fastapi.responses import FileResponse
+    pdf_path = os.path.join(config.content_cache_path, f'{article_id}.pdf')
+    if not os.path.isfile(pdf_path):
+        raise HTTPException(404, "pdf_not_found")
+    return FileResponse(pdf_path, media_type="application/pdf",
+                        filename=f'article_{article_id}.pdf')

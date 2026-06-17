@@ -34,8 +34,20 @@ export const api = {
   getArticleContent: async (id: number) => {
     const res = await fetch(`${BASE}/articles/${id}/content`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json() as Promise<{ url: string; content: string; translation: string; lang: string; status: string; source: string; ai_summary?: string; ai_analyzed?: boolean; human_processed?: boolean }>;
+    return res.json() as Promise<{ url: string; content: string; translation: string; lang: string; status: string; source: string; ai_summary?: string; ai_analyzed?: boolean; human_processed?: boolean; has_pdf?: boolean }>;
   },
+
+  cacheArticleHtml: (id: number, html: string) =>
+    fetchJSON<{ ok: boolean; local_path: string }>(`/articles/${id}/cache-html`, {
+      method: 'POST', body: JSON.stringify({ html }),
+    }),
+
+  getArticlePdfUrl: (id: number) => `/api/articles/${id}/pdf`,
+
+  cacheArticlePdf: (id: number, pdfBase64: string) =>
+    fetchJSON<{ ok: boolean; pdf_path: string }>(`/articles/${id}/cache-pdf`, {
+      method: 'POST', body: JSON.stringify({ pdf_base64: pdfBase64 }),
+    }),
 
   analyzeArticle: (id: number) =>
     fetchJSON<{ ok: boolean; cached: boolean; analysis: string }>(`/articles/${id}/analyze`, { method: 'POST' }),

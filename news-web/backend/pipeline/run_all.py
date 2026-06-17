@@ -13,6 +13,7 @@ STEP_TIMEOUTS = {
     'fetch_content.py': 1800,
     'translate_content.py': 900,
     'analyze.py': 900,
+    'browser_capture.py': 600,
 }
 
 PIPELINE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -67,6 +68,9 @@ def run_pipeline(db_path: str = "", user_agent: str = "", callback=None, run_typ
 
     if config.openai_api_key:
         steps.append(('analyze.py', 'AI 分析'))
+
+    # 浏览器渲染兜底 — 对 HTTP 无法获取的文章使用 Playwright 重试
+    steps.append(('browser_capture.py', '浏览器渲染兜底'))
 
     for idx, (script, label) in enumerate(steps, 1):
         script_path = os.path.join(PIPELINE_DIR, script)

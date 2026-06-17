@@ -192,6 +192,49 @@ test_backend() {
     "$(py)" -m pytest tests/backend/test_api.py -v --tb=short
 }
 
+# ═══════════════════════════════════════════════════
+# 看门狗 — 每 30s 检查健康，挂了自动重启
+# ═══════════════════════════════════════════════════
+
+WATCHDOG_PID_FILE="$PID_DIR/watchdog.pid"
+
+start_watchdog() {
+    if [ -f "$WATCHDOG_PID_FILE" ] && kill -0 "$(cat "$WATCHDOG_PID_FILE")" 2>/dev/null; then
+        info "看门狗已在运行 (PID: $(cat "$WATCHDOG_PID_FILE"))"
+        return 0
+    fi
+
+    info "启动看门狗 (每 30s 轮询健康)..."
+    (
+        while true; do
+            sleep 30
+            if ! curl -s "http://localhost:$PORT/api/health" >/dev/null 2>&1; then
+                warn "后端无响应，正在重启..."
+                cd "$BACKEND_DIR"
+                nohup "$(py)" main.py >> "$BACKEND_LOG" 2>&1 &
+                echo "$!" > "$BACKEND_PID"
+                for i in $(seq 1 15); do
+                    sleep 1
+                    if curl -s "http://localhost:$PORT/api/health" >/dev/null 2>&1; then
+                        ok "后端已自动恢复 (PID: $(cat "$BACKEND_PID"))"
+                        break
+                    fi
+                done
+            fi
+        done
+    ) &
+    echo "$!" > "$WATCHDOG_PID_FILE"
+    ok "看门狗已启动 (PID: $(cat "$WATCHDOG_PID_FILE"))"
+}
+
+stop_watchdog() {
+    if [ -f "$WATCHDOG_PID_FILE" ]; then
+        local wpid; wpid=$(cat "$WATCHDOG_PID_FILE")
+        kill "$wpid" 2>/dev/null && info "看门狗已停止" || true
+        rm -f "$WATCHDOG_PID_FILE"
+    fi
+}
+
 test_frontend() {
     cd "$FRONTEND_DIR"
     npm test
@@ -207,14 +250,15 @@ help() {
     echo "用法: bash start_platform.sh <命令>"
     echo ""
     echo "命令:"
-    echo "  start      启动后端 (需前端已构建)"
-    echo "  stop       停止后端"
-    echo "  restart    重启后端"
+    echo "  start      启动后端 + 看门狗 (需前端已构建)"
+    echo "  stop       停止后端 + 看门狗"
+    echo "  restart    重启后端 + 看门狗"
     echo "  status     查看服务 / 数据库 / 前端状态"
     echo "  test       运行全部测试 (pytest + vitest)"
     echo "  test-backend  仅后端测试"
     echo "  test-frontend 仅前端测试"
     echo "  build      仅构建前端"
+    echo "  watchdog   启动看门狗（后端挂了自动重启）"
     echo ""
     echo "环境变量:"
     echo "  PORT=8081  自定义后端端口"
@@ -240,19 +284,21 @@ case "$CMD" in
             warn "前端未构建，自动构建..."
             build_frontend || exit 1
         fi
-        start_backend
+        start_backend && start_watchdog
         status
         ;;
     stop)
+        stop_watchdog
         stop_backend
         ;;
     restart)
+        stop_watchdog
         stop_backend
         sleep 2
         if [ ! -f "$FRONTEND_DIR/dist/index.html" ]; then
             build_frontend || exit 1
         fi
-        start_backend
+        start_backend && start_watchdog
         status
         ;;
     status)
@@ -269,6 +315,9 @@ case "$CMD" in
         ;;
     build)
         build_frontend
+        ;;
+    watchdog)
+        start_watchdog
         ;;
     help|--help|-h)
         help
