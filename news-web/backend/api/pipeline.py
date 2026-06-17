@@ -13,6 +13,7 @@ from config import config
 from utils.text import FULL_TEXT_MAX_LENGTH
 from utils.task_lock import task_lock
 from utils.task_state import task_state
+from utils.db import get_db_connection, safe_commit
 
 router = APIRouter(prefix="/api/pipeline", tags=["pipeline"])
 logger = logging.getLogger(__name__)
@@ -70,7 +71,8 @@ def _unlock(task_type: str):
 
 
 def _conn():
-    return sqlite3.connect(config.db_path)
+    """创建带超时配置的数据库连接，防止 WAL 并发写锁导致数据丢失。"""
+    return get_db_connection(config.db_path)
 
 
 # ═════════════════════════════════════════════════════════
@@ -152,7 +154,7 @@ def _batch_translate():
                 db2 = _conn()
                 db2.execute("UPDATE articles SET text_content=?, content_lang=? WHERE id=?",
                            (html, lang, aid))
-                db2.commit()
+                safe_commit(db2)
                 db2.close()
                 _log(_translate_state, f"#{aid} ⏭️ 非英文，存入 HTML")
                 _translate_state["done"] += 1
@@ -168,7 +170,7 @@ def _batch_translate():
                         "UPDATE articles SET text_content=?, translated_content=?, content_status='translated', content_lang='en', translated_at=? WHERE id=?",
                         (html, translation, datetime.now().isoformat(timespec='seconds'), aid)
                     )
-                    db2.commit()
+                    safe_commit(db2)
                     db2.close()
                     _log(_translate_state, f"#{aid} ✅ 翻译完成 ({len(translation)} 字)")
                 else:
@@ -203,7 +205,7 @@ def _batch_translate():
                         "UPDATE articles SET text_content=?, translated_content=?, content_status='translated', content_lang='en', translated_at=? WHERE id=?",
                         (html, translation, datetime.now().isoformat(timespec='seconds'), aid)
                     )
-                    db2.commit()
+                    safe_commit(db2)
                     db2.close()
                     _log(_translate_state, f"#{aid} ✅ 翻译完成 ({len(translation)} 字)")
                 else:
@@ -273,7 +275,7 @@ def _batch_analyze():
                         "UPDATE articles SET ai_summary=?, ai_analyzed=1 WHERE id=?",
                         (analysis, aid)
                     )
-                    db2.commit()
+                    safe_commit(db2)
                     db2.close()
                     _log(_analyze_state, f"#{aid} ✅ 分析完成 ({len(analysis)} 字)")
                 else:
@@ -308,7 +310,7 @@ def _batch_analyze():
                         "UPDATE articles SET ai_summary=?, ai_analyzed=1 WHERE id=?",
                         (analysis, aid)
                     )
-                    db2.commit()
+                    safe_commit(db2)
                     db2.close()
                     _log(_analyze_state, f"#{aid} ✅ 分析完成 ({len(analysis)} 字)")
                 else:
@@ -409,7 +411,7 @@ def _build_logic_chains():
             _chain_state["chains_created"] += 1
             _log(_chain_state, f"✅ 创建链: {chain_title} ({len(valid_ids)} 个事件) — {reason}")
 
-        db.commit()
+        safe_commit(db)
         db.close()
 
     except Exception as e:
@@ -463,7 +465,7 @@ def _batch_ai_rank_events():
             _rank_state["done"] += 1
             _log(_rank_state, f"#{eid} → {label} (排名 {rank}/{total}) — {reason}")
 
-        db.commit()
+        safe_commit(db)
         db.close()
 
     except Exception as e:
@@ -639,7 +641,7 @@ def _batch_ai_keywords():
             if kws:
                 db2 = _conn()
                 db2.execute("UPDATE articles SET keywords=?, ai_keywords=? WHERE id=?", (_json.dumps(kws, ensure_ascii=False), _json.dumps(kws, ensure_ascii=False), aid))
-                db2.commit(); db2.close()
+                safe_commit(db2); db2.close()
                 _log(_kw_state, f"#{aid} ✅ {len(kws)} 个关键词: {', '.join(kws[:5])}")
             else:
                 _log(_kw_state, f"#{aid} ⚠️ AI 返回空"); _kw_state["failed"] += 1
@@ -654,7 +656,7 @@ def _batch_ai_keywords():
                 if kws:
                     db2 = _conn()
                     db2.execute("UPDATE articles SET keywords=?, ai_keywords=? WHERE id=?", (_json.dumps(kws, ensure_ascii=False), _json.dumps(kws, ensure_ascii=False), aid))
-                    db2.commit(); db2.close()
+                    safe_commit(db2); db2.close()
                     _log(_kw_state, f"#{aid} ✅ {len(kws)} 个关键词: {', '.join(kws[:5])}")
                 else:
                     _log(_kw_state, f"#{aid} ⚠️ AI 返回空"); _kw_state["failed"] += 1
@@ -702,7 +704,7 @@ def _batch_ai_classify():
             if r:
                 db2 = _conn()
                 db2.execute("UPDATE articles SET ai_category=?, ai_tags=? WHERE id=?", (r.get("category",""), _json.dumps(r.get("tags",[]), ensure_ascii=False), aid))
-                db2.commit(); db2.close()
+                safe_commit(db2); db2.close()
                 _log(_cls_state, f"#{aid} ✅ {r.get('category','?')} — {', '.join(r.get('tags',[])[:3])}")
             else:
                 _log(_cls_state, f"#{aid} ⚠️ AI 返回空"); _cls_state["failed"] += 1
@@ -717,7 +719,7 @@ def _batch_ai_classify():
                 if r:
                     db2 = _conn()
                     db2.execute("UPDATE articles SET ai_category=?, ai_tags=? WHERE id=?", (r.get("category",""), _json.dumps(r.get("tags",[]), ensure_ascii=False), aid))
-                    db2.commit(); db2.close()
+                    safe_commit(db2); db2.close()
                     _log(_cls_state, f"#{aid} ✅ {r.get('category','?')} — {', '.join(r.get('tags',[])[:3])}")
                 else:
                     _log(_cls_state, f"#{aid} ⚠️ AI 返回空"); _cls_state["failed"] += 1
@@ -769,7 +771,7 @@ def _batch_ai_score():
             if r:
                 db2 = _conn()
                 db2.execute("UPDATE articles SET priority_score=?, priority_label=?, ai_priority_score=? WHERE id=?", (r["score"], r.get("label","medium"), r["score"], aid))
-                db2.commit(); db2.close()
+                safe_commit(db2); db2.close()
                 _log(_score_state, f"#{aid} ✅ {r.get('label','medium')}({r['score']:.0f}) — {r.get('reason','')}")
             else:
                 _log(_score_state, f"#{aid} ⚠️ AI 返回空"); _score_state["failed"] += 1
@@ -788,7 +790,7 @@ def _batch_ai_score():
                 if r:
                     db2 = _conn()
                     db2.execute("UPDATE articles SET priority_score=?, priority_label=?, ai_priority_score=? WHERE id=?", (r["score"], r.get("label","medium"), r["score"], aid))
-                    db2.commit(); db2.close()
+                    safe_commit(db2); db2.close()
                     _log(_score_state, f"#{aid} ✅ {r.get('label','medium')}({r['score']:.0f}) — {r.get('reason','')}")
                 else:
                     _log(_score_state, f"#{aid} ⚠️ AI 返回空"); _score_state["failed"] += 1
@@ -843,7 +845,7 @@ def _batch_ai_recluster():
                 db2 = _conn()
                 db2.execute("INSERT OR IGNORE INTO article_events (article_id, event_id, relevance) VALUES (?, ?, ?)", (aid, best_id, round(best_conf, 2)))
                 db2.execute("UPDATE events SET article_count=article_count+1 WHERE id=?", (best_id,))
-                db2.commit(); db2.close()
+                safe_commit(db2); db2.close()
                 _log(_recluster_state, f"#{aid} ✅ -> 事件#{best_id} (置信度 {best_conf:.2f})")
             else:
                 _log(_recluster_state, f"#{aid} ➕ 创建新事件")
@@ -852,7 +854,7 @@ def _batch_ai_recluster():
                 db2 = _conn()
                 cur = db2.execute("INSERT INTO events (title, first_seen, last_seen, status) VALUES (?,?,?,'active')", (art_title[:80], now[:10], now[:10]))
                 db2.execute("INSERT INTO article_events (article_id, event_id) VALUES (?,?)", (aid, cur.lastrowid))
-                db2.commit(); db2.close()
+                safe_commit(db2); db2.close()
             _recluster_state["done"] += 1
             time.sleep(5) if idx < len(unlinked) else None
 
@@ -872,7 +874,7 @@ def _batch_ai_recluster():
                     db2 = _conn()
                     db2.execute("INSERT OR IGNORE INTO article_events (article_id, event_id, relevance) VALUES (?, ?, ?)", (aid, best_id, round(best_conf, 2)))
                     db2.execute("UPDATE events SET article_count=article_count+1 WHERE id=?", (best_id,))
-                    db2.commit(); db2.close()
+                    safe_commit(db2); db2.close()
                     _log(_recluster_state, f"#{aid} ✅ -> 事件#{best_id} (置信度 {best_conf:.2f})")
                 else:
                     _log(_recluster_state, f"#{aid} ➕ 创建新事件")
@@ -881,7 +883,7 @@ def _batch_ai_recluster():
                     db2 = _conn()
                     cur = db2.execute("INSERT INTO events (title, first_seen, last_seen, status) VALUES (?,?,?,'active')", (art_title[:80], now[:10], now[:10]))
                     db2.execute("INSERT INTO article_events (article_id, event_id) VALUES (?,?)", (aid, cur.lastrowid))
-                    db2.commit(); db2.close()
+                    safe_commit(db2); db2.close()
             except Exception as e:
                 if _is_request_timeout_error(e):
                     _log(_recluster_state, f"#{aid} ❌ API 调用失败: Request Timed Out（重试后仍超时）")
@@ -929,7 +931,7 @@ def _batch_ai_summarize_events():
             if summary:
                 db2 = _conn()
                 db2.execute("UPDATE events SET ai_summary=? WHERE id=?", (summary, evt_id))
-                db2.commit(); db2.close()
+                safe_commit(db2); db2.close()
                 _log(_evt_sum_state, f"#{evt_id} ✅ {len(summary)} 字")
             else:
                 _log(_evt_sum_state, f"#{evt_id} ⚠️ AI 返回空"); _evt_sum_state["failed"] += 1
@@ -949,7 +951,7 @@ def _batch_ai_summarize_events():
                 if summary:
                     db2 = _conn()
                     db2.execute("UPDATE events SET ai_summary=? WHERE id=?", (summary, evt_id))
-                    db2.commit(); db2.close()
+                    safe_commit(db2); db2.close()
                     _log(_evt_sum_state, f"#{evt_id} ✅ {len(summary)} 字")
                 else:
                     _log(_evt_sum_state, f"#{evt_id} ⚠️ AI 返回空"); _evt_sum_state["failed"] += 1
@@ -1010,7 +1012,7 @@ def _batch_ai_filter():
                     db2.execute("UPDATE articles SET ai_filtered=-1 WHERE id=?", (aid,))
                     _filter_state["done"] += 1
                     _filter_state["failed"] += 1
-            db2.commit(); db2.close()
+            safe_commit(db2); db2.close()
 
             approved = _filter_state["done"] - _filter_state["failed"]
             rejected = _filter_state["failed"]

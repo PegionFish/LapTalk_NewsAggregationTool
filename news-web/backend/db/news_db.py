@@ -24,6 +24,8 @@ import os, json, sqlite3, re
 from datetime import datetime, date
 from typing import Optional
 
+from utils.db import get_db_connection
+
 DB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'hot_reports')
 DB_PATH = os.path.join(DB_DIR, 'news.db')
 
@@ -119,7 +121,8 @@ class NewsDB:
         self._init_db()
 
     def _conn(self):
-        return sqlite3.connect(self.db_path)
+        """创建带超时配置的数据库连接，防止 WAL 并发写锁导致写入失败。"""
+        return get_db_connection(self.db_path)
 
     def _init_db(self):
         with self._conn() as conn:
