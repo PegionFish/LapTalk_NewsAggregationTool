@@ -55,11 +55,22 @@ def is_chinese_media_english(title, source):
     return ascii_chars / total > 0.6
 
 def load_json(pattern):
-    files = sorted([f for f in os.listdir(REPORTS_DIR) if f.startswith(pattern) and f.endswith('.json')], reverse=True)
-    if files:
-        with open(os.path.join(REPORTS_DIR, files[0]), encoding='utf-8') as f:
-            return json.load(f)
-    return {}
+    """加载匹配前缀的最新 JSON 文件（按修改时间，避免文件名排序导致的竞态）。
+
+    fetch 脚本输出文件名格式: {pattern}_{date}_{pid}.json（如 daily_report_2026-06-17_12345.json）
+    本函数按 mtime 取最新匹配文件，确保读到最近一次管道运行的输出。
+    """
+    candidates = [
+        f for f in os.listdir(REPORTS_DIR)
+        if f.startswith(pattern) and f.endswith('.json')
+    ]
+    if not candidates:
+        return {}
+    # 按修改时间降序，取最新
+    full_paths = [os.path.join(REPORTS_DIR, f) for f in candidates]
+    latest = max(full_paths, key=os.path.getmtime)
+    with open(latest, encoding='utf-8') as f:
+        return json.load(f)
 
 def main():
     date_tag = datetime.now().strftime('%Y-%m-%d')
@@ -131,18 +142,10 @@ def main():
                         })
 
     # ── 3. RSS/英文追溯 ──
-    # 优先使用 english_news.json（最新的 RSS 原始数据，包含游戏媒体）
-    # 如果 traced 文件存在且有更多条目，则使用 traced 版本
-    news_path = os.path.join(REPORTS_DIR, 'english_news.json')
-    traced_path = os.path.join(REPORTS_DIR, 'english_news_traced.json')
-    data = {}
-    if os.path.exists(news_path):
-        with open(news_path, encoding='utf-8') as f:
-            data = json.load(f)
-    traced_data = {}
-    if os.path.exists(traced_path):
-        with open(traced_path, encoding='utf-8') as f:
-            traced_data = json.load(f)
+    # 按 mtime 加载最新的 english_news 文件（PID 命名防竞态）
+    # 如果 traced 文件存在且有更多条目，则优先使用 traced 版本
+    data = load_json('english_news_')
+    traced_data = load_json('english_news_traced')
     if traced_data and len(traced_data.get('items', [])) > len(data.get('items', [])):
         data = traced_data
     if not data or not data.get('items'):

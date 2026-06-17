@@ -13,7 +13,7 @@ DB 中 articles.local_path 指向文件路径。
   python3 fetch_content.py --path-only              # 只存路径(已下载的不重抓)
 """
 
-import os, sys, re, time, sqlite3, urllib.request, urllib.error
+import os, sys, re, time, sqlite3, urllib.request, urllib.error, logging
 from datetime import datetime, timedelta
 from urllib.parse import urlparse, urljoin, urlunparse
 from html.parser import HTMLParser
@@ -25,6 +25,8 @@ sys.path.insert(0, PARENT_DIR)
 
 from config import config
 from utils.text import FULL_TEXT_MAX_LENGTH, extract_text_from_html, detect_language
+
+logger = logging.getLogger(__name__)
 
 # ── 境外代理 — 如已配置代理则启用 ──────────────────────
 try:
@@ -80,14 +82,18 @@ def download_page(url: str, retries: int = 2) -> dict:
             if e.code == 403 and attempt < retries:
                 time.sleep(1)
                 continue
+            logger.debug(f"[fetch_content] HTTP {e.code} from {url[:80]}: {e.reason}")
             return {'html': '', 'error': f'HTTP {e.code}'}
         except (urllib.error.URLError, OSError, ConnectionError) as e:
             last_error = str(e)[:300]
             if attempt < retries:
+                logger.debug(f"[fetch_content] 临时网络错误 {url[:80]} (重试 {attempt + 1}/{retries}): {last_error[:100]}")
                 time.sleep(1)
                 continue
+            logger.warning(f"[fetch_content] 网络错误 {url[:80]}: {last_error[:100]}")
             return {'html': '', 'error': last_error}
         except Exception as e:
+            logger.warning(f"[fetch_content] 未知错误 {url[:80]}: {type(e).__name__}: {e}")
             return {'html': '', 'error': str(e)[:300]}
     return {'html': '', 'error': last_error}
 
@@ -190,26 +196,11 @@ def fetch_article_content(url: str, article_id: int, db_path: str = None) -> dic
             WHERE id=?
         """, (rel_path, now, text, lang, article_id))
 
-        translated = False
-        if lang == 'en' and config.translation_enabled and config.translation_api_key:
-            try:
-                from translation_client import translate_to_chinese
-                translation = translate_to_chinese(text)
-                if translation:
-                    conn.execute("""
-                        UPDATE articles SET
-                            translated_content=?, content_status='translated', translated_at=?
-                        WHERE id=?
-                    """, (translation, datetime.now().isoformat(timespec='seconds'), article_id))
-                    translated = True
-            except Exception:
-                pass
-
         conn.commit()
         return {
             'ok': True,
             'local_path': rel_path,
-            'content_status': 'translated' if translated else 'fetched',
+            'content_status': 'fetched',
             'size': size,
             'images': imgs,
             'lang': lang,
@@ -263,18 +254,7 @@ def _fetch_single(args):
     now = datetime.now().isoformat(timespec='seconds')
     rel_path = f'{os.path.basename(content_dir)}/{aid}.html'
 
-    # 内联翻译
-    translated = False
-    if lang == 'en' and config.translation_enabled and config.translation_api_key:
-        try:
-            from translation_client import translate_to_chinese
-            translation = translate_to_chinese(text)
-            if translation:
-                translated = True
-        except Exception:
-            pass
-
-    # 写入 DB
+    # 写入 DB（翻译由 translate_content.py 独立处理）
     conn = sqlite3.connect(db_path)
     conn.execute("""
         UPDATE articles SET
@@ -282,18 +262,12 @@ def _fetch_single(args):
             text_content=?, content_lang=?, content_status='fetched'
         WHERE id=?
     """, (rel_path, now, text, lang, aid))
-    if translated:
-        conn.execute("""
-            UPDATE articles SET
-                translated_content=?, content_status='translated', translated_at=?
-            WHERE id=?
-        """, (translation, now, aid))
     conn.commit()
     conn.close()
 
     return {
         'aid': aid, 'status': 'ok', 'src': src, 'title': title[:40],
-        'size': size, 'lang': lang, 'imgs': imgs, 'translated': translated,
+        'size': size, 'lang': lang, 'imgs': imgs,
     }
 
 
@@ -356,8 +330,7 @@ def archive_pages(db_path: str, limit: int = 0, source: str = None, recent: int 
             r = future.result()
             if r['status'] == 'ok':
                 img_info = f" 🖼{r['imgs']}张" if r.get('imgs', 0) > 0 else ''
-                tr_info = " [译✅]" if r.get('translated') else ''
-                print(f"  [{idx}/{total}] ✅ {r['src']:20s} {r['title']:40s} {r['size']//1024}KB [{r['lang']}]{img_info}{tr_info}")
+                print(f"  [{idx}/{total}] ✅ {r['src']:20s} {r['title']:40s} {r['size']//1024}KB [{r['lang']}]{img_info}")
                 ok += 1
             elif r['status'] == 'error':
                 print(f"  [{idx}/{total}] ❌ #{r['aid']} {r['msg']}")

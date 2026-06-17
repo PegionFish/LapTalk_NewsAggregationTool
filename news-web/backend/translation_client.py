@@ -27,7 +27,13 @@ def get_client() -> OpenAI:
 
 
 def _call_translate(client: OpenAI, content: str, system_prompt: str) -> str:
-    """单次 API 调用。"""
+    """单次 API 调用（含速率限制）。"""
+    from utils.rate_limiter import ai_rate_limiter as _rl
+
+    # 翻译输出通常与输入等长或略短，保守估算为输入的 1.2 倍
+    estimated = _rl.estimate_tokens(content + system_prompt) + _rl.estimate_tokens(content)
+    _rl.wait_if_needed(estimated)
+
     resp = client.chat.completions.create(
         model=config.translation_model,
         messages=[
@@ -38,6 +44,14 @@ def _call_translate(client: OpenAI, content: str, system_prompt: str) -> str:
         max_tokens=65536,
         top_p=0.95,
     )
+    # 记录真实 token 消耗
+    try:
+        usage = resp.usage
+        actual = (usage.prompt_tokens or 0) + (usage.completion_tokens or 0)
+        _rl.record(actual)
+    except Exception:
+        _rl.record(estimated)
+
     return resp.choices[0].message.content or ""
 
 

@@ -192,7 +192,7 @@ def _batch_translate():
             _translate_state["done"] += 1
 
             if idx < len(rows):
-                time.sleep(5)
+                time.sleep(0.1)  # 速率限制由 RateLimiter 统一管理
 
         for aid, title, html in retry_queue:
             _translate_state["current"] = f"#{aid} {title[:50]}"
@@ -297,7 +297,7 @@ def _batch_analyze():
             _analyze_state["done"] += 1
 
             if idx < len(rows):
-                time.sleep(5)  # 篇间延迟，防 API 限频
+                time.sleep(0.1)  # 速率限制由 RateLimiter 统一管理
 
         for aid, title, text in retry_queue:
             _analyze_state["current"] = f"#{aid} {title[:50]}"
@@ -646,7 +646,7 @@ def _batch_ai_keywords():
             else:
                 _log(_kw_state, f"#{aid} ⚠️ AI 返回空"); _kw_state["failed"] += 1
             _kw_state["done"] += 1
-            time.sleep(5) if idx < len(rows) else None
+            time.sleep(0.1) if idx < len(rows) else None  # 速率限制由 RateLimiter 统一管理
 
         for aid, title, text, source in retry_queue:
             _kw_state["current"] = f"#{aid} {title[:50]}"
@@ -709,7 +709,7 @@ def _batch_ai_classify():
             else:
                 _log(_cls_state, f"#{aid} ⚠️ AI 返回空"); _cls_state["failed"] += 1
             _cls_state["done"] += 1
-            time.sleep(5) if idx < len(rows) else None
+            time.sleep(0.1) if idx < len(rows) else None  # 速率限制由 RateLimiter 统一管理
 
         for aid, title, text in retry_queue:
             _cls_state["current"] = f"#{aid} {title[:50]}"
@@ -776,7 +776,7 @@ def _batch_ai_score():
             else:
                 _log(_score_state, f"#{aid} ⚠️ AI 返回空"); _score_state["failed"] += 1
             _score_state["done"] += 1
-            time.sleep(5) if idx < len(rows) else None
+            time.sleep(0.1) if idx < len(rows) else None  # 速率限制由 RateLimiter 统一管理
 
         for aid, title, text, source, fetched_at in retry_queue:
             _score_state["current"] = f"#{aid} {title[:50]}"
@@ -819,69 +819,89 @@ def _batch_ai_recluster():
         if not unlinked: _recluster_state["running"] = False; return
         _recluster_state["total"] = len(unlinked)
         _log(_recluster_state, f"待聚类 {len(unlinked)} 篇 → {len(events)} 个活跃事件")
-        from ai_client import assess_event_similarity_ai
+        from ai_client import match_article_to_events_ai
 
         retry_counts: dict[int, int] = {}
         retry_queue: list[tuple[int, str]] = []
+        MAX_CANDIDATES = 50  # 每次 API 调用最多比对的候选事件数
 
         for idx, (aid, art_title) in enumerate(unlinked, 1):
             _recluster_state["current"] = f"#{aid} {art_title[:50]}"
-            best_id, best_conf = None, 0
-            timed_out = False
-            for evt_id, evt_title in events:
-                try:
-                    r = assess_event_similarity_ai(art_title, evt_title)
-                    if r and r.get("similar") and r.get("confidence", 0) > best_conf:
-                        best_conf = r["confidence"]; best_id = evt_id
-                except Exception as cmp_err:
-                    if _is_request_timeout_error(cmp_err):
-                        timed_out = True
-                        break
-                    _log(_recluster_state, f"#{aid} ⚠️ 与事件#{evt_id}比对失败: {str(cmp_err)[:300]}")
-            if timed_out and _queue_timeout_retry(_recluster_state, aid, retry_counts):
-                retry_queue.append((aid, art_title))
+
+            # 用标题拼音相似度预筛候选事件（top50），减少 AI 调用 token 消耗
+            from db.news_db import title_similarity
+            scored_events = [(title_similarity(art_title, etitle), eid, etitle)
+                             for eid, etitle in events]
+            scored_events.sort(key=lambda x: x[0], reverse=True)
+            candidates = [(eid, etitle) for _, eid, etitle in scored_events[:MAX_CANDIDATES]]
+
+            try:
+                r = match_article_to_events_ai(art_title, candidates)
+            except Exception as e:
+                if _is_request_timeout_error(e) and _queue_timeout_retry(_recluster_state, aid, retry_counts):
+                    retry_queue.append((aid, art_title))
+                    continue
+                _log(_recluster_state, f"#{aid} ❌ AI 聚类失败: {str(e)[:300]}")
+                _recluster_state["failed"] += 1
+                _recluster_state["done"] += 1
                 continue
-            if best_id and best_conf > 0.5:
-                db2 = _conn()
-                db2.execute("INSERT OR IGNORE INTO article_events (article_id, event_id, relevance) VALUES (?, ?, ?)", (aid, best_id, round(best_conf, 2)))
-                db2.execute("UPDATE events SET article_count=article_count+1 WHERE id=?", (best_id,))
-                safe_commit(db2); db2.close()
-                _log(_recluster_state, f"#{aid} ✅ -> 事件#{best_id} (置信度 {best_conf:.2f})")
+
+            if r and r.get("event_id") and r.get("confidence", 0) > 0.5:
+                best_id = r["event_id"]
+                best_conf = r["confidence"]
+                # 验证事件 ID 存在
+                if any(eid == best_id for eid, _ in events):
+                    db2 = _conn()
+                    db2.execute("INSERT OR IGNORE INTO article_events (article_id, event_id, relevance) VALUES (?, ?, ?)",
+                               (aid, best_id, round(best_conf, 2)))
+                    db2.execute("UPDATE events SET article_count=article_count+1 WHERE id=?", (best_id,))
+                    safe_commit(db2); db2.close()
+                    _log(_recluster_state, f"#{aid} ✅ -> 事件#{best_id} (置信度 {best_conf:.2f}) — {r.get('reason', '')}")
+                else:
+                    # AI 返回了无效事件 ID，创建新事件
+                    _log(_recluster_state, f"#{aid} ➕ 创建新事件（AI 返回无效事件ID）")
+                    from datetime import datetime as _dt
+                    now = _dt.now().isoformat(timespec='seconds')
+                    db2 = _conn()
+                    cur = db2.execute("INSERT INTO events (title, first_seen, last_seen, status) VALUES (?,?,?,'active')",
+                                     (art_title[:80], now[:10], now[:10]))
+                    db2.execute("INSERT INTO article_events (article_id, event_id) VALUES (?,?)", (aid, cur.lastrowid))
+                    safe_commit(db2); db2.close()
             else:
                 _log(_recluster_state, f"#{aid} ➕ 创建新事件")
                 from datetime import datetime as _dt
                 now = _dt.now().isoformat(timespec='seconds')
                 db2 = _conn()
-                cur = db2.execute("INSERT INTO events (title, first_seen, last_seen, status) VALUES (?,?,?,'active')", (art_title[:80], now[:10], now[:10]))
+                cur = db2.execute("INSERT INTO events (title, first_seen, last_seen, status) VALUES (?,?,?,'active')",
+                                 (art_title[:80], now[:10], now[:10]))
                 db2.execute("INSERT INTO article_events (article_id, event_id) VALUES (?,?)", (aid, cur.lastrowid))
                 safe_commit(db2); db2.close()
             _recluster_state["done"] += 1
-            time.sleep(5) if idx < len(unlinked) else None
+            time.sleep(0.1)  # 速率限制由 RateLimiter 统一管理
 
         for aid, art_title in retry_queue:
             _recluster_state["current"] = f"#{aid} {art_title[:50]}"
             _log(_recluster_state, f"#{aid} 🔄 重试聚类...")
-            best_id, best_conf = None, 0
             try:
-                for evt_id, evt_title in events:
-                    try:
-                        r = assess_event_similarity_ai(art_title, evt_title)
-                        if r and r.get("similar") and r.get("confidence", 0) > best_conf:
-                            best_conf = r["confidence"]; best_id = evt_id
-                    except Exception:
-                        pass
-                if best_id and best_conf > 0.5:
+                scored_events = [(title_similarity(art_title, etitle), eid, etitle)
+                                 for eid, etitle in events]
+                scored_events.sort(key=lambda x: x[0], reverse=True)
+                candidates = [(eid, etitle) for _, eid, etitle in scored_events[:MAX_CANDIDATES]]
+                r = match_article_to_events_ai(art_title, candidates)
+                if r and r.get("event_id") and r.get("confidence", 0) > 0.5 and any(eid == r["event_id"] for eid, _ in events):
                     db2 = _conn()
-                    db2.execute("INSERT OR IGNORE INTO article_events (article_id, event_id, relevance) VALUES (?, ?, ?)", (aid, best_id, round(best_conf, 2)))
-                    db2.execute("UPDATE events SET article_count=article_count+1 WHERE id=?", (best_id,))
+                    db2.execute("INSERT OR IGNORE INTO article_events (article_id, event_id, relevance) VALUES (?, ?, ?)",
+                               (aid, r["event_id"], round(r["confidence"], 2)))
+                    db2.execute("UPDATE events SET article_count=article_count+1 WHERE id=?", (r["event_id"],))
                     safe_commit(db2); db2.close()
-                    _log(_recluster_state, f"#{aid} ✅ -> 事件#{best_id} (置信度 {best_conf:.2f})")
+                    _log(_recluster_state, f"#{aid} ✅ -> 事件#{r['event_id']} (置信度 {r['confidence']:.2f})")
                 else:
                     _log(_recluster_state, f"#{aid} ➕ 创建新事件")
                     from datetime import datetime as _dt
                     now = _dt.now().isoformat(timespec='seconds')
                     db2 = _conn()
-                    cur = db2.execute("INSERT INTO events (title, first_seen, last_seen, status) VALUES (?,?,?,'active')", (art_title[:80], now[:10], now[:10]))
+                    cur = db2.execute("INSERT INTO events (title, first_seen, last_seen, status) VALUES (?,?,?,'active')",
+                                     (art_title[:80], now[:10], now[:10]))
                     db2.execute("INSERT INTO article_events (article_id, event_id) VALUES (?,?)", (aid, cur.lastrowid))
                     safe_commit(db2); db2.close()
             except Exception as e:
@@ -936,7 +956,7 @@ def _batch_ai_summarize_events():
             else:
                 _log(_evt_sum_state, f"#{evt_id} ⚠️ AI 返回空"); _evt_sum_state["failed"] += 1
             _evt_sum_state["done"] += 1
-            time.sleep(5) if idx < len(events) else None
+            time.sleep(0.1) if idx < len(events) else None  # 速率限制由 RateLimiter 统一管理
 
         for evt_id in retry_queue:
             _evt_sum_state["current"] = f"事件#{evt_id}"
@@ -1003,6 +1023,12 @@ def _batch_ai_filter():
             _filter_state["current"] = f"批次 {i // BATCH + 1} ({len(batch)} 篇)"
             batch_ids = filter_batch(batch)
 
+            if batch_ids is None:
+                # API 调用失败 — 保持 ai_filtered=0，等待下次重试
+                _log(_filter_state, f"⚠️ 批次 {i // BATCH + 1} API 失败，跳过，保持待筛选状态")
+                time.sleep(1.0)
+                continue
+
             db2 = _conn()
             for aid, title, source in batch:
                 if aid in batch_ids:
@@ -1017,7 +1043,7 @@ def _batch_ai_filter():
             approved = _filter_state["done"] - _filter_state["failed"]
             rejected = _filter_state["failed"]
             _log(_filter_state, f"[{_filter_state['done']}/{len(rows)}] 通过={approved} 拒绝={rejected}")
-            time.sleep(0.5)
+            time.sleep(0.1)  # 速率限制由 RateLimiter 统一管理
 
     except Exception as e:
         logger.error(f"batch-ai-filter: {e}")

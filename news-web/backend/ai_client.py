@@ -106,6 +106,12 @@ def chat(
     response_format: dict[str, Any] | None = None,
 ) -> str:
     """发送单轮聊天请求并返回助手文本。"""
+    from utils.rate_limiter import ai_rate_limiter as _rl
+
+    # 估算 token 消耗（输入 + 输出上限）
+    estimated = _rl.estimate_tokens(prompt + system_prompt) + max_tokens
+    _rl.wait_if_needed(estimated)
+
     client = get_client()
     resp = client.chat.completions.create(
         **_request_options(
@@ -120,6 +126,14 @@ def chat(
             response_format=response_format,
         )
     )
+    # 从响应中记录真实 token 消耗
+    try:
+        usage = resp.usage
+        actual = (usage.prompt_tokens or 0) + (usage.completion_tokens or 0)
+        _rl.record(actual)
+    except Exception:
+        _rl.record(estimated)
+
     return resp.choices[0].message.content or ""
 
 
@@ -146,6 +160,11 @@ def _ai_json(
     if response_format is None and config.ai_json_response_format:
         response_format = {"type": "json_object"}
     try:
+        from utils.rate_limiter import ai_rate_limiter as _rl
+
+        estimated = _rl.estimate_tokens(prompt + system_prompt) + max_tokens
+        _rl.wait_if_needed(estimated)
+
         client = get_client()
         resp = client.chat.completions.create(
             **_request_options(
@@ -160,6 +179,14 @@ def _ai_json(
                 response_format=response_format,
             )
         )
+        # 记录真实 token 消耗
+        try:
+            usage = resp.usage
+            actual = (usage.prompt_tokens or 0) + (usage.completion_tokens or 0)
+            _rl.record(actual)
+        except Exception:
+            _rl.record(estimated)
+
         raw = (resp.choices[0].message.content or "").strip()
         return json.loads(_strip_json(raw))
     except Exception:
@@ -317,6 +344,39 @@ def assess_event_similarity_ai(title1: str, title2: str, kw1: str = "", kw2: str
         temperature=0.05,
     )
     if isinstance(result, dict) and "similar" in result:
+        return result
+    return None
+
+
+def match_article_to_events_ai(article_title: str, events: list[tuple[int, str]]) -> dict | None:
+    """将一篇文章与多个候选事件比对，返回最佳匹配。
+
+    Args:
+        article_title: 文章标题
+        events: [(event_id, event_title), ...] 候选事件列表（建议 ≤50）
+
+    Returns:
+        {'event_id': int|None, 'confidence': float, 'reason': str} 或 None（API 失败）
+    """
+    if not events:
+        return {'event_id': None, 'confidence': 0.0, 'reason': '无候选事件'}
+
+    events_text = "\n".join(f"[#{eid}] {etitle}" for eid, etitle in events)
+    result = _ai_json(
+        _with_deep_thinking(
+            f"文章标题：{article_title}\n\n"
+            f"候选事件列表：\n{events_text}\n\n"
+            f"请判断这篇文章最可能属于哪个事件（如有匹配的话）。"
+            f"输出 JSON：{{"
+            f'"event_id":最匹配的事件ID或null（无匹配时）,'
+            f'"confidence":0.0-1.0（置信度）,'
+            f'"reason":"20字以内理由（可选）"}}'
+        ),
+        "你是新闻事件聚类专家。判断文章是否属于已有事件，只输出 JSON。",
+        max_tokens=512,
+        temperature=0.05,
+    )
+    if isinstance(result, dict) and "event_id" in result:
         return result
     return None
 

@@ -14,7 +14,7 @@
   hot_reports/daily_report_{date}.json   — 全平台数据
   hot_reports/dailyhot_api_{date}.json   — 兼容子集（无头条，匹配 collect_data.py 解析逻辑）
 """
-import sys, os, json, time, urllib.request, urllib.error, re
+import sys, os, json, time, urllib.request, urllib.error, re, logging, threading
 from datetime import datetime
 
 # 确保 Windows 控制台输出 UTF-8
@@ -25,6 +25,8 @@ except Exception:
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPORTS_DIR = os.path.join(SCRIPT_DIR, 'hot_reports')
+
+logger = logging.getLogger(__name__)
 
 # ── 境外代理 — 如已配置代理则启用 ──────────────────────
 try:
@@ -58,8 +60,20 @@ def _fetch_json(url: str, extra_headers: dict = None, timeout: int = TIMEOUT) ->
         req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read().decode('utf-8', errors='replace')
-        return json.loads(raw) if raw else {}
-    except Exception:
+        if not raw:
+            return {}
+        return json.loads(raw)
+    except urllib.error.HTTPError as e:
+        logger.warning(f"[platform] HTTP {e.code} from {url}: {e.reason}")
+        return {}
+    except urllib.error.URLError as e:
+        logger.warning(f"[platform] 网络错误 {url}: {e.reason}")
+        return {}
+    except json.JSONDecodeError as e:
+        logger.warning(f"[platform] JSON 解析失败 {url}: {e}")
+        return {}
+    except Exception as e:
+        logger.warning(f"[platform] 未知错误 {url}: {type(e).__name__}: {e}")
         return {}
 
 
@@ -276,25 +290,64 @@ def main():
     os.makedirs(REPORTS_DIR, exist_ok=True)
     date_tag = datetime.now().strftime('%Y-%m-%d')
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
+    process_pid = os.getpid()  # PID 防止并发运行时的文件竞态
 
     all_data = {}
     sources_summary = {}
 
-    for label, pid, fetcher in PLATFORMS:
+    # B站采集移到独立线程（风控重试不阻塞其他平台）
+    bilibili_result = {}
+
+    def _fetch_bilibili():
+        try:
+            items = fetch_bilibili()
+            bilibili_result['items'] = items
+            bilibili_result['error'] = None
+        except Exception as e:
+            bilibili_result['items'] = []
+            bilibili_result['error'] = str(e)
+
+    bili_thread = None
+
+    for label, platform_id, fetcher in PLATFORMS:
+        if platform_id == 'bilibili':
+            # B站：启动独立线程
+            print(f"📡 采集 {label}...", end=" ", flush=True)
+            bili_thread = threading.Thread(target=_fetch_bilibili, daemon=True)
+            bili_thread.start()
+            continue
+
         print(f"📡 采集 {label}...", end=" ", flush=True)
         try:
             items = fetcher()
-            all_data[pid] = items
-            sources_summary[pid] = len(items)
+            all_data[platform_id] = items
+            sources_summary[platform_id] = len(items)
             print(f"✅ {len(items)} 条")
         except Exception as e:
-            all_data[pid] = []
-            sources_summary[pid] = 0
+            all_data[platform_id] = []
+            sources_summary[platform_id] = 0
             print(f"❌ 失败: {e}")
         time.sleep(DELAY)
 
+    # 等待 B站结果（最多 30 秒）
+    if bili_thread:
+        bili_thread.join(timeout=30)
+        if bili_thread.is_alive():
+            print(f"⚠️ B站采集超时（30s），跳过")
+            all_data['bilibili'] = []
+            sources_summary['bilibili'] = 0
+        elif bilibili_result.get('error'):
+            print(f"❌ B站失败: {bilibili_result['error']}")
+            all_data['bilibili'] = []
+            sources_summary['bilibili'] = 0
+        else:
+            items = bilibili_result.get('items', [])
+            all_data['bilibili'] = items
+            sources_summary['bilibili'] = len(items)
+            print(f"✅ B站 {len(items)} 条（后台采集完成）")
+
     # ── 输出 daily_report_{date}.json (全平台) ──
-    report_file = os.path.join(REPORTS_DIR, f'daily_report_{date_tag}.json')
+    report_file = os.path.join(REPORTS_DIR, f'daily_report_{date_tag}_{process_pid}.json')
     report = {
         'date': timestamp,
         'sources': sources_summary,
@@ -310,7 +363,7 @@ def main():
         k: v for k, v in all_data.items()
         if k in ('zhihu', 'weibo', 'douyin', 'bilibili')
     }
-    api_file = os.path.join(REPORTS_DIR, f'dailyhot_api_{date_tag}.json')
+    api_file = os.path.join(REPORTS_DIR, f'dailyhot_api_{date_tag}_{process_pid}.json')
     api_report = {
         'date': timestamp,
         'data': dailyhot_data,

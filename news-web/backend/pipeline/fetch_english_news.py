@@ -11,9 +11,10 @@ import os
 import json
 import urllib.request
 import urllib.error
-import xml.etree.ElementTree as ET
 import time
 import re
+import logging
+import feedparser
 from datetime import datetime, timedelta
 
 # 确保 Windows 控制台输出 UTF-8
@@ -23,6 +24,8 @@ except Exception:
     pass
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+logger = logging.getLogger(__name__)
 
 # ── 境外代理 — 如已配置代理则启用 ──────────────────────
 try:
@@ -344,56 +347,43 @@ HEADERS = {
 }
 
 
-def parse_rss_regex(xml_text: str) -> list:
+def parse_feed(xml_text: str) -> list:
     """
-    解析 RSS XML，兼容多种格式：
-    - BBC/Reuters 风格: <title><![CDATA[Title]]></title>
-    - Ars Technica 风格: <title>Title</title>
-    - 36Kr 风格: <link><![CDATA[URL]]></link>
-    - Atom 风格: <link rel="alternate" href="URL"/>
+    使用 feedparser 解析 RSS/Atom XML，自动处理：
+    - RSS 2.0 / Atom 1.0 双格式
+    - CDATA 嵌套标签
+    - 命名空间前缀 (dc:creator, content:encoded 等)
     """
+    feed = feedparser.parse(xml_text)
     items = []
-    item_blocks = re.findall(r'<item>(.*?)</item>', xml_text, re.DOTALL | re.IGNORECASE)
+    for entry in feed.entries:
+        title = entry.get('title', '').strip()
+        if not title:
+            continue
 
-    for block in item_blocks:
-        # 提取 title（兼容 CDATA 和 plain text）
-        title_match = re.search(r'<title><!\[CDATA\[(.*?)\]\]></title>', block, re.DOTALL)
-        if not title_match:
-            title_match = re.search(r'<title>(.*?)</title>', block, re.DOTALL)
-        title = re.sub(r'<[^>]+>', '', title_match.group(1)).strip() if title_match else ''
+        # link: feedparser 统一为 entry.link（Atom）或 entry.link（RSS）
+        link = entry.get('link', '')
+        # 部分 Atom feed 的 link 是 dict 列表
+        if isinstance(link, list):
+            # 优先取 rel=alternate 链接
+            for l in link:
+                if isinstance(l, dict) and l.get('rel') == 'alternate':
+                    link = l.get('href', '')
+                    break
+            if isinstance(link, list):
+                link = link[0].get('href', '') if link and isinstance(link[0], dict) else str(link[0]) if link else ''
 
-        # 提取 link（兼容 CDATA / plain text / Atom href 属性）
-        link = ''
-        link_cdata = re.search(r'<link><!\[CDATA\[(.*?)\]\]></link>', block, re.DOTALL)
-        if link_cdata and link_cdata.group(1).strip():
-            link = link_cdata.group(1).strip()
-        if not link:
-            link_plain = re.search(r'<link>(.*?)</link>', block, re.DOTALL)
-            if link_plain and link_plain.group(1).strip():
-                link = re.sub(r'<[^>]+>', '', link_plain.group(1)).strip()
-        if not link:
-            link_attr = re.search(r'<link[^>]+href="([^"]+)"', block, re.DOTALL | re.IGNORECASE)
-            if link_attr:
-                link = link_attr.group(1).strip()
+        pub_date = entry.get('published', entry.get('updated', ''))
+        description = entry.get('summary', entry.get('description', ''))
+        # 去除 HTML 标签取前 300 字
+        description = re.sub(r'<[^>]+>', '', description).strip()[:300]
 
-        # 提取 pub_date
-        pub_match = re.search(r'<pubDate>(.*?)</pubDate>', block, re.DOTALL)
-        pub_date = pub_match.group(1).strip() if pub_match else ''
-
-        # 提取 description（兼容 CDATA）
-        desc_match = re.search(r'<description><!\[CDATA\[(.*?)\]\]></description>', block, re.DOTALL)
-        if not desc_match:
-            desc_match = re.search(r'<description>(.*?)</description>', block, re.DOTALL)
-        desc_raw = desc_match.group(1).strip() if desc_match else ''
-        description = re.sub(r'<[^>]+>', '', desc_raw).strip()[:300]
-
-        if title:
-            items.append({
-                'title': title,
-                'link': link,
-                'pub_date': pub_date,
-                'description': description,
-            })
+        items.append({
+            'title': title,
+            'link': link,
+            'pub_date': pub_date,
+            'description': description,
+        })
 
     return items
 
@@ -405,15 +395,21 @@ def fetch_feed(feed: dict) -> list:
         with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
             xml = resp.read().decode('utf-8', errors='ignore')
 
-        items = parse_rss_regex(xml)
+        items = parse_feed(xml)
         return [{**item, 'source': feed['name'], 'tag': feed['tag'],
                  'lang': feed.get('lang', 'en'), 'credible': feed['credible']}
                 for item in items]
     except urllib.error.HTTPError as e:
         if e.code == 404:
-            return []  # Reuters 等 feed 偶尔 404，静默跳过
+            logger.info(f"[RSS] {feed['name']} 返回 404，静默跳过")
+            return []
+        logger.warning(f"[RSS] {feed['name']} HTTP {e.code}: {e.reason}")
         return []
-    except Exception:
+    except urllib.error.URLError as e:
+        logger.warning(f"[RSS] {feed['name']} 网络错误: {e.reason}")
+        return []
+    except Exception as e:
+        logger.warning(f"[RSS] {feed['name']} 未知错误: {type(e).__name__}: {e}")
         return []
 
 
@@ -547,7 +543,8 @@ def fetch_all() -> list:
 
 
 def main():
-    output_file = os.path.join(SCRIPT_DIR, 'hot_reports', 'english_news.json')
+    pid = os.getpid()
+    output_file = os.path.join(SCRIPT_DIR, 'hot_reports', f'english_news_{pid}.json')
 
     print(f"🌍 开始获取英文热点...")
     all_items = fetch_all()

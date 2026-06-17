@@ -47,8 +47,13 @@ FILTER_PROMPT = """你是新闻筛选助手。根据以下标题列表，判断�
 例如：1,3,5,8"""
 
 
-def filter_batch(articles: list) -> set:
-    """对一批文章标题调用 AI 筛选，返回保留的 ID 集合。"""
+def filter_batch(articles: list) -> set | None:
+    """对一批文章标题调用 AI 筛选，返回保留的 ID 集合。
+
+    Returns:
+        set: AI 判定应保留的文章 ID
+        None: API 调用失败（调用方应保持原有 ai_filtered 状态，等待重试）
+    """
     lines = []
     for aid, title, source in articles:
         lines.append(f"[{aid}] [{source}] {title}")
@@ -63,8 +68,8 @@ def filter_batch(articles: list) -> set:
                 ids.add(int(part))
         return ids
     except Exception as e:
-        print(f"  AI 筛选失败: {e}")
-        return set()
+        print(f"  ⚠️ AI 筛选 API 调用失败（{type(e).__name__}: {e}），跳过本批，保持待筛选状态")
+        return None
 
 
 def run_ai_filter(db_path: str = None):
@@ -101,6 +106,11 @@ def run_ai_filter(db_path: str = None):
     for i in range(0, len(rows), BATCH_SIZE):
         batch = rows[i:i + BATCH_SIZE]
         batch_ids = filter_batch(batch)
+
+        if batch_ids is None:
+            # API 调用失败 — 保持 ai_filtered=0，等待下次重试，不标记为拒绝
+            print(f"  ⚠️ 批次 {i // BATCH_SIZE + 1} API 失败，跳过，保持待筛选状态")
+            continue
 
         for aid, title, source in batch:
             if aid in batch_ids:
