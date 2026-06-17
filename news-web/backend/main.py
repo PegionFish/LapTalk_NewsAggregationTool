@@ -8,7 +8,7 @@ from fastapi import HTTPException
 
 from config import config
 from db.migrations import ensure_schema
-from scheduler import start_scheduler, stop_scheduler, trigger_pipeline_manual, get_pipeline_status
+from scheduler import start_scheduler, stop_scheduler, trigger_pipeline_manual, trigger_ai_full_manual, get_pipeline_status
 from utils.task_state import task_state
 
 # ── Logging ──────────────────────────────────────────────
@@ -63,6 +63,12 @@ async def manual_pipeline_run():
     """Manually trigger the news pipeline."""
     await trigger_pipeline_manual()
     return {"status": "pipeline_started"}
+
+@app.post("/api/pipeline/ai-full/run")
+async def manual_ai_full_run():
+    """Manually trigger the AI full processing pipeline."""
+    await trigger_ai_full_manual()
+    return {"status": "ai_full_started"}
 
 @app.get("/api/pipeline/status")
 def pipeline_status():

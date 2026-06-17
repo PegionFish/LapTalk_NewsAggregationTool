@@ -482,6 +482,10 @@ class ScheduleUpdate(BaseModel):
     enabled: bool | None = None
     hours: list[int] | None = None
     minutes: list[int] | None = None
+    # AI 全流程调度
+    ai_enabled: bool | None = None
+    ai_hours: list[int] | None = None
+    ai_minutes: list[int] | None = None
 
 
 @router.put("/schedule")
@@ -507,6 +511,27 @@ def update_schedule(body: ScheduleUpdate):
 
     if body.enabled is not None:
         config.pipeline_schedule_enabled = body.enabled
+
+    if body.ai_enabled is not None:
+        config.ai_cron_enabled = body.ai_enabled
+
+    if body.ai_hours is not None:
+        if not isinstance(body.ai_hours, list) or len(body.ai_hours) == 0:
+            raise HTTPException(400, "ai_hours 必须是非空整数列表")
+        if len(body.ai_hours) > 48:
+            raise HTTPException(400, "最多支持 48 个 AI 定时时间")
+        for h in body.ai_hours:
+            if not isinstance(h, int) or h < 0 or h > 23:
+                raise HTTPException(400, f"AI 小时值无效: {h}（应为 0-23）")
+        config.ai_cron_hours = body.ai_hours
+
+    if body.ai_minutes is not None:
+        if not isinstance(body.ai_minutes, list):
+            raise HTTPException(400, "ai_minutes 必须是整数列表")
+        for m in body.ai_minutes:
+            if not isinstance(m, int) or m < 0 or m > 59:
+                raise HTTPException(400, f"AI 分钟值无效: {m}（应为 0-59）")
+        config.ai_cron_minutes = body.ai_minutes
 
     # 重载调度器
     try:

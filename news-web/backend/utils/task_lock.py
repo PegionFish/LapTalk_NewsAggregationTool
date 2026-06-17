@@ -1,11 +1,12 @@
 """
-全局任务锁管理器 — 确保同一时间只能运行一个 AI 任务，但抓取可并行。
+全局任务锁管理器 — AI 处理与数据采集独立调度，互不阻塞。
 
-锁级别:
-  full_level=2 (互斥一切): ai_full
-  full_level=1 (互斥 AI 任务): pipeline, translate, analyze, keywords, classify, score,
-                                recluster, summarize_events, build_chains, rank_events, ai_filter
-  full_level=0 (仅互斥同类，可与 AI 并行): cache_fetch, batch_retry, hotlist_fetch, update
+锁分组:
+  AI 组 (level >= 1): 所有 AI 任务互斥 — 同一时刻只有一个 AI 任务运行
+    ai_full, translate, analyze, keywords, classify, score,
+    recluster, summarize_events, build_chains, rank_events, ai_filter
+  数据组 (level == 0): 每类仅互斥自身 — 不同数据任务可共存，可与 AI 并行
+    pipeline, cache_fetch, batch_retry, hotlist_fetch, update
 """
 import threading, logging
 from datetime import datetime
@@ -13,12 +14,10 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 # 任务类型 → 锁级别
-# Level 0: 抓取类，不依赖 AI，可与 AI 任务并行
-# Level 1: AI 类，互斥其他 AI 任务，但不阻塞抓取
-# Level 2: 全量 AI，互斥一切
+# AI 组 (>=1): 互斥 — 同一时刻只有一个 AI 任务运行
+# 数据组 (==0): 仅互斥同类型 — 数据采集与 AI 处理互不阻塞
 TASK_LEVELS = {
-    'ai_full':         2,  # 一键全量 AI
-    'pipeline':        1,  # 全流程（含 AI 步骤，与独立 AI 任务互斥）
+    'ai_full':         2,  # 一键全量 AI（阻塞其他 AI，不阻塞数据采集）
     'translate':       1,
     'analyze':         1,
     'keywords':        1,
@@ -29,6 +28,7 @@ TASK_LEVELS = {
     'build_chains':    1,
     'rank_events':     1,
     'ai_filter':       1,
+    'pipeline':        0,  # 数据采集管道（不阻塞 AI，仅互斥自身）
     'cache_fetch':     0,  # 抓取类：可与 AI 并行
     'batch_retry':     0,  # 抓取类：可与 AI 并行
     'hotlist_fetch':   0,  # 抓取类：可与 AI 并行
@@ -57,15 +57,13 @@ class TaskLockManager:
             # 检查是否有冲突的活跃任务
             for active_type, info in self._active.items():
                 active_level = TASK_LEVELS.get(active_type, 0)
-                # level 2 互斥一切
-                if level == 2 or active_level == 2:
-                    return False, f"Task '{active_type}' is running since {info['started_at']}"
-                # level 1 互斥其他 level 1+
+                # AI 组 (level >= 1) 互斥所有 AI 任务
                 if level >= 1 and active_level >= 1:
-                    return False, f"Task '{active_type}' is running since {info['started_at']}"
-                # level 0 互斥同类型
+                    return False, f"AI task '{active_type}' is running since {info['started_at']}"
+                # 数据组 (level == 0) 仅互斥同类型任务
                 if level == 0 and active_level == 0 and task_type == active_type:
-                    return False, f"Task '{task_type}' is already running"
+                    return False, f"Data task '{task_type}' is already running since {info['started_at']}"
+                # AI ↔ 数据：互不阻塞，放行
 
             # 获取锁
             self._active[task_type] = {
@@ -90,11 +88,11 @@ class TaskLockManager:
             level = TASK_LEVELS.get(task_type, 0)
             for active_type in self._active:
                 active_level = TASK_LEVELS.get(active_type, 0)
+                # AI 组互斥
                 if level >= 1 and active_level >= 1:
                     return True
-                if level == 0 and task_type == active_type:
-                    return True
-                if level == 2 or active_level == 2:
+                # 数据组仅互斥同类型
+                if level == 0 and active_level == 0 and task_type == active_type:
                     return True
             return False
 

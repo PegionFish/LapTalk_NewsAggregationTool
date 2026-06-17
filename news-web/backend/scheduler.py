@@ -10,6 +10,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from config import config
 from pipeline.run_all import run_pipeline
+from api.pipeline import _batch_ai_full
 from utils.task_lock import task_lock
 from utils.task_state import task_state
 
@@ -27,6 +28,13 @@ _pipeline_state = {
     'run_type': 'scheduled',
 }
 
+# ── AI 全流程状态追踪 ─────────────────────────────
+_ai_full_state = {
+    'running': False,
+    'last_run': None,
+    'last_status': None,
+}
+
 # 调度器日志（内存环形缓冲）
 _schedule_log: list[str] = []
 def _add_schedule_log(msg: str):
@@ -40,21 +48,33 @@ def get_pipeline_status() -> dict:
 
 
 def get_schedule_info() -> dict:
-    """返回当前调度配置和状态。"""
+    """返回当前调度配置和状态（含 AI 全流程）。"""
     hours = config.pipeline_cron_hours
     minutes = config.pipeline_cron_minutes
-    # 对齐长度：分钟数不够时补 0
     while len(minutes) < len(hours):
         minutes.append(0)
     schedule = []
     for i, h in enumerate(hours[:len(minutes)]):
         schedule.append({'hour': h, 'minute': minutes[i]})
+
+    ai_hours = config.ai_cron_hours
+    ai_minutes = config.ai_cron_minutes
+    while len(ai_minutes) < len(ai_hours):
+        ai_minutes.append(0)
+    ai_schedule = []
+    for i, h in enumerate(ai_hours[:len(ai_minutes)]):
+        ai_schedule.append({'hour': h, 'minute': ai_minutes[i]})
+
     return {
         'enabled': config.pipeline_schedule_enabled,
         'schedule': schedule,
+        'ai_enabled': config.ai_cron_enabled,
+        'ai_schedule': ai_schedule,
         'scheduler_running': scheduler.running,
         'last_run': _pipeline_state.get('last_run'),
         'last_status': _pipeline_state.get('last_status'),
+        'ai_last_run': _ai_full_state.get('last_run'),
+        'ai_last_status': _ai_full_state.get('last_status'),
     }
 
 
@@ -67,6 +87,18 @@ def _build_cron_triggers() -> list[CronTrigger]:
     """根据配置生成 cron triggers。"""
     hours = config.pipeline_cron_hours
     minutes = config.pipeline_cron_minutes
+    while len(minutes) < len(hours):
+        minutes.append(0)
+    triggers = []
+    for i, h in enumerate(hours[:len(minutes)]):
+        triggers.append(CronTrigger(hour=h, minute=minutes[i]))
+    return triggers
+
+
+def _build_ai_cron_triggers() -> list[CronTrigger]:
+    """根据配置生成 AI 全流程 cron triggers。"""
+    hours = config.ai_cron_hours
+    minutes = config.ai_cron_minutes
     while len(minutes) < len(hours):
         minutes.append(0)
     triggers = []
@@ -110,26 +142,47 @@ async def _backup_db():
 
 
 def start_scheduler():
-    """Start scheduler if enabled in config."""
-    if not config.pipeline_schedule_enabled:
-        _add_schedule_log("调度器已禁用（配置 pipeline_schedule_enabled=false）")
-        logger.info("Pipeline scheduler is disabled in config")
+    """Start scheduler if any schedule is enabled in config."""
+    pipeline_enabled = config.pipeline_schedule_enabled
+    ai_enabled = config.ai_cron_enabled
+
+    if not pipeline_enabled and not ai_enabled:
+        _add_schedule_log("调度器已禁用（管道和 AI 定时均未启用）")
+        logger.info("Scheduler is fully disabled in config")
         return
 
     if not scheduler.running:
-        triggers = _build_cron_triggers()
-        for trigger in triggers:
-            scheduler.add_job(_run_pipeline_job, trigger)
+        # 数据采集管道
+        if pipeline_enabled:
+            triggers = _build_cron_triggers()
+            for trigger in triggers:
+                scheduler.add_job(_run_pipeline_job, trigger)
+        # AI 全流程
+        if ai_enabled:
+            ai_triggers = _build_ai_cron_triggers()
+            for trigger in ai_triggers:
+                scheduler.add_job(_run_ai_full_job, trigger)
         # Daily backup at 03:00
         scheduler.add_job(_backup_db, CronTrigger(hour=3, minute=0))
         scheduler.start()
-        hours = config.pipeline_cron_hours
-        minutes = config.pipeline_cron_minutes
-        while len(minutes) < len(hours):
-            minutes.append(0)
-        time_strs = [f"{h:02d}:{minutes[i]:02d}" for i, h in enumerate(hours[:len(minutes)])]
-        _add_schedule_log("调度器启动: 每天 " + ", ".join(time_strs) + " 运行")
-        logger.info(f"Pipeline scheduler started: daily {', '.join(time_strs)}, backup at 03:00")
+
+        parts = []
+        if pipeline_enabled:
+            hours = config.pipeline_cron_hours
+            minutes = config.pipeline_cron_minutes
+            while len(minutes) < len(hours):
+                minutes.append(0)
+            time_strs = [f"{h:02d}:{minutes[i]:02d}" for i, h in enumerate(hours[:len(minutes)])]
+            parts.append("管道 " + ", ".join(time_strs))
+        if ai_enabled:
+            ai_hours = config.ai_cron_hours
+            ai_minutes = config.ai_cron_minutes
+            while len(ai_minutes) < len(ai_hours):
+                ai_minutes.append(0)
+            ai_strs = [f"{h:02d}:{ai_minutes[i]:02d}" for i, h in enumerate(ai_hours[:len(ai_minutes)])]
+            parts.append("AI 全流程 " + ", ".join(ai_strs))
+        _add_schedule_log("调度器启动: " + " / ".join(parts))
+        logger.info(f"Scheduler started: {' / '.join(parts)}, backup at 03:00")
 
 
 def stop_scheduler():
@@ -151,24 +204,42 @@ def reload_scheduler():
     # 重新创建 scheduler 实例（APScheduler shutdown 后需重新实例化）
     scheduler = AsyncIOScheduler()
 
-    if not config.pipeline_schedule_enabled:
-        _add_schedule_log("调度器重载: 已禁用")
-        logger.info("Scheduler reload: disabled in config")
+    pipeline_enabled = config.pipeline_schedule_enabled
+    ai_enabled = config.ai_cron_enabled
+
+    if not pipeline_enabled and not ai_enabled:
+        _add_schedule_log("调度器重载: 已禁用（管道和 AI 均未启用）")
+        logger.info("Scheduler reload: fully disabled in config")
         return
 
-    triggers = _build_cron_triggers()
-    for trigger in triggers:
-        scheduler.add_job(_run_pipeline_job, trigger)
+    if pipeline_enabled:
+        triggers = _build_cron_triggers()
+        for trigger in triggers:
+            scheduler.add_job(_run_pipeline_job, trigger)
+    if ai_enabled:
+        ai_triggers = _build_ai_cron_triggers()
+        for trigger in ai_triggers:
+            scheduler.add_job(_run_ai_full_job, trigger)
     scheduler.add_job(_backup_db, CronTrigger(hour=3, minute=0))
     scheduler.start()
 
-    hours = config.pipeline_cron_hours
-    minutes = config.pipeline_cron_minutes
-    while len(minutes) < len(hours):
-        minutes.append(0)
-    time_strs = [f"{h:02d}:{minutes[i]:02d}" for i, h in enumerate(hours[:len(minutes)])]
-    _add_schedule_log("调度器重载: 每天 " + ", ".join(time_strs) + " 运行")
-    logger.info(f"Scheduler reloaded: daily {', '.join(time_strs)}")
+    parts = []
+    if pipeline_enabled:
+        hours = config.pipeline_cron_hours
+        minutes = config.pipeline_cron_minutes
+        while len(minutes) < len(hours):
+            minutes.append(0)
+        time_strs = [f"{h:02d}:{minutes[i]:02d}" for i, h in enumerate(hours[:len(minutes)])]
+        parts.append("管道 " + ", ".join(time_strs))
+    if ai_enabled:
+        ai_hours = config.ai_cron_hours
+        ai_minutes = config.ai_cron_minutes
+        while len(ai_minutes) < len(ai_hours):
+            ai_minutes.append(0)
+        ai_strs = [f"{h:02d}:{ai_minutes[i]:02d}" for i, h in enumerate(ai_hours[:len(ai_minutes)])]
+        parts.append("AI 全流程 " + ", ".join(ai_strs))
+    _add_schedule_log("调度器重载: " + " / ".join(parts))
+    logger.info(f"Scheduler reloaded: {' / '.join(parts)}")
 
 
 async def trigger_pipeline_manual():
@@ -228,3 +299,53 @@ def _run_pipeline_job_sync():
         _pipeline_state['run_type'] = 'scheduled'
         _pipeline_state['last_run'] = datetime.now().isoformat(timespec='seconds')
         task_lock.release('pipeline')
+
+
+# ══════════════════════════════════════════════════════════
+# AI 全流程定时任务
+# ══════════════════════════════════════════════════════════
+
+async def _run_ai_full_job():
+    """Wrapper that runs AI full in thread to avoid blocking event loop."""
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _run_ai_full_job_sync)
+
+
+def _run_ai_full_job_sync():
+    """同步版本的 AI 全流程执行（在线程池中运行）。"""
+    global _ai_full_state
+
+    ok, reason = task_lock.acquire('ai_full')
+    if not ok:
+        _add_schedule_log(f"AI 全流程启动失败: {reason}")
+        logger.warning(f"AI full skipped: {reason}")
+        return
+
+    _ai_full_state.update(running=True)
+    _add_schedule_log("AI 全流程启动（翻译→分析→关键词→分类→评分→聚类→摘要→排序→链）")
+    logger.info("AI full pipeline starting...")
+    try:
+        _batch_ai_full()
+        # _batch_ai_full() 在其 finally 块中调用 _unlock('ai_full')
+        _ai_full_state['last_status'] = 'success'
+        _add_schedule_log("AI 全流程执行成功")
+        logger.info("AI full pipeline completed successfully")
+    except Exception as e:
+        _ai_full_state['last_status'] = 'error'
+        _add_schedule_log(f"AI 全流程异常: {str(e)[:100]}")
+        logger.exception(f"AI full error: {e}")
+        # 异常时确保锁释放（正常路径由 _batch_ai_full 自行释放）
+        task_lock.release('ai_full')
+    finally:
+        _ai_full_state['running'] = False
+        _ai_full_state['last_run'] = datetime.now().isoformat(timespec='seconds')
+
+
+async def trigger_ai_full_manual():
+    """Manually trigger AI full processing (via API)."""
+    global _ai_full_state
+    _add_schedule_log("手动触发 AI 全流程")
+    import concurrent.futures
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, _run_ai_full_job_sync)
+    return {'status': 'ai_full_started'}

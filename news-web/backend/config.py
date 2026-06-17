@@ -14,8 +14,11 @@ DEFAULT_CONFIG = {
     'ai_deep_thinking_max_tokens': 8192,
     'ai_json_response_format': True,
     'pipeline_schedule_enabled': True,
-    'pipeline_cron_hours': [10, 17],      # 每天运行的小时数（0-23）
+    'pipeline_cron_hours': [10, 17],      # 数据采集每天运行的小时数（0-23）
     'pipeline_cron_minutes': [0, 0],      # 对应每个小时的分钟数
+    'ai_cron_enabled': True,              # AI 全流程定时开关
+    'ai_cron_hours': [15, 22],            # AI 全流程每天运行的小时数（0-23）
+    'ai_cron_minutes': [0, 0],            # 对应每个小时的分钟数
     # 翻译 API — 独立配置，默认指向硅基流动 DeepSeek V3.2
     'translation_enabled': False,
     'translation_base_url': 'https://api.siliconflow.cn/v1',
@@ -175,6 +178,41 @@ class AppConfig:
         self._data['pipeline_cron_minutes'] = val
         self.save()
 
+    # ── AI 全流程定时调度 ──────────────────────────────────
+
+    @property
+    def ai_cron_enabled(self) -> bool:
+        return self._data.get('ai_cron_enabled', True)
+
+    @ai_cron_enabled.setter
+    def ai_cron_enabled(self, val: bool):
+        self._data['ai_cron_enabled'] = val
+        self.save()
+
+    @property
+    def ai_cron_hours(self) -> list[int]:
+        hours = self._data.get('ai_cron_hours', [15, 22])
+        if not isinstance(hours, list):
+            hours = [15, 22]
+        return [max(0, min(23, int(h))) for h in hours if isinstance(h, (int, float))]
+
+    @ai_cron_hours.setter
+    def ai_cron_hours(self, val: list[int]):
+        self._data['ai_cron_hours'] = val
+        self.save()
+
+    @property
+    def ai_cron_minutes(self) -> list[int]:
+        minutes = self._data.get('ai_cron_minutes', [0, 0])
+        if not isinstance(minutes, list):
+            minutes = [0, 0]
+        return [max(0, min(59, int(m))) for m in minutes if isinstance(m, (int, float))]
+
+    @ai_cron_minutes.setter
+    def ai_cron_minutes(self, val: list[int]):
+        self._data['ai_cron_minutes'] = val
+        self.save()
+
     # ── 翻译 API 配置 ──────────────────────────────────────
     @property
     def translation_enabled(self) -> bool:
@@ -283,6 +321,8 @@ class AppConfig:
             d['translation_api_key'] = '***'
         d['pipeline_cron_hours'] = self.pipeline_cron_hours
         d['pipeline_cron_minutes'] = self.pipeline_cron_minutes
+        d['ai_cron_hours'] = self.ai_cron_hours
+        d['ai_cron_minutes'] = self.ai_cron_minutes
         return d
 
 config = AppConfig()
