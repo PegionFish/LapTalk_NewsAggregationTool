@@ -155,7 +155,7 @@ def test_analyze_article_sends_full_text(monkeypatch):
 
 
 def test_chat_sends_deep_thinking_params(monkeypatch):
-    """AI 请求应默认启用 SiliconFlow 深度思考与 JSON 结构约束。"""
+    """chat() 应默认启用深度思考，但不强制 JSON 格式（JSON 格式仅 _ai_json() 使用）。"""
     captured = {}
 
     class FakeCompletions:
@@ -176,7 +176,7 @@ def test_chat_sends_deep_thinking_params(monkeypatch):
     assert result == "OK"
     assert captured["extra_body"]["enable_thinking"] is True
     assert captured["extra_body"]["thinking_budget"] == 32768
-    assert captured["response_format"] == {"type": "json_object"}
+    assert "response_format" not in captured  # chat() 不再强制 JSON 格式
 
 
 def test_ai_json_strips_markdown_and_uses_json_object(monkeypatch):

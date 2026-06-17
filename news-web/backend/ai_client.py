@@ -88,9 +88,10 @@ def _request_options(
     if extra_body:
         options["extra_body"] = extra_body
 
-    fmt = _json_response_format(response_format)
-    if fmt is not None:
-        options["response_format"] = fmt
+    # 仅当调用方显式传入 response_format 时才施加 JSON 格式；
+    # chat() 不传此参数，回归纯文本输出，避免分析摘要等被强制 JSON 化。
+    if response_format is not None:
+        options["response_format"] = response_format
 
     return options
 
@@ -141,6 +142,9 @@ def _ai_json(
     response_format: dict[str, Any] | None = None,
 ) -> dict | list | None:
     """调用 AI 并解析 JSON 返回；失败时返回 None。"""
+    # 若未显式传入格式且全局开关开启，自动启用 JSON object 输出。
+    if response_format is None and config.ai_json_response_format:
+        response_format = {"type": "json_object"}
     try:
         client = get_client()
         resp = client.chat.completions.create(

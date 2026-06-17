@@ -7,6 +7,71 @@ import ArticlePane from '../components/ArticlePane';
 import CommentPanel from '../components/CommentPanel';
 import { decodeHTMLEntities } from '../utils/html';
 
+/** AI 分析摘要的分区配置：emoji 图标 + 中文标签 */
+const ANALYSIS_SECTIONS: { key: string; emoji: string; label: string }[] = [
+  { key: '要点', emoji: '📌', label: '要点' },
+  { key: '背景', emoji: '🔬', label: '背景' },
+  { key: '影响', emoji: '📊', label: '影响' },
+  { key: '关键实体', emoji: '🏷️', label: '关键实体' },
+  { key: '不确定性', emoji: '⚠️', label: '不确定性' },
+];
+
+/** 尝试将 AI 摘要解析为结构化分区；失败时返回 null，由调用方回退到纯文本渲染。 */
+function parseAiSummary(raw: string): { sectionKey?: string; content: string }[] | null {
+  if (!raw || !raw.trim()) return null;
+  const trimmed = raw.trim();
+
+  // 直接匹配 JSON 对象
+  if (/^\{/.test(trimmed)) {
+    try {
+      const obj = JSON.parse(trimmed);
+      // 若顶层仅有 analysis 键，展开其值
+      const inner = obj.analysis ?? obj;
+      if (typeof inner === 'object' && !Array.isArray(inner)) {
+        const sections: { sectionKey?: string; content: string }[] = [];
+        for (const s of ANALYSIS_SECTIONS) {
+          const val = inner[s.key] ?? inner[s.emoji + s.label];
+          if (val) {
+            const content = Array.isArray(val) ? val.map(String).join('\n') : String(val);
+            if (content.trim()) sections.push({ sectionKey: s.key, content: content.trim() });
+          }
+        }
+        // 若匹配到了预定义分区，直接返回
+        if (sections.length > 0) return sections;
+        // 兜底：展平未知 JSON key
+        for (const [k, v] of Object.entries(inner)) {
+          if (k === 'analysis' || ANALYSIS_SECTIONS.some(s => s.key === k)) continue;
+          const content = Array.isArray(v) ? v.map(String).join('\n') : String(v ?? '');
+          if (content.trim()) sections.push({ content: content.trim() });
+        }
+        return sections.length > 0 ? sections : null;
+      }
+      // 数组
+      if (Array.isArray(inner)) {
+        return inner.filter(Boolean).map((item: unknown) => ({
+          content: String(item).trim(),
+        }));
+      }
+    } catch {
+      // JSON 解析失败 → 回退纯文本
+    }
+  }
+
+  // JSON 数组
+  if (/^\[/.test(trimmed)) {
+    try {
+      const arr = JSON.parse(trimmed);
+      if (Array.isArray(arr)) {
+        return arr.filter(Boolean).map((item: unknown) => ({
+          content: typeof item === 'string' ? item : JSON.stringify(item),
+        }));
+      }
+    } catch { /* fall through */ }
+  }
+
+  return null; // 无法解析为结构化数据，保持纯文本渲染
+}
+
 const PER_PAGE = 50;
 
 // 主题分类 Tab 配置（顺序即展示顺序）
@@ -587,7 +652,6 @@ export default function ArticleSearch() {
               fontSize: 12,
               lineHeight: 1.8,
               color: 'var(--text-secondary)',
-              whiteSpace: 'pre-wrap',
               flex: 1,
               overflow: 'auto',
               background: 'var(--bg-card)',
@@ -595,7 +659,27 @@ export default function ArticleSearch() {
               padding: 14,
               border: '1px solid var(--border)',
             }}>
-              {aiAnalysis}
+              {(() => {
+                const sections = parseAiSummary(aiAnalysis);
+                if (!sections) {
+                  // 无法解析为结构化 JSON，回退纯文本渲染（兼容历史数据）
+                  return <div style={{ whiteSpace: 'pre-wrap' }}>{aiAnalysis}</div>;
+                }
+                return sections.map((s, i) => (
+                  <div key={i} style={{ marginBottom: i < sections.length - 1 ? 14 : 0 }}>
+                    {s.sectionKey ? (
+                      <>
+                        <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)', marginBottom: 2 }}>
+                          {ANALYSIS_SECTIONS.find(sec => sec.key === s.sectionKey)?.emoji} {s.sectionKey}
+                        </div>
+                        <div style={{ whiteSpace: 'pre-wrap' }}>{s.content}</div>
+                      </>
+                    ) : (
+                      <div style={{ whiteSpace: 'pre-wrap' }}>{s.content}</div>
+                    )}
+                  </div>
+                ));
+              })()}
             </div>
           ) : (
             <div style={{
