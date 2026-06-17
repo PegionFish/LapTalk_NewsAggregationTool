@@ -23,6 +23,27 @@ BROWSER_UA = (
     'AppleWebKit/537.36 (KHTML, like Gecko) '
     'Chrome/125.0.0.0 Safari/537.36'
 )
+STEALTH_ARGS = [
+    '--disable-blink-features=AutomationControlled',
+    '--disable-automation',
+    '--disable-web-security',
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--disable-popup-blocking',
+    '--disable-infobars',
+]
+
+
+def _stealth_page(page) -> None:
+    """注入隐身脚本，降低被反爬虫检测的风险。"""
+    page.add_init_script("""
+        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
+        Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh', 'en'] });
+        window.chrome = { runtime: {} };
+        Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+        Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+    """)
 
 
 def _sanitize_html(html: str) -> str:
@@ -47,16 +68,20 @@ def capture_page_playwright(url: str, article_id: int = 0) -> dict:
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(
+                headless=True,
+                args=STEALTH_ARGS,
+            )
             context = browser.new_context(
                 user_agent=BROWSER_UA,
                 viewport={'width': 1920, 'height': 1080},
                 locale='zh-CN',
             )
             page = context.new_page()
+            _stealth_page(page)
             try:
                 page.goto(url, wait_until='networkidle', timeout=TIMEOUT)
-                page.wait_for_timeout(2000)  # 让动态内容有时间渲染
+                page.wait_for_timeout(3000)
                 html = page.content()
 
                 if article_id:
