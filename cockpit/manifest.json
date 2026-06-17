@@ -1,0 +1,13 @@
+{
+    "version": 0,
+    "requires": {
+        "cockpit": "236"
+    },
+    "tools": {
+        "index": {
+            "label": "LapTalk 平台",
+            "order": 100,
+            "keywords": ["laptalk", "news", "新闻", "聚合"]
+        }
+    }
+}

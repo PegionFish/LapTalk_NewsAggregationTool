@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <title>LapTalk 平台</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Cockpit 基础框架 API（固定路径，由 cockpit-ws 提供） -->
+    <script src="../base1/cockpit.js"></script>
+    <link rel="stylesheet" href="laptalk.css">
+</head>
+<body class="pf-m-redhat-font">
+
+    <div class="laptalk-page ct-page-inner">
+
+        <!-- 顶部标题 -->
+        <header class="laptalk-header">
+            <h1>LapTalk 新闻知识聚合中心</h1>
+            <span id="conn-banner" class="laptalk-banner">连接中…</span>
+        </header>
+
+        <!-- ────────────────────────────────────────────────
+             ① 服务控制
+        ──────────────────────────────────────────────── -->
+        <section class="laptalk-card">
+            <h2 class="laptalk-card-title">服务控制</h2>
+
+            <div class="laptalk-status-row">
+                <span id="svc-indicator" class="laptalk-dot laptalk-dot-unknown"></span>
+                <span id="svc-status-text" class="laptalk-status-text">检测中…</span>
+                <span id="svc-pid" class="laptalk-meta"></span>
+            </div>
+
+            <div class="laptalk-btn-group">
+                <button id="btn-start" class="pf-c-button pf-m-primary">启动</button>
+                <button id="btn-stop"  class="pf-c-button pf-m-secondary">停止</button>
+                <button id="btn-restart" class="pf-c-button pf-m-secondary">重启</button>
+                <button id="btn-refresh" class="pf-c-button pf-m-tertiary">刷新状态</button>
+            </div>
+
+            <!-- 启停命令的实时输出 -->
+            <details class="laptalk-output" id="svc-output-wrap" open>
+                <summary>命令输出</summary>
+                <pre id="svc-output" class="laptalk-pre"></pre>
+            </details>
+        </section>
+
+        <!-- ────────────────────────────────────────────────
+             ② 定时调度配置
+        ──────────────────────────────────────────────── -->
+        <section class="laptalk-card">
+            <h2 class="laptalk-card-title">定时调度</h2>
+            <p class="laptalk-hint">修改后保存即时生效（自动重载调度器），无需重启后端。</p>
+
+            <!-- 数据采集 -->
+            <div class="laptalk-schedule-block">
+                <div class="laptalk-schedule-head">
+                    <label class="pf-c-switch">
+                        <input type="checkbox" id="pipe-enabled" class="pf-c-switch__input">
+                        <span class="pf-c-switch__toggle"></span>
+                        <span class="pf-c-switch__label">数据采集（RSS + 热搜）</span>
+                    </label>
+                </div>
+                <div class="laptalk-cron-grid">
+                    <label>小时 (0-23，逗号分隔)
+                        <input type="text" id="pipe-hours" class="pf-c-form-control" placeholder="10,17">
+                    </label>
+                    <label>分钟 (0-59，逗号分隔)
+                        <input type="text" id="pipe-minutes" class="pf-c-form-control" placeholder="0,0">
+                    </label>
+                </div>
+                <div class="laptalk-schedule-meta">
+                    <span class="laptalk-meta">上次运行：<b id="pipe-last-run">—</b></span>
+                    <span class="laptalk-meta">结果：<b id="pipe-last-status">—</b></span>
+                </div>
+            </div>
+
+            <hr class="laptalk-divider">
+
+            <!-- AI 全流程 -->
+            <div class="laptalk-schedule-block">
+                <div class="laptalk-schedule-head">
+                    <label class="pf-c-switch">
+                        <input type="checkbox" id="ai-enabled" class="pf-c-switch__input">
+                        <span class="pf-c-switch__toggle"></span>
+                        <span class="pf-c-switch__label">AI 全流程（分析 + 翻译）</span>
+                    </label>
+                </div>
+                <div class="laptalk-cron-grid">
+                    <label>小时 (0-23，逗号分隔)
+                        <input type="text" id="ai-hours" class="pf-c-form-control" placeholder="15,22">
+                    </label>
+                    <label>分钟 (0-59，逗号分隔)
+                        <input type="text" id="ai-minutes" class="pf-c-form-control" placeholder="0,0">
+                    </label>
+                </div>
+                <div class="laptalk-schedule-meta">
+                    <span class="laptalk-meta">上次运行：<b id="ai-last-run">—</b></span>
+                    <span class="laptalk-meta">结果：<b id="ai-last-status">—</b></span>
+                </div>
+            </div>
+
+            <div class="laptalk-btn-group">
+                <button id="btn-save-schedule" class="pf-c-button pf-m-primary">保存调度配置</button>
+                <button id="btn-reload-schedule" class="pf-c-button pf-m-tertiary">重新读取</button>
+            </div>
+        </section>
+
+        <!-- ────────────────────────────────────────────────
+             ③ 系统状态
+        ──────────────────────────────────────────────── -->
+        <section class="laptalk-card">
+            <h2 class="laptalk-card-title">系统状态</h2>
+            <div class="laptalk-stats-grid">
+                <div class="laptalk-stat">
+                    <div class="laptalk-stat-num" id="stat-articles">—</div>
+                    <div class="laptalk-stat-label">文章总数</div>
+                </div>
+                <div class="laptalk-stat">
+                    <div class="laptalk-stat-num" id="stat-events">—</div>
+                    <div class="laptalk-stat-label">事件数</div>
+                </div>
+                <div class="laptalk-stat">
+                    <div class="laptalk-stat-num" id="stat-active-events">—</div>
+                    <div class="laptalk-stat-label">活跃事件</div>
+                </div>
+                <div class="laptalk-stat">
+                    <div class="laptalk-stat-num" id="stat-scheduler">—</div>
+                    <div class="laptalk-stat-label">调度器</div>
+                </div>
+            </div>
+            <div class="laptalk-pipeline-info">
+                <span class="laptalk-meta">Pipeline：<b id="pipe-state">—</b></span>
+                <span class="laptalk-meta">当前步骤：<b id="pipe-step">—</b></span>
+            </div>
+            <div class="laptalk-links">
+                <a id="link-home" href="#" target="_blank">打开主页</a>
+                <a id="link-docs" href="#" target="_blank">API 文档</a>
+            </div>
+        </section>
+
+        <!-- ────────────────────────────────────────────────
+             ④ 实时日志
+        ──────────────────────────────────────────────── -->
+        <section class="laptalk-card">
+            <h2 class="laptalk-card-title">实时日志</h2>
+            <div class="laptalk-log-toolbar">
+                <label>显示行数
+                    <select id="log-lines" class="pf-c-form-control">
+                        <option value="200">最近 200 行</option>
+                        <option value="500" selected>最近 500 行</option>
+                        <option value="1000">最近 1000 行</option>
+                        <option value="5000">最近 5000 行</option>
+                    </select>
+                </label>
+                <button id="btn-log-start" class="pf-c-button pf-m-primary">开始跟踪</button>
+                <button id="btn-log-stop" class="pf-c-button pf-m-secondary" disabled>停止</button>
+                <button id="btn-log-clear" class="pf-c-button pf-m-tertiary">清屏</button>
+                <label class="pf-c-check">
+                    <input type="checkbox" id="log-autoscroll" checked>
+                    <span>自动滚动到底部</span>
+                </label>
+            </div>
+            <pre id="log-view" class="laptalk-log-pre"></pre>
+        </section>
+
+    </div>
+
+    <!-- 全局 toast 通知 -->
+    <div id="toast" class="laptalk-toast" hidden></div>
+
+    <!-- 配置注入点：install.sh 会把 __LAPTALK_HOME__ 替换为实际路径 -->
+    <script>
+        // 项目根目录（start_platform.sh 所在目录），由 install.sh 注入
+        window.LAPTALK_HOME = "__LAPTALK_HOME__";
+        // 后端 API 基址（本机回环）
+        window.LAPTALK_API_BASE = "http://localhost:8081";
+        // 后端日志文件路径（相对 LAPTALK_HOME）
+        window.LAPTALK_LOG_PATH = "__LAPTALK_HOME__/logs/backend.log";
+        // 启动脚本
+        window.LAPTALK_SCRIPT = "__LAPTALK_HOME__/start_platform.sh";
+    </script>
+
+    <script src="laptalk.js"></script>
+</body>
+</html>

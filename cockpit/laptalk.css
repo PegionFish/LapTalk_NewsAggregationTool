@@ -1,0 +1,341 @@
+/*
+ * LapTalk Cockpit 插件 — 样式表
+ *
+ * 视觉风格贴近 Cockpit 默认（PatternFly 4 红帽字体），
+ * 但保持自包含：即使宿主未完整加载 PatternFly 也不至于难看。
+ */
+
+:root {
+    --lt-bg:          #f5f5f5;
+    --lt-card:        #ffffff;
+    --lt-border:      #d2d2d2;
+    --lt-text:        #151515;
+    --lt-text-muted:  #6a6e73;
+    --lt-primary:     #0066cc;
+    --lt-green:       #3e8635;
+    --lt-red:         #c9190b;
+    --lt-yellow:      #f0ab00;
+    --lt-mono:        "Liberation Mono", "Cascadia Mono", "Courier New", monospace;
+    --lt-shadow:      0 1px 2px rgba(3, 3, 3, .12);
+    --lt-radius:      6px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    font-family: "Red Hat Text", "Segoe UI", "PingFang SC", "Microsoft YaHei",
+                 system-ui, -apple-system, sans-serif;
+    color: var(--lt-text);
+    background: var(--lt-bg);
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+/* ═════════════ 页面框架 ═════════════ */
+.laptalk-page {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 24px 20px 60px;
+}
+
+.laptalk-header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+}
+.laptalk-header h1 {
+    margin: 0;
+    font-size: 22px;
+    font-weight: 600;
+}
+
+.laptalk-banner {
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    background: #e0e0e0;
+    color: var(--lt-text-muted);
+}
+.laptalk-banner-ok   { background: #e3f2e1; color: var(--lt-green); }
+.laptalk-banner-warn { background: #fdf6e3; color: #8a6d00; }
+
+/* ═════════════ 卡片 ═════════════ */
+.laptalk-card {
+    background: var(--lt-card);
+    border: 1px solid var(--lt-border);
+    border-radius: var(--lt-radius);
+    box-shadow: var(--lt-shadow);
+    padding: 20px 24px;
+    margin-bottom: 20px;
+}
+.laptalk-card-title {
+    margin: 0 0 16px 0;
+    font-size: 16px;
+    font-weight: 600;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--lt-border);
+}
+.laptalk-hint {
+    margin: -8px 0 16px;
+    color: var(--lt-text-muted);
+    font-size: 12px;
+}
+.laptalk-divider {
+    border: none;
+    border-top: 1px solid var(--lt-border);
+    margin: 18px 0;
+}
+
+/* ═════════════ 按钮（PatternFly 兼容降级） ═════════════ */
+.pf-c-button,
+.laptalk-card button {
+    display: inline-block;
+    padding: 6px 16px;
+    border-radius: 4px;
+    font-size: 14px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: background .15s, border-color .15s;
+    font-family: inherit;
+}
+.pf-c-button:disabled { opacity: .5; cursor: not-allowed; }
+.pf-c-button:not(:disabled):active { transform: translateY(1px); }
+
+.pf-m-primary { background: var(--lt-primary); color: #fff; }
+.pf-m-primary:not(:disabled):hover { background: #004d99; }
+
+.pf-m-secondary { background: #fff; color: var(--lt-primary); border-color: var(--lt-primary); }
+.pf-m-secondary:not(:disabled):hover { background: #e7f1fa; }
+
+.pf-m-tertiary { background: #fff; color: var(--lt-text); border-color: var(--lt-border); }
+.pf-m-tertiary:not(:disabled):hover { background: #f0f0f0; }
+
+.laptalk-btn-group { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+
+/* ═════════════ 状态指示灯 ═════════════ */
+.laptalk-status-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+}
+.laptalk-dot {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--lt-text-muted);
+}
+.laptalk-dot-ok      { background: var(--lt-green); box-shadow: 0 0 6px rgba(62,134,53,.5); }
+.laptalk-dot-down    { background: var(--lt-red); }
+.laptalk-dot-unknown { background: var(--lt-yellow); }
+
+.laptalk-status-text { font-weight: 600; }
+.laptalk-meta { color: var(--lt-text-muted); font-size: 12px; }
+.laptalk-meta b { color: var(--lt-text); font-weight: 500; }
+
+/* ═════════════ 输出 / 日志区域 ═════════════ */
+.laptalk-output { margin-top: 16px; }
+.laptalk-output > summary {
+    cursor: pointer;
+    color: var(--lt-text-muted);
+    font-size: 12px;
+    margin-bottom: 6px;
+}
+.laptalk-pre,
+.laptalk-log-pre {
+    background: #1e1e1e;
+    color: #d4d4d4;
+    font-family: var(--lt-mono);
+    font-size: 12px;
+    line-height: 1.45;
+    padding: 12px 14px;
+    border-radius: 4px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    margin: 0;
+}
+.laptalk-pre      { max-height: 240px; }
+.laptalk-log-pre  { max-height: 480px; }
+
+/* ═════════════ 表单控件 ═════════════ */
+.pf-c-form-control,
+.laptalk-card input[type="text"],
+.laptalk-card select {
+    padding: 5px 10px;
+    border: 1px solid var(--lt-border);
+    border-radius: 4px;
+    font-size: 14px;
+    font-family: inherit;
+    background: #fff;
+    color: var(--lt-text);
+    min-width: 140px;
+}
+.laptalk-card input[type="text"]:focus,
+.laptalk-card select:focus {
+    outline: none;
+    border-color: var(--lt-primary);
+    box-shadow: 0 0 0 1px var(--lt-primary);
+}
+.laptalk-card label {
+    display: inline-flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--lt-text-muted);
+}
+
+/* ═════════════ 调度区块 ═════════════ */
+.laptalk-schedule-block { padding: 4px 0; }
+.laptalk-schedule-head { margin-bottom: 12px; font-weight: 500; }
+
+/* 简易开关（pf-c-switch 不可用时降级） */
+.pf-c-switch {
+    position: relative;
+    display: inline-flex !important;
+    align-items: center;
+    gap: 8px;
+    flex-direction: row !important;
+    cursor: pointer;
+}
+.pf-c-switch__input {
+    position: absolute;
+    opacity: 0;
+    width: 0; height: 0;
+}
+.pf-c-switch__toggle {
+    display: inline-block;
+    width: 38px; height: 20px;
+    background: #c4c4c4;
+    border-radius: 10px;
+    position: relative;
+    transition: background .15s;
+}
+.pf-c-switch__toggle::after {
+    content: "";
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 16px; height: 16px;
+    background: #fff;
+    border-radius: 50%;
+    transition: transform .15s;
+    box-shadow: 0 1px 2px rgba(0,0,0,.3);
+}
+.pf-c-switch__input:checked + .pf-c-switch__toggle {
+    background: var(--lt-green);
+}
+.pf-c-switch__input:checked + .pf-c-switch__toggle::after {
+    transform: translateX(18px);
+}
+.pf-c-switch__label {
+    font-size: 14px;
+    color: var(--lt-text);
+    font-weight: 500;
+}
+
+.laptalk-cron-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    margin-bottom: 10px;
+}
+@media (max-width: 540px) { .laptalk-cron-grid { grid-template-columns: 1fr; } }
+
+.laptalk-schedule-meta {
+    display: flex;
+    gap: 24px;
+    flex-wrap: wrap;
+    font-size: 12px;
+}
+
+/* ═════════════ 状态格子 ═════════════ */
+.laptalk-stats-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 16px;
+}
+@media (max-width: 540px) { .laptalk-stats-grid { grid-template-columns: repeat(2, 1fr); } }
+
+.laptalk-stat {
+    background: var(--lt-bg);
+    border: 1px solid var(--lt-border);
+    border-radius: 4px;
+    padding: 12px;
+    text-align: center;
+}
+.laptalk-stat-num {
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--lt-primary);
+}
+.laptalk-stat-label {
+    font-size: 12px;
+    color: var(--lt-text-muted);
+    margin-top: 4px;
+}
+
+.laptalk-pipeline-info {
+    display: flex;
+    gap: 24px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+}
+.laptalk-links { display: flex; gap: 16px; }
+.laptalk-links a {
+    color: var(--lt-primary);
+    text-decoration: none;
+}
+.laptalk-links a:hover { text-decoration: underline; }
+
+/* ═════════════ 日志工具栏 ═════════════ */
+.laptalk-log-toolbar {
+    display: flex;
+    gap: 14px;
+    align-items: flex-end;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+.pf-c-check,
+.laptalk-log-toolbar label:last-of-type {
+    display: inline-flex !important;
+    flex-direction: row !important;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+}
+.pf-c-check input { margin: 0; }
+
+/* ═════════════ Toast 通知 ═════════════ */
+.laptalk-toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    background: #333;
+    color: #fff;
+    padding: 12px 20px;
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0,0,0,.3);
+    font-size: 14px;
+    z-index: 1000;
+    max-width: 360px;
+}
+.laptalk-toast-info    { background: #0066cc; }
+.laptalk-toast-success { background: var(--lt-green); }
+.laptalk-toast-error   { background: var(--lt-red); }
+
+/* ═════════════ 滚动条（深色日志区） ═════════════ */
+.laptalk-pre::-webkit-scrollbar,
+.laptalk-log-pre::-webkit-scrollbar { width: 10px; height: 10px; }
+.laptalk-pre::-webkit-scrollbar-thumb,
+.laptalk-log-pre::-webkit-scrollbar-thumb {
+    background: #555;
+    border-radius: 5px;
+}
+.laptalk-pre::-webkit-scrollbar-track,
+.laptalk-log-pre::-webkit-scrollbar-track { background: #1e1e1e; }
