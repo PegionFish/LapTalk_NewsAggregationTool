@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import type { Article } from '../types';
 import { Input, Select, Button, Badge, Loading, Tabs, Tab } from '../components/ui';
@@ -27,6 +28,7 @@ const SORT_OPTIONS = [
 ];
 
 export default function ArticleSearch() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [articles, setArticles] = useState<Article[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -72,6 +74,34 @@ export default function ArticleSearch() {
   }, []);
 
   useEffect(() => { loadCategoryStats(); }, [loadCategoryStats]);
+
+  // URL ↔ 选中文章同步：?id=123 自动打开文章详情面板
+  useEffect(() => {
+    const idParam = searchParams.get('id');
+    if (idParam) {
+      const aid = parseInt(idParam, 10);
+      if (!isNaN(aid) && selected?.id !== aid) {
+        // 不在列表中时直接按 ID 获取
+        api.getArticle(aid).then(a => setSelected(a)).catch(() => {});
+      }
+    }
+  }, [searchParams]); // 仅在 URL 参数变化时触发（不含 selected）
+
+  // 选中文章变更 → URL 同步
+  useEffect(() => {
+    const idParam = searchParams.get('id');
+    const expectedId = selected ? String(selected.id) : null;
+    if (idParam !== expectedId) {
+      if (expectedId) {
+        setSearchParams({ id: expectedId }, { replace: true });
+      } else {
+        // 清除 id 参数
+        const next = new URLSearchParams(searchParams);
+        next.delete('id');
+        setSearchParams(next, { replace: true });
+      }
+    }
+  }, [selected]);
 
   useEffect(() => {
     if (!selected) { setAiAnalysis(''); setAnalysisMeta({}); return; }
@@ -331,29 +361,69 @@ export default function ArticleSearch() {
             }}>
               {decodeHTMLEntities(selected.title)}
             </h3>
-            <button
-              onClick={() => setSelected(null)}
-              style={{
-                background: 'var(--bg-card)',
-                border: '1px solid var(--border)',
-                borderRadius: 6,
-                color: 'var(--text-muted)',
-                cursor: 'pointer',
-                padding: '6px 8px',
-                fontSize: 12,
-                transition: 'all var(--transition-fast)',
-              }}
-              onMouseEnter={e => {
-                e.currentTarget.style.background = 'var(--bg-card-hover)';
-                e.currentTarget.style.color = 'var(--text-primary)';
-              }}
-              onMouseLeave={e => {
-                e.currentTarget.style.background = 'var(--bg-card)';
-                e.currentTarget.style.color = 'var(--text-muted)';
-              }}
-            >
-              <i className="fas fa-times" />
-            </button>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <button
+                onClick={() => {
+                  const url = `${window.location.origin}/articles?id=${selected.id}`;
+                  navigator.clipboard.writeText(url).then(() => {
+                    // 临时切换图标表示已复制
+                    const btn = document.getElementById('copy-link-btn');
+                    if (btn) {
+                      const icon = btn.querySelector('i');
+                      if (icon) { icon.className = 'fas fa-check'; }
+                      setTimeout(() => {
+                        if (icon) { icon.className = 'fas fa-link'; }
+                      }, 1500);
+                    }
+                  }).catch(() => {});
+                }}
+                id="copy-link-btn"
+                title="复制文章链接，分享给团队成员"
+                style={{
+                  background: 'var(--bg-card)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 6,
+                  color: 'var(--text-muted)',
+                  cursor: 'pointer',
+                  padding: '6px 8px',
+                  fontSize: 12,
+                  transition: 'all var(--transition-fast)',
+                }}
+                onMouseEnter={e => {
+                  e.currentTarget.style.background = 'var(--bg-card-hover)';
+                  e.currentTarget.style.color = 'var(--accent)';
+                }}
+                onMouseLeave={e => {
+                  e.currentTarget.style.background = 'var(--bg-card)';
+                  e.currentTarget.style.color = 'var(--text-muted)';
+                }}
+              >
+                <i className="fas fa-link" />
+              </button>
+              <button
+                onClick={() => setSelected(null)}
+                style={{
+                  background: 'var(--bg-card)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 6,
+                  color: 'var(--text-muted)',
+                  cursor: 'pointer',
+                  padding: '6px 8px',
+                  fontSize: 12,
+                  transition: 'all var(--transition-fast)',
+                }}
+                onMouseEnter={e => {
+                  e.currentTarget.style.background = 'var(--bg-card-hover)';
+                  e.currentTarget.style.color = 'var(--text-primary)';
+                }}
+                onMouseLeave={e => {
+                  e.currentTarget.style.background = 'var(--bg-card)';
+                  e.currentTarget.style.color = 'var(--text-muted)';
+                }}
+              >
+                <i className="fas fa-times" />
+              </button>
+            </div>
           </div>
 
           {/* 元信息 */}
