@@ -32,7 +32,7 @@ export default function Dashboard() {
   const [filterRunning, setFilterRunning] = useState(false); const [filterState, setFilterState] = useState<BatchState>(emptyBatch);
 
   // 低分清理
-  const [cleanupThreshold, setCleanupThreshold] = useState('0.2');
+  const [cleanupThreshold, setCleanupThreshold] = useState('20');
   const [cleanupPreview, setCleanupPreview] = useState<number | null>(null);
   const [cleanupLoading, setCleanupLoading] = useState(false);
   const [cleanupResult, setCleanupResult] = useState<{ deleted: number } | null>(null);
@@ -40,7 +40,7 @@ export default function Dashboard() {
 
   const handlePreviewCleanup = async () => {
     const threshold = parseFloat(cleanupThreshold);
-    if (isNaN(threshold) || threshold < 0 || threshold > 1) { showToast('阈值需在 0 ~ 1 之间'); return; }
+    if (isNaN(threshold) || threshold < 0 || threshold > 100) { showToast('阈值需在 0 ~ 100 之间'); return; }
     setCleanupLoading(true);
     setCleanupResult(null);
     try {
@@ -455,9 +455,9 @@ export default function Dashboard() {
               评分阈值
               <input
                 type="number"
-                step="0.05"
+                step="1"
                 min="0"
-                max="1"
+                max="100"
                 value={cleanupThreshold}
                 onChange={e => { setCleanupThreshold(e.target.value); setCleanupPreview(null); setCleanupResult(null); }}
                 style={{

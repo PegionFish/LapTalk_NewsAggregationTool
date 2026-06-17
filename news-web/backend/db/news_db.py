@@ -374,7 +374,7 @@ class NewsDB:
 
     def calculate_priority(self, article_id: int, conn: Optional[sqlite3.Connection] = None) -> float:
         """
-        五维优先级评分 (0.0~1.0)
+        五维优先级评分 (0~100 百分制)
         A: 来源权威 (0.20)
         B: 多源覆盖 (0.15) — 所属事件的文章数
         C: 内容主题 (0.40)
@@ -396,8 +396,8 @@ class NewsDB:
 
             # 人工已处理 — 保留人工评分/标签，跳过自动计算
             if hp or (label != 'unset' and label in ('high', 'medium', 'low')):
-                label_scores = {'high': 0.9, 'medium': 0.6, 'low': 0.3}
-                score = label_scores.get(label, 0.5)
+                label_scores = {'high': 90, 'medium': 60, 'low': 30}
+                score = label_scores.get(label, 50)
                 _, c_label = topic_score(title)
                 tc = self.TOPIC_CATEGORY_MAP.get(c_label, '其他')
                 conn.execute("UPDATE articles SET priority_score=?, topic_category=? WHERE id=?",
@@ -444,8 +444,8 @@ class NewsDB:
             drift = self._get_source_topic_drift(source, c_label, conn)
             e_score += drift
 
-            final = round(a_score * 0.20 + b_score * 0.15 + c_score * 0.40 + d_score * 0.10 + max(0, e_score) * 0.15, 4)
-            final = max(0.0, min(1.0, final))
+            final = round((a_score * 0.20 + b_score * 0.15 + c_score * 0.40 + d_score * 0.10 + max(0, e_score) * 0.15) * 100, 1)
+            final = max(0.0, min(100.0, final))
 
             # 同步写入 topic_category
             tc = self.TOPIC_CATEGORY_MAP.get(c_label, '其他')
@@ -1111,7 +1111,7 @@ class NewsDB:
     # 低分清理
     # ═══════════════════════════════════════════════════════
 
-    def preview_cleanup(self, threshold: float = 0.2) -> dict:
+    def preview_cleanup(self, threshold: float = 20) -> dict:
         """预览将被清理的文章（不执行删除）。"""
         with self._conn() as conn:
             count = conn.execute("""
@@ -1121,7 +1121,7 @@ class NewsDB:
             """, (threshold,)).fetchone()[0]
         return {'count': count, 'threshold': threshold}
 
-    def cleanup_low_score(self, threshold: float = 0.2) -> dict:
+    def cleanup_low_score(self, threshold: float = 20) -> dict:
         """删除评分低于阈值且未被人工处理的文章。返回 {deleted: int}。"""
         with self._conn() as conn:
             # 先删除关联的评语

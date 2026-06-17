@@ -277,14 +277,14 @@ def classify_article_ai(title: str, text: str) -> dict | None:
 
 
 def score_priority_ai(title: str, text: str, source: str, days_old: int = 0) -> dict | None:
-    """AI 评估文章优先级。HTML 提取纯文本后传入 160K 上下文。"""
+    """AI 评估文章优先级（百分制 0~100）。HTML 提取纯文本后传入 160K 上下文。"""
     content = _prepare_content(text)
     result = _ai_json(
         _with_deep_thinking(
             f"标题：{title}\n来源：{source}\n发布天数：{days_old}\n正文：{content}\n\n"
             f"请输出 JSON：{{"
-            f'"score":0.0-1.0（综合评分：来源权威性30% + 内容重要性40% + 时效性30%），'
-            f'"label":"high/medium/low（高/中/低优先级。high:>=0.7, medium:0.35-0.7, low:<0.35）",'
+            f'"score":0-100 的整数（百分制综合评分：来源权威性30% + 内容重要性40% + 时效性30%），'
+            f'"label":"high/medium/low（高/中/低优先级。high:>=70, medium:35-69, low:<35）",'
             f'"reason":"30字以内理由，说明核心判断依据"}}'
         ),
         "你是科技新闻优先级评估引擎。考虑技术突破性、行业影响范围、信息稀缺性。只输出 JSON。",

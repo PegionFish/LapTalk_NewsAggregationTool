@@ -228,11 +228,11 @@ export default function ArticleSearch() {
                   <td style={{
                     padding: '10px 12px',
                     textAlign: 'center',
-                    color: a.score > 0.7 ? 'var(--accent-tertiary)' : a.score > 0.4 ? 'var(--accent-orange)' : 'var(--text-muted)',
+                    color: a.score >= 70 ? 'var(--accent-tertiary)' : a.score >= 40 ? 'var(--accent-orange)' : 'var(--text-muted)',
                     fontWeight: 600,
                     fontSize: 12,
                   }}>
-                    {a.score.toFixed(2)}
+                    {Math.round(a.score)}
                   </td>
                   <td style={{ padding: '10px 12px', textAlign: 'center', fontSize: 12 }}>
                     {(() => { const b = cacheBadge(a.content_status); return <i className={`fas ${b.icon}`} style={{ color: `var(--accent-${b.variant === 'green' ? 'tertiary' : b.variant === 'red' ? 'red' : b.variant === 'blue' ? '' : 'muted'})` }} title={b.tooltip} />; })()}
@@ -372,11 +372,11 @@ export default function ArticleSearch() {
               <Badge variant="blue" icon="fa-folder">{selected.topic_category}</Badge>
             )}
             <span style={{
-              color: selected.score > 0.7 ? 'var(--accent-tertiary)' : 'var(--accent-orange)',
+              color: selected.score >= 70 ? 'var(--accent-tertiary)' : selected.score >= 40 ? 'var(--accent-orange)' : 'var(--text-muted)',
               fontWeight: 600,
             }}>
               <i className="fas fa-star" style={{ marginRight: 4 }} />
-              {selected.score.toFixed(2)}
+              {Math.round(selected.score)}
             </span>
           </div>
 

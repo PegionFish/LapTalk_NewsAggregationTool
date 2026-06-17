@@ -50,6 +50,22 @@ def ensure_schema(db_path: str):
     conn.commit()
     conn.close()
 
+    # ── v2 迁移：评分从 0~1 改为百分制 0~100 ──────────────
+    conn = sqlite3.connect(db_path)
+    cur_ver = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] or 0
+    if cur_ver < 2:
+        conn.execute("""
+            UPDATE articles SET priority_score = ROUND(priority_score * 100, 0)
+            WHERE priority_score > 0 AND priority_score <= 1
+        """)
+        conn.execute("""
+            UPDATE articles SET ai_priority_score = ROUND(ai_priority_score * 100, 0)
+            WHERE ai_priority_score > 0 AND ai_priority_score <= 1
+        """)
+        conn.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (2)")
+        conn.commit()
+    conn.close()
+
     # Users table migration
     from auth.models import ensure_users_table
     ensure_users_table(db_path)

@@ -32,6 +32,48 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const host = window.location.hostname;
     const isLocal = host === 'localhost' || host === '127.0.0.1';
 
+    // 验证已保存的 token 是否仍然有效
+    const verifyAndSetup = async (savedToken: string, savedUser: AuthUser) => {
+      // 先设置已保存的 token，避免等待期间 UI 空白
+      setToken(savedToken);
+      setUser(savedUser);
+      try {
+        const res = await fetch('/api/auth/me', {
+          headers: { Authorization: `Bearer ${savedToken}` },
+        });
+        if (res.ok) {
+          // Token 有效，保持当前状态
+          setLoading(false);
+          return;
+        }
+      } catch {
+        // 网络错误，假设 token 仍然有效
+        setLoading(false);
+        return;
+      }
+      // Token 无效 — 清除并重新登录
+      localStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem(USER_KEY);
+      if (isLocal) {
+        // localhost 自动重新获取 local_admin 令牌
+        try {
+          const res = await fetch('/api/auth/local');
+          const data = res.ok ? await res.json() : null;
+          if (data?.token) {
+            setToken(data.token);
+            setUser(data.user);
+            localStorage.setItem(TOKEN_KEY, data.token);
+            localStorage.setItem(USER_KEY, JSON.stringify(data.user));
+          }
+        } catch { /* 网络不可用，静默降级 */ }
+      } else {
+        // 远程环境清除登录态，提示用户重新登录
+        setToken(null);
+        setUser(null);
+      }
+      setLoading(false);
+    };
+
     const savedToken = localStorage.getItem(TOKEN_KEY);
     const savedUser = localStorage.getItem(USER_KEY);
     if (savedToken && savedUser) {
@@ -42,9 +84,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           localStorage.removeItem(TOKEN_KEY);
           localStorage.removeItem(USER_KEY);
         } else {
-          setToken(savedToken);
-          setUser(user);
-          setLoading(false);
+          // 异步验证 token 有效性
+          verifyAndSetup(savedToken, user);
           return;
         }
       } catch {

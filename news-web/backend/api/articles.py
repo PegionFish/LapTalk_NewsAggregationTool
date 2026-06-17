@@ -120,20 +120,20 @@ def populate_categories():
 # ── 低分新闻清理 ────────────────────────────────────────
 
 @router.get("/cleanup/preview")
-def cleanup_preview(threshold: float = Query(0.2, ge=0.0, le=1.0)):
-    """预览将被清理的文章数（不执行删除）。"""
+def cleanup_preview(threshold: float = Query(20, ge=0, le=100)):
+    """预览将被清理的文章数（不执行删除）。百分制阈值，默认 20。"""
     db = get_db()
     return db.preview_cleanup(threshold)
 
 
 class CleanupRequest(BaseModel):
-    threshold: float = 0.2
+    threshold: float = 20
 
 
 @router.post("/cleanup")
 def cleanup_execute(body: CleanupRequest):
     """执行低分新闻清理。删除评分低于阈值且未被人工处理的文章及其关联数据。"""
-    if body.threshold < 0.0 or body.threshold > 1.0:
+    if body.threshold < 0 or body.threshold > 100:
         raise HTTPException(400, "threshold_out_of_range")
     db = get_db()
     preview = db.preview_cleanup(body.threshold)

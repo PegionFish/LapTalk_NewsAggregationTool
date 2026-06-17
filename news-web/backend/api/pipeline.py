@@ -770,7 +770,7 @@ def _batch_ai_score():
                 db2 = _conn()
                 db2.execute("UPDATE articles SET priority_score=?, priority_label=?, ai_priority_score=? WHERE id=?", (r["score"], r.get("label","medium"), r["score"], aid))
                 db2.commit(); db2.close()
-                _log(_score_state, f"#{aid} ✅ {r.get('label','medium')}({r['score']:.2f}) — {r.get('reason','')}")
+                _log(_score_state, f"#{aid} ✅ {r.get('label','medium')}({r['score']:.0f}) — {r.get('reason','')}")
             else:
                 _log(_score_state, f"#{aid} ⚠️ AI 返回空"); _score_state["failed"] += 1
             _score_state["done"] += 1
@@ -789,7 +789,7 @@ def _batch_ai_score():
                     db2 = _conn()
                     db2.execute("UPDATE articles SET priority_score=?, priority_label=?, ai_priority_score=? WHERE id=?", (r["score"], r.get("label","medium"), r["score"], aid))
                     db2.commit(); db2.close()
-                    _log(_score_state, f"#{aid} ✅ {r.get('label','medium')}({r['score']:.2f}) — {r.get('reason','')}")
+                    _log(_score_state, f"#{aid} ✅ {r.get('label','medium')}({r['score']:.0f}) — {r.get('reason','')}")
                 else:
                     _log(_score_state, f"#{aid} ⚠️ AI 返回空"); _score_state["failed"] += 1
             except Exception as e:

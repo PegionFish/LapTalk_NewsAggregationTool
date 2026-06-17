@@ -8,7 +8,7 @@ from config import config
 
 JWT_SECRET = os.environ.get('JWT_SECRET', 'news-web-dev-secret-change-in-production')
 JWT_ALGORITHM = 'HS256'
-TOKEN_EXPIRE_HOURS = 72
+TOKEN_EXPIRE_HOURS = 720  # 内网工具，30 天有效期
 
 
 def hash_password(password: str) -> str:
