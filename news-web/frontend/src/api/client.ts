@@ -23,29 +23,29 @@ export const api = {
   searchArticles: (params: Record<string, string | number> = {}) => {
     const qs = new URLSearchParams();
     Object.entries(params).forEach(([k, v]) => { if (v) qs.set(k, String(v)); });
-    return fetchJSON<PaginatedResponse<Article>>(`/articles?${qs}`);
+    return fetchJSON<PaginatedResponse<Article>>(`/news?${qs}`);
   },
 
-  getArticle: (id: number) => fetchJSON<Article>(`/articles/${id}`),
+  getArticle: (id: number) => fetchJSON<Article>(`/news/${id}`),
 
   updateArticle: (id: number, data: Record<string, unknown>) =>
-    fetchJSON<{ ok: boolean }>(`/articles/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    fetchJSON<{ ok: boolean }>(`/news/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
 
   getArticleContent: async (id: number) => {
-    const res = await fetch(`${BASE}/articles/${id}/content`);
+    const res = await fetch(`${BASE}/news/${id}/content`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res.json() as Promise<{ url: string; content: string; translation: string; lang: string; status: string; source: string; ai_summary?: string; ai_analyzed?: boolean; human_processed?: boolean; has_pdf?: boolean }>;
   },
 
   cacheArticleHtml: (id: number, html: string) =>
-    fetchJSON<{ ok: boolean; local_path: string }>(`/articles/${id}/cache-html`, {
+    fetchJSON<{ ok: boolean; local_path: string }>(`/news/${id}/cache-html`, {
       method: 'POST', body: JSON.stringify({ html }),
     }),
 
-  getArticlePdfUrl: (id: number) => `/api/articles/${id}/pdf`,
+  getArticlePdfUrl: (id: number) => `/api/news/${id}/pdf`,
 
   cacheArticlePdf: (id: number, pdfBase64: string) =>
-    fetchJSON<{ ok: boolean; pdf_path: string }>(`/articles/${id}/cache-pdf`, {
+    fetchJSON<{ ok: boolean; pdf_path: string }>(`/news/${id}/cache-pdf`, {
       method: 'POST', body: JSON.stringify({ pdf_base64: pdfBase64 }),
     }),
 
@@ -68,36 +68,36 @@ export const api = {
     ),
 
   analyzeArticle: (id: number) =>
-    fetchJSON<{ ok: boolean; cached: boolean; analysis: string }>(`/articles/${id}/analyze`, { method: 'POST' }),
+    fetchJSON<{ ok: boolean; cached: boolean; analysis: string }>(`/news/${id}/analyze`, { method: 'POST' }),
 
   // ── AI 内容清洗 ──────────────────────────────────────
   getCleanedContent: (id: number) =>
-    fetchJSON<{ cleaned: string; cached: boolean; source: string }>(`/articles/${id}/cleaned-content`),
+    fetchJSON<{ cleaned: string; cached: boolean; source: string }>(`/news/${id}/cleaned-content`),
 
   // ── 主题分类 ──────────────────────────────────────────
   getTopicCategories: () =>
-    fetchJSON<{ categories: Record<string, number> }>('/articles/categories'),
+    fetchJSON<{ categories: Record<string, number> }>('/news/categories'),
 
   populateTopicCategories: () =>
     fetchJSON<{ ok: boolean; updated: number; categories: Record<string, number> }>(
-      '/articles/categories/populate', { method: 'POST' }
+      '/news/categories/populate', { method: 'POST' }
     ),
 
   // ── 低分新闻清理 ──────────────────────────────────────
   previewCleanup: (threshold: number) =>
-    fetchJSON<{ count: number; threshold: number }>(`/articles/cleanup/preview?threshold=${threshold}`),
+    fetchJSON<{ count: number; threshold: number }>(`/news/cleanup/preview?threshold=${threshold}`),
 
   executeCleanup: (threshold: number) =>
     fetchJSON<{ deleted: number; threshold: number; would_delete: number }>(
-      '/articles/cleanup', { method: 'POST', body: JSON.stringify({ threshold }) }
+      '/news/cleanup', { method: 'POST', body: JSON.stringify({ threshold }) }
     ),
 
   // ── 文章评语 + 点赞 ──────────────────────────────────
   getArticleComments: (articleId: number) =>
-    fetchJSON<{ comments: Comment[] }>(`/articles/${articleId}/comments`),
+    fetchJSON<{ comments: Comment[] }>(`/news/${articleId}/comments`),
 
   addArticleComment: (articleId: number, content: string, parentId?: number, rating?: number) =>
-    fetchJSON<Comment>(`/articles/${articleId}/comments`, {
+    fetchJSON<Comment>(`/news/${articleId}/comments`, {
       method: 'POST',
       body: JSON.stringify({ content, parent_id: parentId ?? null, rating: rating ?? null }),
     }),
@@ -327,7 +327,7 @@ export const api = {
 
   recoverDeadLinks: (idsOrOptions: number[] | { retry_all: boolean }) =>
     fetchJSON<{ ok: boolean; total: number; message: string }>(
-      '/articles/recover-dead', {
+      '/news/recover-dead', {
         method: 'POST',
         body: JSON.stringify(
           Array.isArray(idsOrOptions) ? { ids: idsOrOptions } : idsOrOptions
@@ -336,7 +336,7 @@ export const api = {
     ),
 
   getRecoverDeadStatus: () =>
-    fetchJSON<import('../types').BatchRetryState>('/articles/recover-dead/status'),
+    fetchJSON<import('../types').BatchRetryState>('/news/recover-dead/status'),
 
   getFailedArticles: (page = 1, limit = 50) =>
     fetchJSON<{ total: number; page: number; limit: number; articles: import('../types').FailedArticle[] }>(

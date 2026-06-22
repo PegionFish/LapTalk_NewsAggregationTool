@@ -1,6 +1,6 @@
 """
 Audit log for multi-user collaboration tracking.
-Logs create/update/delete operations on articles, events, chains, and relations.
+Logs create/update/delete operations on news_articles, events, chains, and relations.
 """
 import sqlite3, json
 from datetime import datetime

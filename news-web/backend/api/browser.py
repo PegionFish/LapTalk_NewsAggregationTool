@@ -44,7 +44,7 @@ def retry_playwright_capture(article_id: int):
 
     conn = sqlite3.connect(config.db_path)
     row = conn.execute(
-        "SELECT id, url FROM articles WHERE id=?", (article_id,)
+        "SELECT id, url FROM news_articles WHERE id=?", (article_id,)
     ).fetchone()
     conn.close()
 

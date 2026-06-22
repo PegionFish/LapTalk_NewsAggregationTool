@@ -62,7 +62,7 @@ def save(aid, html):
     now = datetime.now().isoformat(timespec='seconds')
     rel = f'{os.path.basename(CACHE)}/{aid}.html'
     conn = sqlite3.connect(config.db_path)
-    conn.execute("""UPDATE articles SET local_path=?,content_fetched_at=?,
+    conn.execute("""UPDATE news_articles SET local_path=?,content_fetched_at=?,
         text_content=?,content_lang=?,content_status='fetched' WHERE id=?""",
                  (rel, now, text, lang, aid))
     conn.commit(); conn.close()
@@ -71,7 +71,7 @@ def save(aid, html):
 
 def fail(aid, err):
     conn = sqlite3.connect(config.db_path)
-    conn.execute("UPDATE articles SET local_path=?, content_fetched_at=? WHERE id=?",
+    conn.execute("UPDATE news_articles SET local_path=?, content_fetched_at=? WHERE id=?",
                  (f'[ERR:{err}]', datetime.now().isoformat(timespec='seconds'), aid))
     conn.commit(); conn.close()
 
@@ -80,9 +80,8 @@ def fail(aid, err):
 
 conn = sqlite3.connect(config.db_path)
 rows = conn.execute("""
-    SELECT id, title, url, source, local_path FROM articles
+    SELECT id, title, url, source, local_path FROM news_articles
     WHERE local_path LIKE '[ERR:%'
-      AND category NOT IN ('platform_hotlists', 'bilibili_videos')
     ORDER BY local_path, id
 """).fetchall()
 conn.close()
@@ -130,7 +129,7 @@ if pw_needed:
     try:
         from pipeline.browser_capture import capture_page_playwright, _sanitize_html as _ps
         PW_OK = True
-        print(f"Playwright ready. Processing {len(pw_needed)} articles...")
+        print(f"Playwright ready. Processing {len(pw_needed)} news_articles...")
     except Exception as e:
         PW_OK = False
         print(f"Playwright not available: {e}")
@@ -160,6 +159,6 @@ if pw_needed:
 
 # Final
 conn = sqlite3.connect(config.db_path)
-rem = conn.execute("SELECT COUNT(*) FROM articles WHERE local_path LIKE '[ERR:%'").fetchone()[0]
+rem = conn.execute("SELECT COUNT(*) FROM news_articles WHERE local_path LIKE '[ERR:%'").fetchone()[0]
 conn.close()
 print(f"\nDONE. {total} originally, {rem} remaining failed.")

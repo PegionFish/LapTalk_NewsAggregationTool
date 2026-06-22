@@ -12,7 +12,7 @@ from db.news_db import NewsDB
 from auth.auth import get_current_user, optional_user
 
 # 不使用前缀，直接定义完整路径，便于同时承载
-#   /api/articles/{id}/comments   与   /api/comments/{id}...
+#   /api/news/{id}/comments   与   /api/comments/{id}...
 router = APIRouter(tags=["comments"])
 
 
@@ -25,13 +25,13 @@ def get_db() -> NewsDB:
 
 def _ensure_article_exists(db: NewsDB, article_id: int) -> None:
     with db._conn() as conn:
-        if not conn.execute("SELECT 1 FROM articles WHERE id=?", (article_id,)).fetchone():
+        if not conn.execute("SELECT 1 FROM news_articles WHERE id=?", (article_id,)).fetchone():
             raise HTTPException(404, "article_not_found")
 
 
 # ── 文章级评语 ──────────────────────────────────────────
 
-@router.get("/api/articles/{article_id}/comments")
+@router.get("/api/news/{article_id}/comments")
 def list_comments(article_id: int, user: Optional[dict] = Depends(optional_user)):
     """获取文章评语列表（树形，含点赞数与 liked_by_me）。"""
     db = get_db()
@@ -46,7 +46,7 @@ class CommentCreate(BaseModel):
     rating: Optional[int] = Field(None, ge=0, le=100)
 
 
-@router.post("/api/articles/{article_id}/comments")
+@router.post("/api/news/{article_id}/comments")
 def add_comment(article_id: int, body: CommentCreate, user: dict = Depends(get_current_user)):
     """添加评语（或回复）。需要登录。"""
     content = body.content.strip()

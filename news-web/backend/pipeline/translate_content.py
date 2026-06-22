@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 TRANSLATE_DELAY = 5  # 篇间延迟秒数
 
 
-def translate_articles(db_path: str, limit: int = 0, recent: int = 0) -> dict:
+def translate_news_articles(db_path: str, limit: int = 0, recent: int = 0) -> dict:
     """翻译所有待处理的英文文章 HTML。
 
     Returns:
@@ -39,10 +39,8 @@ def translate_articles(db_path: str, limit: int = 0, recent: int = 0) -> dict:
     # 查询已下载 HTML 的英文文章，且尚未翻译
     where = [
         "content_lang='en'",
-        "local_path != ''",
-        "local_path NOT LIKE '[ERR:%'",
+        "content_status IN ('fetched', 'translated')",
         "(translated_content IS NULL OR translated_content = '')",
-        "content_status NOT IN ('dead', 'metadata_only')",
     ]
     params: list = []
     if recent:
@@ -50,7 +48,7 @@ def translate_articles(db_path: str, limit: int = 0, recent: int = 0) -> dict:
         where.append("fetched_at >= ?")
         params.append(cutoff)
 
-    sql = f"SELECT id, title, local_path FROM articles WHERE {' AND '.join(where)} ORDER BY id DESC"
+    sql = f"SELECT id, title, local_path FROM news_articles WHERE {' AND '.join(where)} ORDER BY id DESC"
     if limit:
         sql += " LIMIT ?"
         params.append(limit)
@@ -75,7 +73,7 @@ def translate_articles(db_path: str, limit: int = 0, recent: int = 0) -> dict:
             print(f"  [{idx}/{total}] #{aid} {title[:45]:45s} ⚠️ HTML 文件不存在")
             # 写入标记避免下次重复查询
             conn2 = sqlite3.connect(db_path)
-            conn2.execute("UPDATE articles SET translated_content='[ERR:FILE_MISSING]' WHERE id=?", (aid,))
+            conn2.execute("UPDATE news_articles SET translated_content='[ERR:FILE_MISSING]' WHERE id=?", (aid,))
             conn2.commit()
             conn2.close()
             continue
@@ -86,14 +84,14 @@ def translate_articles(db_path: str, limit: int = 0, recent: int = 0) -> dict:
         except Exception:
             print(f"  [{idx}/{total}] #{aid} {title[:45]:45s} ⚠️ 读取失败")
             conn2 = sqlite3.connect(db_path)
-            conn2.execute("UPDATE articles SET translated_content='[ERR:READ_FAILED]' WHERE id=?", (aid,))
+            conn2.execute("UPDATE news_articles SET translated_content='[ERR:READ_FAILED]' WHERE id=?", (aid,))
             conn2.commit()
             conn2.close()
             continue
 
         if len(html) < 100:
             conn2 = sqlite3.connect(db_path)
-            conn2.execute("UPDATE articles SET translated_content='[ERR:HTML_TOO_SHORT]' WHERE id=?", (aid,))
+            conn2.execute("UPDATE news_articles SET translated_content='[ERR:HTML_TOO_SHORT]' WHERE id=?", (aid,))
             conn2.commit()
             conn2.close()
             continue
@@ -105,7 +103,7 @@ def translate_articles(db_path: str, limit: int = 0, recent: int = 0) -> dict:
             if result and len(result) > 100:
                 conn2 = sqlite3.connect(db_path)
                 conn2.execute("""
-                    UPDATE articles SET
+                    UPDATE news_articles SET
                         translated_content=?, content_status='translated', translated_at=?
                     WHERE id=?
                 """, (result, datetime.now().isoformat(timespec='seconds'), aid))
@@ -117,7 +115,7 @@ def translate_articles(db_path: str, limit: int = 0, recent: int = 0) -> dict:
                 print("⚠️ 空结果")
         except Exception as e:
             conn2 = sqlite3.connect(db_path)
-            conn2.execute("UPDATE articles SET content_status='failed' WHERE id=?", (aid,))
+            conn2.execute("UPDATE news_articles SET content_status='failed' WHERE id=?", (aid,))
             conn2.commit()
             conn2.close()
             print(f"❌ {str(e)[:300]}")
@@ -145,4 +143,4 @@ if __name__ == '__main__':
         print("Error: 请通过 --db 或 NEWS_DB_PATH 环境变量指定数据库路径")
         sys.exit(1)
 
-    translate_articles(args.db, args.limit, args.recent)
+    translate_news_articles(args.db, args.limit, args.recent)

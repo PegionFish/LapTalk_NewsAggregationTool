@@ -18,8 +18,8 @@ from ai_client import chat, summarize_events, extract_keywords_ai
 def analyze_events(db_path: str) -> tuple:
     """
     Analyze events using AI:
-    0. Extract keywords for articles with content (AI-powered, replaces rule engine)
-    1. Re-summarize event titles for events with ≥2 articles (improve clustering titles)
+    0. Extract keywords for news_articles with content (AI-powered, replaces rule engine)
+    1. Re-summarize event titles for events with ≥2 news_articles (improve clustering titles)
     2. Generate cross-event relation suggestions for recent events
     Returns the number of events improved.
     """
@@ -29,23 +29,23 @@ def analyze_events(db_path: str) -> tuple:
 
     try:
         # ── 0. AI 关键词提取 ─────────────────────────────────
-        pending_articles = conn.execute("""
+        pending_news_articles = conn.execute("""
             SELECT a.id, a.title, a.text_content, a.source
-            FROM articles a
-            WHERE (a.ai_keywords IS NULL OR a.ai_keywords = '')
-            AND a.category NOT IN ('platform_hotlists', 'bilibili_videos')
+            FROM news_articles a
+            WHERE content_status IN ('fetched', 'translated')
+              AND (a.ai_keywords IS NULL OR a.ai_keywords = '')
             ORDER BY a.id DESC LIMIT 100
         """).fetchall()
 
-        if pending_articles:
-            logger.info(f"AI 关键词提取: {len(pending_articles)} 篇待处理")
+        if pending_news_articles:
+            logger.info(f"AI 关键词提取: {len(pending_news_articles)} 篇待处理")
             import json as _json
-            for aid, title, text, source in pending_articles:
+            for aid, title, text, source in pending_news_articles:
                 try:
                     kws = extract_keywords_ai(title, text or '', source or '')
                     if kws:
                         conn.execute(
-                            "UPDATE articles SET keywords=?, ai_keywords=? WHERE id=?",
+                            "UPDATE news_articles SET keywords=?, ai_keywords=? WHERE id=?",
                             (_json.dumps(kws, ensure_ascii=False),
                              _json.dumps(kws, ensure_ascii=False), aid)
                         )
@@ -53,7 +53,7 @@ def analyze_events(db_path: str) -> tuple:
                 except Exception as e:
                     logger.warning(f"  extract_keywords_ai failed for #{aid}: {e}")
             conn.commit()
-            logger.info(f"AI 关键词提取完成: {keywords_extracted}/{len(pending_articles)} 篇")
+            logger.info(f"AI 关键词提取完成: {keywords_extracted}/{len(pending_news_articles)} 篇")
 
         # ── 1. Improve event titles ──────────────────────────
         events = conn.execute("""
@@ -64,16 +64,16 @@ def analyze_events(db_path: str) -> tuple:
         """).fetchall()
 
         for evt_id, current_title, art_count in events:
-            articles = conn.execute("""
-                SELECT a.title FROM article_events ae
-                JOIN articles a ON a.id = ae.article_id
+            news_articles = conn.execute("""
+                SELECT a.title FROM news_article_events ae
+                JOIN news_articles a ON a.id = ae.article_id
                 WHERE ae.event_id = ? LIMIT 20
             """, (evt_id,)).fetchall()
 
-            if len(articles) < 2:
+            if len(news_articles) < 2:
                 continue
 
-            titles_text = "\n".join(f"- {a[0]}" for a in articles)
+            titles_text = "\n".join(f"- {a[0]}" for a in news_articles)
             try:
                 ai_title = summarize_events(titles_text)
                 if ai_title and len(ai_title) > 0 and ai_title != current_title:

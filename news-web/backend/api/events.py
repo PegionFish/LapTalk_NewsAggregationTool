@@ -13,18 +13,18 @@ def get_db() -> NewsDB:
     return NewsDB(path)
 
 @router.get("")
-def list_events(status: str = "", min_articles: int = Query(1, ge=1), page: int = Query(1, ge=1), limit: int = Query(50, ge=1, le=200)):
+def list_events(status: str = "", min_news_articles: int = Query(1, ge=1), page: int = Query(1, ge=1), limit: int = Query(50, ge=1, le=200)):
     db = get_db()
     with db._conn() as conn:
         clauses = ["1=1",
-            "EXISTS (SELECT 1 FROM article_events ae JOIN articles a ON a.id = ae.article_id WHERE ae.event_id = e.id AND (a.ai_filtered IS NULL OR a.ai_filtered != -1))"]
+            "EXISTS (SELECT 1 FROM news_article_events ae JOIN news_articles a ON a.id = ae.article_id WHERE ae.event_id = e.id AND (a.ai_filtered IS NULL OR a.ai_filtered != -1))"]
         params = []
         if status:
             clauses.append("e.status = ?")
             params.append(status)
-        if min_articles > 1:
+        if min_news_articles > 1:
             clauses.append("e.article_count >= ?")
-            params.append(min_articles)
+            params.append(min_news_articles)
         where = " AND ".join(clauses)
         offset = (page - 1) * limit
         count = conn.execute(f"SELECT COUNT(*) FROM events e WHERE {where}", params).fetchone()[0]
@@ -67,9 +67,9 @@ def update_event(event_id: int, body: EventUpdate):
             conn.execute("UPDATE events SET title=? WHERE id=?", (body.title, event_id))
         if body.priority_label:
             conn.execute("UPDATE events SET priority_label=? WHERE id=?", (body.priority_label, event_id))
-            # Also propagate to all articles in this event
+            # Also propagate to all news_articles in this event
             article_ids = conn.execute(
-                "SELECT article_id FROM article_events WHERE event_id=?", (event_id,)
+                "SELECT article_id FROM news_article_events WHERE event_id=?", (event_id,)
             ).fetchall()
             for (aid,) in article_ids:
                 db.record_feedback(aid, 'priority_label', body.priority_label)
@@ -81,7 +81,7 @@ class MergeEvents(BaseModel):
 
 @router.post("/{event_id}/merge")
 def merge_events(event_id: int, body: MergeEvents):
-    """Merge event_id INTO target_event_id. Moves all articles and updates dates."""
+    """Merge event_id INTO target_event_id. Moves all news_articles and updates dates."""
     db = get_db()
     if event_id == body.target_event_id:
         raise HTTPException(400, "cannot_merge_with_self")
@@ -90,10 +90,10 @@ def merge_events(event_id: int, body: MergeEvents):
         tgt = conn.execute("SELECT first_seen, last_seen, article_count FROM events WHERE id=?", (body.target_event_id,)).fetchone()
         if not src or not tgt:
             raise HTTPException(404, "event_not_found")
-        # Move articles
+        # Move news_articles
         conn.execute("""
-            INSERT OR IGNORE INTO article_events (article_id, event_id)
-            SELECT article_id, ? FROM article_events WHERE event_id=?
+            INSERT OR IGNORE INTO news_article_events (article_id, event_id)
+            SELECT article_id, ? FROM news_article_events WHERE event_id=?
         """, (body.target_event_id, event_id))
         # Update target dates and recalculate article_count from actual rows
         conn.execute("""
@@ -102,14 +102,14 @@ def merge_events(event_id: int, body: MergeEvents):
                 last_seen = CASE WHEN ? > last_seen THEN ? ELSE last_seen END
             WHERE id=?
         """, (src[0], src[0], src[1], src[1], body.target_event_id))
-        # Re-count target articles (INSERT OR IGNORE may have skipped duplicates)
+        # Re-count target news_articles (INSERT OR IGNORE may have skipped duplicates)
         tgt_count = conn.execute(
-            "SELECT COUNT(*) FROM article_events WHERE event_id=?", (body.target_event_id,)
+            "SELECT COUNT(*) FROM news_article_events WHERE event_id=?", (body.target_event_id,)
         ).fetchone()[0]
         conn.execute("UPDATE events SET article_count=? WHERE id=?", (tgt_count, body.target_event_id))
         # Delete source event
         conn.execute("DELETE FROM events WHERE id=?", (event_id,))
-        conn.execute("DELETE FROM article_events WHERE event_id=?", (event_id,))
+        conn.execute("DELETE FROM news_article_events WHERE event_id=?", (event_id,))
         conn.commit()
     return {'ok': True, 'merged_into': body.target_event_id}
 
@@ -119,7 +119,7 @@ class SplitEvent(BaseModel):
 
 @router.post("/{event_id}/split")
 def split_event(event_id: int, body: SplitEvent):
-    """Split articles out of an event into a new event."""
+    """Split news_articles out of an event into a new event."""
     db = get_db()
     with db._conn() as conn:
         if len(body.article_ids) < 1:
@@ -135,12 +135,12 @@ def split_event(event_id: int, body: SplitEvent):
             (new_title, today, today, len(body.article_ids))
         )
         new_id = cur.lastrowid
-        # Move articles
+        # Move news_articles
         for aid in body.article_ids:
-            conn.execute("UPDATE article_events SET event_id=? WHERE article_id=? AND event_id=?",
+            conn.execute("UPDATE news_article_events SET event_id=? WHERE article_id=? AND event_id=?",
                         (new_id, aid, event_id))
         # Update old event article count
-        remaining = conn.execute("SELECT COUNT(*) FROM article_events WHERE event_id=?", (event_id,)).fetchone()[0]
+        remaining = conn.execute("SELECT COUNT(*) FROM news_article_events WHERE event_id=?", (event_id,)).fetchone()[0]
         conn.execute("UPDATE events SET article_count=? WHERE id=?", (remaining, event_id))
         if remaining == 0:
             conn.execute("UPDATE events SET status='inactive' WHERE id=?", (event_id,))

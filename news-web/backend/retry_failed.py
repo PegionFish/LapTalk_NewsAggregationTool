@@ -70,7 +70,7 @@ def save_success(aid, html):
     now = datetime.now().isoformat(timespec='seconds')
     rel = f'{os.path.basename(cache_dir)}/{aid}.html'
     conn = sqlite3.connect(config.db_path)
-    conn.execute("""UPDATE articles SET local_path=?,content_fetched_at=?,text_content=?,content_lang=?,content_status='fetched' WHERE id=?""",
+    conn.execute("""UPDATE news_articles SET local_path=?,content_fetched_at=?,text_content=?,content_lang=?,content_status='fetched' WHERE id=?""",
                  (rel, now, text, lang, aid))
     conn.commit()
     conn.close()
@@ -79,7 +79,7 @@ def save_success(aid, html):
 
 def save_error(aid, err):
     conn = sqlite3.connect(config.db_path)
-    conn.execute("UPDATE articles SET local_path=?, content_fetched_at=? WHERE id=?",
+    conn.execute("UPDATE news_articles SET local_path=?, content_fetched_at=? WHERE id=?",
                  (f'[ERR:{err}]', datetime.now().isoformat(timespec='seconds'), aid))
     conn.commit()
     conn.close()
@@ -111,23 +111,22 @@ def main():
     conn = sqlite3.connect(config.db_path)
     rows = conn.execute("""
         SELECT id, title, url, source, local_path
-        FROM articles
+        FROM news_articles
         WHERE local_path LIKE '[ERR:%'
-          AND category NOT IN ('platform_hotlists', 'bilibili_videos')
         ORDER BY local_path, id
     """).fetchall()
     conn.close()
 
-    articles = [
+    news_articles = [
         {'id': r[0], 'title': r[1], 'url': r[2], 'source': r[3],
          'error': r[4].replace('[ERR:', '').rstrip(']')}
         for r in rows
     ]
 
-    n404 = [a for a in articles if '404' in a['error']]
-    retry = [a for a in articles if '404' not in a['error']]
+    n404 = [a for a in news_articles if '404' in a['error']]
+    retry = [a for a in news_articles if '404' not in a['error']]
 
-    total = len(articles)
+    total = len(news_articles)
     print(f"Total failed: {total}")
     print(f"  404 dead links (skip): {len(n404)}")
     print(f"  To retry: {len(retry)} (403={sum(1 for a in retry if '403' in a['error'])}, "
@@ -170,8 +169,8 @@ def main():
     # ── Remaining: try Playwright one at a time ──
     conn = sqlite3.connect(config.db_path)
     remaining = conn.execute(
-        "SELECT id, title, url, source, local_path FROM articles "
-        "WHERE local_path LIKE '[ERR:%' AND category NOT IN ('platform_hotlists', 'bilibili_videos') "
+        "SELECT id, title, url, source, local_path FROM news_articles "
+        "WHERE local_path LIKE '[ERR:%' "
         "AND local_path NOT LIKE '[ERR:HTTP 404%'"
     ).fetchall()
     conn.close()
@@ -185,7 +184,7 @@ def main():
          'error': r[4].replace('[ERR:', '').rstrip(']')}
         for r in remaining
     ]
-    print(f"Phase 2: Playwright for {len(rem_arts)} stubborn articles...")
+    print(f"Phase 2: Playwright for {len(rem_arts)} stubborn news_articles...")
     sys.stdout.flush()
 
     try:
@@ -223,7 +222,7 @@ def main():
     # Final
     conn = sqlite3.connect(config.db_path)
     still = conn.execute(
-        "SELECT COUNT(*) FROM articles WHERE local_path LIKE '[ERR:%'"
+        "SELECT COUNT(*) FROM news_articles WHERE local_path LIKE '[ERR:%'"
     ).fetchone()[0]
     conn.close()
     print(f"\n=== DONE: {total} originally, {still} remaining ===")

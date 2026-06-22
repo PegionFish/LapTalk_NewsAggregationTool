@@ -47,7 +47,7 @@ FILTER_PROMPT = """你是新闻筛选助手。根据以下标题列表，判断�
 例如：1,3,5,8"""
 
 
-def filter_batch(articles: list) -> set | None:
+def filter_batch(news_articles: list) -> set | None:
     """对一批文章标题调用 AI 筛选，返回保留的 ID 集合。
 
     Returns:
@@ -55,7 +55,7 @@ def filter_batch(articles: list) -> set | None:
         None: API 调用失败（调用方应保持原有 ai_filtered 状态，等待重试）
     """
     lines = []
-    for aid, title, source in articles:
+    for aid, title, source in news_articles:
         lines.append(f"[{aid}] [{source}] {title}")
     prompt = FILTER_PROMPT + "\n\n" + "\n".join(lines)
 
@@ -87,10 +87,9 @@ def run_ai_filter(db_path: str = None):
 
     # 查询待筛选文章
     rows = conn.execute("""
-        SELECT id, title, source FROM articles
-        WHERE (local_path = '' OR local_path IS NULL)
-          AND (ai_filtered = 0)
-          AND category NOT IN ('platform_hotlists', 'bilibili_videos')
+        SELECT id, title, source FROM news_articles
+        WHERE content_status = 'pending'
+          AND ai_filtered = 0
         ORDER BY fetched_at DESC
     """).fetchall()
 
@@ -114,10 +113,10 @@ def run_ai_filter(db_path: str = None):
 
         for aid, title, source in batch:
             if aid in batch_ids:
-                conn.execute("UPDATE articles SET ai_filtered=1 WHERE id=?", (aid,))
+                conn.execute("UPDATE news_articles SET ai_filtered=1 WHERE id=?", (aid,))
                 approved += 1
             else:
-                conn.execute("UPDATE articles SET ai_filtered=-1 WHERE id=?", (aid,))
+                conn.execute("UPDATE news_articles SET ai_filtered=-1 WHERE id=?", (aid,))
                 rejected += 1
 
         conn.commit()

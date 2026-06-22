@@ -7,7 +7,7 @@ from config import config
 from db.news_db import NewsDB
 from utils.proxy import get_httpx_proxy
 
-router = APIRouter(prefix="/api/articles", tags=["articles"])
+router = APIRouter(prefix="/api/news", tags=["news"])
 
 def get_db() -> NewsDB:
     path = config.db_path
@@ -16,7 +16,7 @@ def get_db() -> NewsDB:
     return NewsDB(path)
 
 @router.get("")
-def list_articles(
+def list_news_articles(
     q: str = "",
     source: str = "",
     date_from: str = "",
@@ -28,14 +28,14 @@ def list_articles(
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=500),
 ):
-    """Search articles with multi-dimensional filtering + 排序。
+    """Search news_articles with multi-dimensional filtering + 排序。
 
     sort: fetched_desc(默认) | score_desc | score_asc | date_desc
     """
     db = get_db()
     with db._conn() as conn:
         # 默认排除热榜/视频趋势数据（有独立展示页面）
-        clauses = ["a.category NOT IN ('platform_hotlists', 'bilibili_videos')"]
+        clauses = []
         params = []
         if q:
             clauses.append("(a.title LIKE ? OR a.keywords LIKE ?)")
@@ -72,7 +72,7 @@ def list_articles(
         }
         order_by = order_map.get(sort, order_map['fetched_desc'])
 
-        count = conn.execute(f"SELECT COUNT(*) FROM articles a WHERE {where}", params).fetchone()[0]
+        count = conn.execute(f"SELECT COUNT(*) FROM news_articles a WHERE {where}", params).fetchone()[0]
         rows = conn.execute(f"""
             SELECT a.id, a.title, a.source, a.url, a.published_date, a.fetched_at,
                    a.priority_score, a.priority_label, a.human_verified, a.keywords, a.human_tags,
@@ -80,13 +80,13 @@ def list_articles(
                    a.content_lang, a.ai_analyzed, a.human_processed, a.topic_category,
                    CASE WHEN a.translated_content != '' THEN 1 ELSE 0 END as has_translation,
                    a.local_path, a.retry_count
-            FROM articles a WHERE {where}
+            FROM news_articles a WHERE {where}
             ORDER BY {order_by}
             LIMIT ? OFFSET ?
         """, params + [limit, offset]).fetchall()
 
     import json
-    articles = [{
+    news_articles = [{
         'id': r[0], 'title': r[1], 'source': r[2], 'url': r[3],
         'published': r[4], 'fetched': r[5], 'score': r[6],
         'label': r[7], 'verified': r[8],
@@ -103,7 +103,7 @@ def list_articles(
         'retry_count': r[19] or 0,
     } for r in rows]
 
-    return {'articles': articles, 'total': count, 'page': page, 'limit': limit}
+    return {'articles': news_articles, 'total': count, 'page': page, 'limit': limit}
 
 
 @router.get("/categories")
@@ -153,14 +153,14 @@ def get_article(article_id: int):
             SELECT a.id, a.title, a.source, a.url, a.published_date, a.fetched_at,
                    a.priority_score, a.priority_label, a.human_verified, a.keywords, a.human_tags,
                    a.category, a.metadata
-            FROM articles a WHERE a.id=?
+            FROM news_articles a WHERE a.id=?
         """, (article_id,)).fetchone()
         if not row:
             raise HTTPException(404, "article_not_found")
         # Find event membership
         evt = conn.execute("""
             SELECT e.id, e.title FROM events e
-            JOIN article_events ae ON ae.event_id = e.id
+            JOIN news_article_events ae ON ae.event_id = e.id
             WHERE ae.article_id=?
         """, (article_id,)).fetchone()
 
@@ -189,7 +189,7 @@ def update_article(article_id: int, body: ArticleUpdate):
         db.record_feedback(article_id, 'keywords', body.human_tags)
     if body.human_verified is not None:
         with db._conn() as conn:
-            conn.execute("UPDATE articles SET human_verified=? WHERE id=?", (body.human_verified, article_id))
+            conn.execute("UPDATE news_articles SET human_verified=? WHERE id=?", (body.human_verified, article_id))
             conn.commit()
     return {'ok': True}
 
@@ -201,7 +201,7 @@ async def get_article_content(article_id: int):
     with db._conn() as conn:
         row = conn.execute(
             "SELECT url, local_path, text_content, translated_content, content_lang, content_status, ai_summary, ai_analyzed, human_processed "
-            "FROM articles WHERE id=?", (article_id,)
+            "FROM news_articles WHERE id=?", (article_id,)
         ).fetchone()
     if not row:
         raise HTTPException(404, "article_not_found")
@@ -260,7 +260,7 @@ async def get_article_content(article_id: int):
             # 回填 DB
             try:
                 conn2 = sqlite3.connect(config.db_path)
-                conn2.execute("UPDATE articles SET text_content=?, content_lang=?, content_status='fetched' WHERE id=?",
+                conn2.execute("UPDATE news_articles SET text_content=?, content_lang=?, content_status='fetched' WHERE id=?",
                               (text, lang, article_id))
                 conn2.commit()
                 conn2.close()
@@ -300,7 +300,7 @@ async def get_article_content(article_id: int):
 
                 conn2 = _sqlite3.connect(config.db_path)
                 conn2.execute("""
-                    UPDATE articles SET local_path=?, content_fetched_at=?,
+                    UPDATE news_articles SET local_path=?, content_fetched_at=?,
                         text_content=?, content_lang=?, content_status='fetched'
                     WHERE id=?
                 """, (rel_path, now, text, lang, article_id))
@@ -424,7 +424,7 @@ async def serve_article_html(article_id: int):
     db = get_db()
     with db._conn() as conn:
         row = conn.execute(
-            "SELECT url, local_path FROM articles WHERE id=?", (article_id,)
+            "SELECT url, local_path FROM news_articles WHERE id=?", (article_id,)
         ).fetchone()
     if not row:
         raise HTTPException(404, "article_not_found")
@@ -474,7 +474,7 @@ async def serve_article_html(article_id: int):
 
                 conn2 = _sqlite3.connect(config.db_path)
                 conn2.execute("""
-                    UPDATE articles SET local_path=?, content_fetched_at=?,
+                    UPDATE news_articles SET local_path=?, content_fetched_at=?,
                         text_content=?, content_lang=?, content_status='fetched'
                     WHERE id=?
                 """, (rel_path, now, text, lang, article_id))
@@ -554,7 +554,7 @@ def analyze_article(article_id: int):
     db = get_db()
     with db._conn() as conn:
         row = conn.execute(
-            "SELECT id, title, text_content, ai_summary, ai_analyzed FROM articles WHERE id=?",
+            "SELECT id, title, text_content, ai_summary, ai_analyzed FROM news_articles WHERE id=?",
             (article_id,)
         ).fetchone()
     if not row:
@@ -565,7 +565,7 @@ def analyze_article(article_id: int):
     if analyzed and cached:
         return {"ok": True, "cached": True, "analysis": cached,
                 "ai_analyzed": True, "human_processed": bool(
-                    conn.execute("SELECT human_processed FROM articles WHERE id=?", (aid,)).fetchone()[0]
+                    conn.execute("SELECT human_processed FROM news_articles WHERE id=?", (aid,)).fetchone()[0]
                 )}
 
     if not content:
@@ -579,7 +579,7 @@ def analyze_article(article_id: int):
 
     with db._conn() as conn:
         conn.execute(
-            "UPDATE articles SET ai_summary=?, ai_analyzed=1 WHERE id=?",
+            "UPDATE news_articles SET ai_summary=?, ai_analyzed=1 WHERE id=?",
             (analysis, article_id)
         )
         conn.commit()
@@ -596,7 +596,7 @@ def get_cleaned_content(article_id: int):
     db = get_db()
     with db._conn() as conn:
         row = conn.execute(
-            "SELECT id, url, local_path, ai_cleaned_content FROM articles WHERE id=?",
+            "SELECT id, url, local_path, ai_cleaned_content FROM news_articles WHERE id=?",
             (article_id,)
         ).fetchone()
     if not row:
@@ -635,7 +635,7 @@ def get_cleaned_content(article_id: int):
         # 缓存结果到 DB
         conn2 = _sqlite3.connect(config.db_path)
         conn2.execute(
-            "UPDATE articles SET ai_cleaned_content=? WHERE id=?",
+            "UPDATE news_articles SET ai_cleaned_content=? WHERE id=?",
             (cleaned, article_id)
         )
         conn2.commit()
@@ -711,7 +711,7 @@ def verify_dead_links():
     conn = sqlite3.connect(config.db_path)
     rows = conn.execute("""
         SELECT id, title, url, source, local_path, retry_count, content_status
-        FROM articles
+        FROM news_articles
         WHERE local_path LIKE '[ERR:HTTP 404%'
            OR local_path LIKE '[ERR:HTTP 410%'
            OR local_path LIKE '[ERR:HTTP 451%'
@@ -737,7 +737,7 @@ def verify_dead_links():
         'confirmed_dead': confirmed_dead,
         'suspects': suspects,
         'note': 'retry_count≥2 的文章已被自动标记 dead。'
-                '如需解标记，调用 PATCH /api/articles/{id} 设置 content_status 为空。',
+                '如需解标记，调用 PATCH /api/news/{id} 设置 content_status 为空。',
     }
 
 
@@ -771,10 +771,9 @@ def recover_dead_links(body: dict):
         import sqlite3
         conn = sqlite3.connect(config.db_path)
         rows = conn.execute("""
-            SELECT id FROM articles
+            SELECT id FROM news_articles
             WHERE (local_path LIKE '[ERR:HTTP 404%' OR local_path LIKE '[ERR:HTTP 410%')
             AND content_status != 'dead'
-            AND category NOT IN ('platform_hotlists', 'bilibili_videos')
         """).fetchall()
         conn.close()
         ids = [r[0] for r in rows]
@@ -799,7 +798,7 @@ def recover_dead_links(body: dict):
         for aid in ids:
             conn2 = sqlite3.connect(config.db_path)
             row = conn2.execute(
-                "SELECT title FROM articles WHERE id=?", (aid,)
+                "SELECT title FROM news_articles WHERE id=?", (aid,)
             ).fetchone()
             conn2.close()
             title = row[0][:60] if row else str(aid)

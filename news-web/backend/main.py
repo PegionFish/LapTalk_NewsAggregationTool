@@ -78,7 +78,7 @@ def pipeline_status():
 # ── Register API routers ──────────────────────────────────
 from api.settings import router as settings_router
 from api.stats import router as stats_router
-from api.articles import router as articles_router
+from api.news import router as news_router
 from api.comments import router as comments_router
 from api.events import router as events_router
 from api.chains import router as chains_router
@@ -94,10 +94,11 @@ from api.fetch import router as fetch_router
 from api.update import router as update_router
 from api.tasks import router as tasks_router
 from api.browser import router as browser_router
+from api.trending import router as trending_router
 
 app.include_router(settings_router)
 app.include_router(stats_router)
-app.include_router(articles_router)
+app.include_router(news_router)
 app.include_router(comments_router)
 app.include_router(events_router)
 app.include_router(chains_router)
@@ -113,6 +114,7 @@ app.include_router(fetch_router)
 app.include_router(update_router)
 app.include_router(tasks_router)
 app.include_router(browser_router)
+app.include_router(trending_router)
 
 # ── SPA fallback + static mount (must be last) ──────────
 from fastapi.responses import FileResponse

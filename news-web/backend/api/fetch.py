@@ -118,7 +118,7 @@ def retry_fetch_source(name: str):
             db = NewsDB(config.db_path)
             items = fetch_feed(feed_info)
             fetched = len(items)
-            saved, skipped = db.save_articles('rss_news', items)
+            saved, skipped = db.save_news_articles('rss_news', items)
             db.link_articles_to_events()
             elapsed = int((datetime.now() - started).total_seconds() * 1000)
             db.log_fetch(
@@ -152,8 +152,8 @@ def retry_fetch_source(name: str):
 # 源文章列表
 # ══════════════════════════════════════════════════════════════
 
-@router.get("/sources/{name}/articles")
-def fetch_source_articles(
+@router.get("/sources/{name}/news_articles")
+def fetch_source_news_articles(
     name: str,
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=200),
@@ -176,22 +176,22 @@ def fetch_source_articles(
         where_clauses.append("translated_content != ''")
 
     where = " AND ".join(where_clauses)
-    total = conn.execute(f"SELECT COUNT(*) FROM articles WHERE {where}", params).fetchone()[0]
+    total = conn.execute(f"SELECT COUNT(*) FROM news_articles WHERE {where}", params).fetchone()[0]
     offset = (page - 1) * limit
     rows = conn.execute(f"""
         SELECT id, title, url, source, content_status, local_path,
                content_fetched_at, content_lang, translated_content
-        FROM articles WHERE {where}
+        FROM news_articles WHERE {where}
         ORDER BY id DESC LIMIT ? OFFSET ?
     """, params + [limit, offset]).fetchall()
     conn.close()
 
-    articles = []
+    news_articles = []
     for r in rows:
         st = 'failed' if (r[5] or '').startswith('[ERR:') else (
             'translated' if r[8] else ('fetched' if r[5] else 'pending')
         )
-        articles.append({
+        news_articles.append({
             'id': r[0], 'title': r[1], 'url': r[2], 'source': r[3],
             'content_status': st,
             'local_path': r[5] or '',
@@ -200,15 +200,15 @@ def fetch_source_articles(
             'has_translation': bool(r[8]),
         })
 
-    return {"total": total, "page": page, "limit": limit, "source": name, "articles": articles}
+    return {"total": total, "page": page, "limit": limit, "source": name, "articles": news_articles}
 
 
 # ══════════════════════════════════════════════════════════════
 # 失败文章列表
 # ══════════════════════════════════════════════════════════════
 
-@router.get("/articles/failed")
-def fetch_failed_articles(
+@router.get("/news_articles/failed")
+def fetch_failed_news_articles(
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=200),
 ):
@@ -218,17 +218,17 @@ def fetch_failed_articles(
 
     conn = _conn()
     total = conn.execute(
-        "SELECT COUNT(*) FROM articles WHERE local_path LIKE '[ERR:%'"
+        "SELECT COUNT(*) FROM news_articles WHERE local_path LIKE '[ERR:%'"
     ).fetchone()[0]
     offset = (page - 1) * limit
     rows = conn.execute("""
         SELECT id, title, url, source, local_path, content_fetched_at
-        FROM articles WHERE local_path LIKE '[ERR:%'
+        FROM news_articles WHERE local_path LIKE '[ERR:%'
         ORDER BY id DESC LIMIT ? OFFSET ?
     """, (limit, offset)).fetchall()
     conn.close()
 
-    articles = [
+    news_articles = [
         {
             'id': r[0], 'title': r[1], 'url': r[2], 'source': r[3],
             'error': (r[4] or '[ERR:unknown]').replace('[ERR:', '').rstrip(']'),
@@ -236,14 +236,14 @@ def fetch_failed_articles(
         }
         for r in rows
     ]
-    return {"total": total, "page": page, "limit": limit, "articles": articles}
+    return {"total": total, "page": page, "limit": limit, "articles": news_articles}
 
 
 # ══════════════════════════════════════════════════════════════
 # 单篇缓存重试
 # ══════════════════════════════════════════════════════════════
 
-@router.post("/articles/{article_id}/retry-cache")
+@router.post("/news_articles/{article_id}/retry-cache")
 def retry_article_cache(article_id: int):
     """单篇文章缓存重试 — 重新下载 HTML 并提取文本。"""
     if not config.db_path:
@@ -251,7 +251,7 @@ def retry_article_cache(article_id: int):
 
     conn = _conn()
     row = conn.execute(
-        "SELECT id, title, url FROM articles WHERE id=?", (article_id,)
+        "SELECT id, title, url FROM news_articles WHERE id=?", (article_id,)
     ).fetchone()
     conn.close()
     if not row:
@@ -273,7 +273,7 @@ def retry_article_cache(article_id: int):
             if res['error']:
                 conn2 = _conn()
                 conn2.execute(
-                    "UPDATE articles SET local_path=?, content_fetched_at=? WHERE id=?",
+                    "UPDATE news_articles SET local_path=?, content_fetched_at=? WHERE id=?",
                     (f"[ERR:{res['error']}]", _dt.now().isoformat(timespec='seconds'), aid)
                 )
                 conn2.commit(); conn2.close()
@@ -293,7 +293,7 @@ def retry_article_cache(article_id: int):
             rel_path = f'{os.path.basename(content_dir)}/{aid}.html'
             conn2 = _conn()
             conn2.execute("""
-                UPDATE articles SET
+                UPDATE news_articles SET
                     local_path=?, content_fetched_at=?,
                     text_content=?, content_lang=?, content_status='fetched'
                 WHERE id=?
@@ -308,7 +308,7 @@ def retry_article_cache(article_id: int):
                     if translation:
                         conn2 = _conn()
                         conn2.execute("""
-                            UPDATE articles SET
+                            UPDATE news_articles SET
                                 translated_content=?, content_status='translated', translated_at=?
                             WHERE id=?
                         """, (translation, _dt.now().isoformat(timespec='seconds'), aid))
@@ -332,7 +332,7 @@ _RETRY_TIMEOUT = 60   # 已知失败文章的超时秒数
 DEAD_CODES = {404, 410, 451}  # 永久死链 — 不重试
 # 403 / 网络错误会走 Playwright fallback
 
-@router.post("/articles/batch-retry")
+@router.post("/news_articles/batch-retry")
 def retry_articles_batch(body: dict):
     """批量缓存重试 — 支持指定 ID 列表或重试所有失败文章。
 
@@ -352,8 +352,7 @@ def retry_articles_batch(body: dict):
     if retry_all:
         conn = _conn()
         rows = conn.execute(
-            "SELECT id FROM articles WHERE local_path LIKE '[ERR:%' "
-            "AND category NOT IN ('platform_hotlists', 'bilibili_videos')"
+            "SELECT id FROM news_articles WHERE local_path LIKE '[ERR:%'"
         ).fetchall()
         conn.close()
         ids = [r[0] for r in rows]
@@ -381,19 +380,19 @@ def retry_articles_batch(body: dict):
 
         # ── 查询所有文章，按源分组 ──
         conn = _conn()
-        articles = []
+        news_articles = []
         for aid in ids:
             row = conn.execute(
-                "SELECT id, title, url, source FROM articles WHERE id=?", (aid,)
+                "SELECT id, title, url, source FROM news_articles WHERE id=?", (aid,)
             ).fetchone()
             if row:
-                articles.append(row)
+                news_articles.append(row)
         conn.close()
 
         # ── 预筛：分离死链 ──
         to_retry = []
         skipped = 0
-        for aid, title, url, source in articles:
+        for aid, title, url, source in news_articles:
             if not url or not url.startswith('http'):
                 _log_retry(f"#{aid} ⚠️ 无有效 URL — 跳过")
                 skipped += 1
@@ -401,7 +400,7 @@ def retry_articles_batch(body: dict):
             # 检查原错误是否为死链
             conn2 = _conn()
             err_row = conn2.execute(
-                "SELECT local_path FROM articles WHERE id=?", (aid,)
+                "SELECT local_path FROM news_articles WHERE id=?", (aid,)
             ).fetchone()
             conn2.close()
             if err_row and err_row[0]:
@@ -508,7 +507,7 @@ def retry_articles_batch(body: dict):
                                     break
                             if err_code is not None:
                                 conn2.execute("""
-                                    UPDATE articles SET
+                                    UPDATE news_articles SET
                                         local_path=?, content_fetched_at=?,
                                         retry_count = CASE
                                             WHEN local_path LIKE ('[ERR:HTTP ' || ? || '%') THEN retry_count + 1
@@ -517,13 +516,13 @@ def retry_articles_batch(body: dict):
                                     WHERE id=?
                                 """, (f"[ERR:{err}]", _dt.now().isoformat(timespec='seconds'),
                                       str(err_code), aid))
-                                rc = conn2.execute("SELECT retry_count FROM articles WHERE id=?", (aid,)).fetchone()
+                                rc = conn2.execute("SELECT retry_count FROM news_articles WHERE id=?", (aid,)).fetchone()
                                 if rc and rc[0] >= 2:
-                                    conn2.execute("UPDATE articles SET content_status='dead' WHERE id=?", (aid,))
+                                    conn2.execute("UPDATE news_articles SET content_status='dead' WHERE id=?", (aid,))
                                     _log_retry(f"#{aid} 💀 HTTP {err_code} ×{rc[0]} → 标记 dead")
                             else:
                                 conn2.execute("""
-                                    UPDATE articles SET local_path=?, content_fetched_at=?, retry_count=retry_count+1
+                                    UPDATE news_articles SET local_path=?, content_fetched_at=?, retry_count=retry_count+1
                                     WHERE id=?
                                 """, (f"[ERR:{err}]", _dt.now().isoformat(timespec='seconds'), aid))
                             conn2.commit()
@@ -546,7 +545,7 @@ def retry_articles_batch(body: dict):
                     rel_path = f'{os.path.basename(content_dir)}/{aid}.html'
                     conn2 = _conn()
                     conn2.execute("""
-                        UPDATE articles SET
+                        UPDATE news_articles SET
                             local_path=?, content_fetched_at=?,
                             text_content=?, content_lang=?, content_status='fetched'
                         WHERE id=?
@@ -562,7 +561,7 @@ def retry_articles_batch(body: dict):
                 except Exception as e:
                     conn2 = _conn()
                     conn2.execute(
-                        "UPDATE articles SET retry_count=retry_count+1 WHERE id=?",
+                        "UPDATE news_articles SET retry_count=retry_count+1 WHERE id=?",
                         (aid,)
                     )
                     conn2.commit()
@@ -598,7 +597,7 @@ def retry_articles_batch(body: dict):
     }
 
 
-@router.get("/articles/batch-retry/status")
+@router.get("/news_articles/batch-retry/status")
 def batch_retry_status():
     """查询批量重试进度 — 含耗时、跳过数。"""
     s = dict(_retry_state)
@@ -611,7 +610,7 @@ def batch_retry_status():
     return s
 
 
-@router.post("/articles/batch-retry/cancel")
+@router.post("/news_articles/batch-retry/cancel")
 def batch_retry_cancel():
     """取消当前批量重试任务 — 已开始的 worker 会完成，未开始的跳过。"""
     global _retry_state

@@ -481,8 +481,8 @@ def build_panoramic_context(conn) -> str:
     event_kws = {}
     for evt_id, _, _, _, _ in events:
         rows = conn.execute("""
-            SELECT a.ai_keywords, a.keywords FROM articles a
-            JOIN article_events ae ON ae.article_id = a.id
+            SELECT a.ai_keywords, a.keywords FROM news_articles a
+            JOIN news_article_events ae ON ae.article_id = a.id
             WHERE ae.event_id = ?
         """, (evt_id,)).fetchall()
         kws = set()

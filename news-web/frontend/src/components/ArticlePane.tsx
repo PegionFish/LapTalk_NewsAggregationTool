@@ -140,7 +140,7 @@ setLoaded(false);
         setIsFallback(false);
         setLoaded(false);
         if (iframeRef.current) {
-          iframeRef.current.src = `/api/articles/${article.id}/html?t=${Date.now()}`;
+          iframeRef.current.src = `/api/news/${article.id}/html?t=${Date.now()}`;
         }
       } else if ((res as any).challenge) {
         setSaveStatus('验证未通过，请重试或手动粘贴内容');
@@ -170,7 +170,7 @@ setLoaded(false);
           setPasteMode(false);
           setLoaded(false);
           if (iframeRef.current) {
-            iframeRef.current.src = `/api/articles/${article.id}/html?t=${Date.now()}`;
+            iframeRef.current.src = `/api/news/${article.id}/html?t=${Date.now()}`;
           }
         }, 1000);
       } else {
@@ -453,7 +453,7 @@ setLoaded(false);
             <div style={{ flex: 1, position: 'relative', background: '#fff', display: isFallback || isChallenge ? 'none' : undefined }}>
               <iframe
                 ref={iframeRef}
-                src={`/api/articles/${article.id}/html`}
+                src={`/api/news/${article.id}/html`}
                 style={{ width: '100%', height: '100%', border: 'none' }}
                 sandbox="allow-same-origin allow-popups"
                 title={article.title}

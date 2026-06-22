@@ -93,11 +93,9 @@ def _batch_translate():
         db = _conn()
         rows = db.execute("""
             SELECT id, title, local_path
-            FROM articles
-            WHERE local_path != '' AND local_path NOT LIKE '[ERR:%'
+            FROM news_articles
+            WHERE content_status IN ('fetched', 'translated')
               AND (translated_content IS NULL OR translated_content = '')
-              AND category NOT IN ('platform_hotlists', 'bilibili_videos')
-              AND content_status NOT IN ('dead', 'metadata_only')
             ORDER BY id DESC
         """).fetchall()
         db.close()
@@ -123,7 +121,7 @@ def _batch_translate():
                 _translate_state["done"] += 1
                 # 写入标记避免下次重复查询，陷入无限循环
                 db2 = _conn()
-                db2.execute("UPDATE articles SET translated_content='[ERR:FILE_MISSING]' WHERE id=?", (aid,))
+                db2.execute("UPDATE news_articles SET translated_content='[ERR:FILE_MISSING]' WHERE id=?", (aid,))
                 safe_commit(db2)
                 db2.close()
                 continue
@@ -138,7 +136,7 @@ def _batch_translate():
                 _translate_state["failed"] += 1
                 _translate_state["done"] += 1
                 db2 = _conn()
-                db2.execute("UPDATE articles SET translated_content='[ERR:READ_FAILED]' WHERE id=?", (aid,))
+                db2.execute("UPDATE news_articles SET translated_content='[ERR:READ_FAILED]' WHERE id=?", (aid,))
                 safe_commit(db2)
                 db2.close()
                 continue
@@ -148,7 +146,7 @@ def _batch_translate():
                 _translate_state["failed"] += 1
                 _translate_state["done"] += 1
                 db2 = _conn()
-                db2.execute("UPDATE articles SET translated_content='[ERR:HTML_TOO_SHORT]' WHERE id=?", (aid,))
+                db2.execute("UPDATE news_articles SET translated_content='[ERR:HTML_TOO_SHORT]' WHERE id=?", (aid,))
                 safe_commit(db2)
                 db2.close()
                 continue
@@ -166,7 +164,7 @@ def _batch_translate():
 
             if lang != 'en':
                 db2 = _conn()
-                db2.execute("UPDATE articles SET text_content=?, content_lang=? WHERE id=?",
+                db2.execute("UPDATE news_articles SET text_content=?, content_lang=? WHERE id=?",
                            (html, lang, aid))
                 safe_commit(db2)
                 db2.close()
@@ -181,7 +179,7 @@ def _batch_translate():
                 if translation and len(translation) > 20:
                     db2 = _conn()
                     db2.execute(
-                        "UPDATE articles SET text_content=?, translated_content=?, content_status='translated', content_lang='en', translated_at=? WHERE id=?",
+                        "UPDATE news_articles SET text_content=?, translated_content=?, content_status='translated', content_lang='en', translated_at=? WHERE id=?",
                         (html, translation, datetime.now().isoformat(timespec='seconds'), aid)
                     )
                     safe_commit(db2)
@@ -216,7 +214,7 @@ def _batch_translate():
                 if translation and len(translation) > 20:
                     db2 = _conn()
                     db2.execute(
-                        "UPDATE articles SET text_content=?, translated_content=?, content_status='translated', content_lang='en', translated_at=? WHERE id=?",
+                        "UPDATE news_articles SET text_content=?, translated_content=?, content_status='translated', content_lang='en', translated_at=? WHERE id=?",
                         (html, translation, datetime.now().isoformat(timespec='seconds'), aid)
                     )
                     safe_commit(db2)
@@ -257,10 +255,9 @@ def _batch_analyze():
         db = _conn()
         rows = db.execute("""
             SELECT id, title, text_content
-            FROM articles
-            WHERE text_content != ''
+            FROM news_articles
+            WHERE content_status IN ('fetched', 'translated')
               AND (ai_analyzed IS NULL OR ai_analyzed = 0 OR ai_summary IS NULL OR ai_summary = '')
-              AND category NOT IN ('platform_hotlists', 'bilibili_videos')
             ORDER BY id DESC
         """).fetchall()
         db.close()
@@ -286,7 +283,7 @@ def _batch_analyze():
                 if analysis:
                     db2 = _conn()
                     db2.execute(
-                        "UPDATE articles SET ai_summary=?, ai_analyzed=1 WHERE id=?",
+                        "UPDATE news_articles SET ai_summary=?, ai_analyzed=1 WHERE id=?",
                         (analysis, aid)
                     )
                     safe_commit(db2)
@@ -321,7 +318,7 @@ def _batch_analyze():
                 if analysis:
                     db2 = _conn()
                     db2.execute(
-                        "UPDATE articles SET ai_summary=?, ai_analyzed=1 WHERE id=?",
+                        "UPDATE news_articles SET ai_summary=?, ai_analyzed=1 WHERE id=?",
                         (analysis, aid)
                     )
                     safe_commit(db2)
@@ -508,10 +505,9 @@ def start_batch_translate():
     # 预计算待处理数量
     db = _conn()
     pending = db.execute("""
-        SELECT COUNT(*) FROM articles
-        WHERE local_path != '' AND local_path NOT LIKE '[ERR:%'
+        SELECT COUNT(*) FROM news_articles
+        WHERE content_status IN ('fetched', 'translated')
           AND (translated_content IS NULL OR translated_content = '')
-          AND category NOT IN ('platform_hotlists', 'bilibili_videos')
     """).fetchone()[0]
     db.close()
 
@@ -526,16 +522,13 @@ def get_batch_translate_status():
     if _translate_state.get("running"):
         db = _conn()
         total = db.execute("""
-            SELECT COUNT(*) FROM articles
-            WHERE local_path != '' AND local_path NOT LIKE '[ERR:%'
+            SELECT COUNT(*) FROM news_articles
+            WHERE content_status IN ('fetched', 'translated')
               AND (translated_content IS NULL OR translated_content = '')
-              AND category NOT IN ('platform_hotlists', 'bilibili_videos')
         """).fetchone()[0]
         done = db.execute("""
-            SELECT COUNT(*) FROM articles
-            WHERE local_path != '' AND local_path NOT LIKE '[ERR:%'
-              AND translated_content != ''
-              AND category NOT IN ('platform_hotlists', 'bilibili_videos')
+            SELECT COUNT(*) FROM news_articles
+            WHERE translated_content != ''
         """).fetchone()[0]
         db.close()
         return {"running": True, "total": total, "done": done, "failed": 0,
@@ -554,10 +547,9 @@ def start_batch_analyze():
         return {"ok": False, "message": msg}
     db = _conn()
     pending = db.execute("""
-        SELECT COUNT(*) FROM articles
-        WHERE text_content != ''
+        SELECT COUNT(*) FROM news_articles
+        WHERE content_status IN ('fetched', 'translated')
           AND (ai_analyzed IS NULL OR ai_analyzed = 0 OR ai_summary IS NULL OR ai_summary = '')
-          AND category NOT IN ('platform_hotlists', 'bilibili_videos')
     """).fetchone()[0]
     db.close()
     task_state.init_state('analyze', total=pending)
@@ -571,14 +563,12 @@ def get_batch_analyze_status():
     if _analyze_state.get("running"):
         db = _conn()
         total = db.execute("""
-            SELECT COUNT(*) FROM articles
-            WHERE text_content != ''
+            SELECT COUNT(*) FROM news_articles
+            WHERE content_status IN ('fetched', 'translated')
               AND (ai_analyzed IS NULL OR ai_analyzed = 0 OR ai_summary IS NULL OR ai_summary = '')
-              AND category NOT IN ('platform_hotlists', 'bilibili_videos')
         """).fetchone()[0]
         done = db.execute("""
-            SELECT COUNT(*) FROM articles WHERE ai_analyzed = 1 AND ai_summary != ''
-              AND category NOT IN ('platform_hotlists', 'bilibili_videos')
+            SELECT COUNT(*) FROM news_articles WHERE ai_analyzed = 1 AND ai_summary != ''
         """).fetchone()[0]
         db.close()
         return {"running": True, "total": total, "done": done, "failed": 0,
@@ -631,7 +621,7 @@ def _batch_ai_keywords():
     _kw_state = {"running": True, "total": 0, "done": 0, "failed": 0, "current": "", "log": []}
     try:
         db = _conn()
-        rows = db.execute("SELECT id, title, text_content, source FROM articles WHERE text_content != '' AND (ai_keywords IS NULL OR ai_keywords = '') AND category NOT IN ('platform_hotlists', 'bilibili_videos') ORDER BY id DESC").fetchall(); db.close()
+        rows = db.execute("SELECT id, title, text_content, source FROM news_articles WHERE content_status IN ('fetched', 'translated') AND (ai_keywords IS NULL OR ai_keywords = '') ORDER BY id DESC").fetchall(); db.close()
         if not rows: _kw_state["running"] = False; return
         _kw_state["total"] = len(rows)
         _log(_kw_state, f"待提取关键词 {len(rows)} 篇")
@@ -655,7 +645,7 @@ def _batch_ai_keywords():
                 continue
             if kws:
                 db2 = _conn()
-                db2.execute("UPDATE articles SET keywords=?, ai_keywords=? WHERE id=?", (_json.dumps(kws, ensure_ascii=False), _json.dumps(kws, ensure_ascii=False), aid))
+                db2.execute("UPDATE news_articles SET keywords=?, ai_keywords=? WHERE id=?", (_json.dumps(kws, ensure_ascii=False), _json.dumps(kws, ensure_ascii=False), aid))
                 safe_commit(db2); db2.close()
                 _log(_kw_state, f"#{aid} ✅ {len(kws)} 个关键词: {', '.join(kws[:5])}")
             else:
@@ -670,7 +660,7 @@ def _batch_ai_keywords():
                 kws = extract_keywords_ai(title, text, source)
                 if kws:
                     db2 = _conn()
-                    db2.execute("UPDATE articles SET keywords=?, ai_keywords=? WHERE id=?", (_json.dumps(kws, ensure_ascii=False), _json.dumps(kws, ensure_ascii=False), aid))
+                    db2.execute("UPDATE news_articles SET keywords=?, ai_keywords=? WHERE id=?", (_json.dumps(kws, ensure_ascii=False), _json.dumps(kws, ensure_ascii=False), aid))
                     safe_commit(db2); db2.close()
                     _log(_kw_state, f"#{aid} ✅ {len(kws)} 个关键词: {', '.join(kws[:5])}")
                 else:
@@ -694,7 +684,7 @@ def _batch_ai_classify():
     _cls_state = {"running": True, "total": 0, "done": 0, "failed": 0, "current": "", "log": []}
     try:
         db = _conn()
-        rows = db.execute("SELECT id, title, text_content FROM articles WHERE text_content != '' AND (ai_category IS NULL OR ai_category = '') AND category NOT IN ('platform_hotlists', 'bilibili_videos') ORDER BY id DESC").fetchall(); db.close()
+        rows = db.execute("SELECT id, title, text_content FROM news_articles WHERE content_status IN ('fetched', 'translated') AND (ai_category IS NULL OR ai_category = '') ORDER BY id DESC").fetchall(); db.close()
         if not rows: _cls_state["running"] = False; return
         _cls_state["total"] = len(rows)
         _log(_cls_state, f"待分类 {len(rows)} 篇")
@@ -718,7 +708,7 @@ def _batch_ai_classify():
                 continue
             if r:
                 db2 = _conn()
-                db2.execute("UPDATE articles SET ai_category=?, ai_tags=? WHERE id=?", (r.get("category",""), _json.dumps(r.get("tags",[]), ensure_ascii=False), aid))
+                db2.execute("UPDATE news_articles SET ai_category=?, ai_tags=? WHERE id=?", (r.get("category",""), _json.dumps(r.get("tags",[]), ensure_ascii=False), aid))
                 safe_commit(db2); db2.close()
                 _log(_cls_state, f"#{aid} ✅ {r.get('category','?')} — {', '.join(r.get('tags',[])[:3])}")
             else:
@@ -733,7 +723,7 @@ def _batch_ai_classify():
                 r = classify_article_ai(title, text)
                 if r:
                     db2 = _conn()
-                    db2.execute("UPDATE articles SET ai_category=?, ai_tags=? WHERE id=?", (r.get("category",""), _json.dumps(r.get("tags",[]), ensure_ascii=False), aid))
+                    db2.execute("UPDATE news_articles SET ai_category=?, ai_tags=? WHERE id=?", (r.get("category",""), _json.dumps(r.get("tags",[]), ensure_ascii=False), aid))
                     safe_commit(db2); db2.close()
                     _log(_cls_state, f"#{aid} ✅ {r.get('category','?')} — {', '.join(r.get('tags',[])[:3])}")
                 else:
@@ -757,7 +747,7 @@ def _batch_ai_score():
     _score_state = {"running": True, "total": 0, "done": 0, "failed": 0, "current": "", "log": []}
     try:
         db = _conn()
-        rows = db.execute("SELECT id, title, text_content, source, fetched_at FROM articles WHERE text_content != '' AND (ai_priority_score IS NULL OR ai_priority_score = 0.0) AND category NOT IN ('platform_hotlists', 'bilibili_videos') ORDER BY id DESC").fetchall(); db.close()
+        rows = db.execute("SELECT id, title, text_content, source, fetched_at FROM news_articles WHERE content_status IN ('fetched', 'translated') AND (ai_priority_score IS NULL OR ai_priority_score = 0.0) ORDER BY id DESC").fetchall(); db.close()
         if not rows: _score_state["running"] = False; return
         _score_state["total"] = len(rows)
         _log(_score_state, f"待评分 {len(rows)} 篇")
@@ -785,7 +775,7 @@ def _batch_ai_score():
                 continue
             if r:
                 db2 = _conn()
-                db2.execute("UPDATE articles SET priority_score=?, priority_label=?, ai_priority_score=? WHERE id=?", (r["score"], r.get("label","medium"), r["score"], aid))
+                db2.execute("UPDATE news_articles SET priority_score=?, priority_label=?, ai_priority_score=? WHERE id=?", (r["score"], r.get("label","medium"), r["score"], aid))
                 safe_commit(db2); db2.close()
                 _log(_score_state, f"#{aid} ✅ {r.get('label','medium')}({r['score']:.0f}) — {r.get('reason','')}")
             else:
@@ -804,7 +794,7 @@ def _batch_ai_score():
                 r = score_priority_ai(title, text, source, days)
                 if r:
                     db2 = _conn()
-                    db2.execute("UPDATE articles SET priority_score=?, priority_label=?, ai_priority_score=? WHERE id=?", (r["score"], r.get("label","medium"), r["score"], aid))
+                    db2.execute("UPDATE news_articles SET priority_score=?, priority_label=?, ai_priority_score=? WHERE id=?", (r["score"], r.get("label","medium"), r["score"], aid))
                     safe_commit(db2); db2.close()
                     _log(_score_state, f"#{aid} ✅ {r.get('label','medium')}({r['score']:.0f}) — {r.get('reason','')}")
                 else:
@@ -828,7 +818,7 @@ def _batch_ai_recluster():
     _recluster_state = {"running": True, "total": 0, "done": 0, "failed": 0, "current": "", "log": []}
     try:
         db = _conn()
-        unlinked = db.execute("SELECT a.id, a.title FROM articles a LEFT JOIN article_events ae ON a.id=ae.article_id WHERE ae.article_id IS NULL AND a.text_content!='' AND a.category NOT IN ('platform_hotlists', 'bilibili_videos')").fetchall()
+        unlinked = db.execute("SELECT a.id, a.title FROM news_articles a LEFT JOIN news_article_events ae ON a.id=ae.article_id WHERE ae.article_id IS NULL AND a.content_status IN ('fetched', 'translated')").fetchall()
         events  = db.execute("SELECT id, title FROM events WHERE status='active'").fetchall()
         db.close()
         if not unlinked: _recluster_state["running"] = False; return
@@ -867,7 +857,7 @@ def _batch_ai_recluster():
                 # 验证事件 ID 存在
                 if any(eid == best_id for eid, _ in events):
                     db2 = _conn()
-                    db2.execute("INSERT OR IGNORE INTO article_events (article_id, event_id, relevance) VALUES (?, ?, ?)",
+                    db2.execute("INSERT OR IGNORE INTO news_article_events (article_id, event_id, relevance) VALUES (?, ?, ?)",
                                (aid, best_id, round(best_conf, 2)))
                     db2.execute("UPDATE events SET article_count=article_count+1 WHERE id=?", (best_id,))
                     safe_commit(db2); db2.close()
@@ -880,7 +870,7 @@ def _batch_ai_recluster():
                     db2 = _conn()
                     cur = db2.execute("INSERT INTO events (title, first_seen, last_seen, status) VALUES (?,?,?,'active')",
                                      (art_title[:80], now[:10], now[:10]))
-                    db2.execute("INSERT INTO article_events (article_id, event_id) VALUES (?,?)", (aid, cur.lastrowid))
+                    db2.execute("INSERT INTO news_article_events (article_id, event_id) VALUES (?,?)", (aid, cur.lastrowid))
                     safe_commit(db2); db2.close()
             else:
                 _log(_recluster_state, f"#{aid} ➕ 创建新事件")
@@ -889,7 +879,7 @@ def _batch_ai_recluster():
                 db2 = _conn()
                 cur = db2.execute("INSERT INTO events (title, first_seen, last_seen, status) VALUES (?,?,?,'active')",
                                  (art_title[:80], now[:10], now[:10]))
-                db2.execute("INSERT INTO article_events (article_id, event_id) VALUES (?,?)", (aid, cur.lastrowid))
+                db2.execute("INSERT INTO news_article_events (article_id, event_id) VALUES (?,?)", (aid, cur.lastrowid))
                 safe_commit(db2); db2.close()
             _recluster_state["done"] += 1
             time.sleep(0.1)  # 速率限制由 RateLimiter 统一管理
@@ -905,7 +895,7 @@ def _batch_ai_recluster():
                 r = match_article_to_events_ai(art_title, candidates)
                 if r and r.get("event_id") and r.get("confidence", 0) > 0.5 and any(eid == r["event_id"] for eid, _ in events):
                     db2 = _conn()
-                    db2.execute("INSERT OR IGNORE INTO article_events (article_id, event_id, relevance) VALUES (?, ?, ?)",
+                    db2.execute("INSERT OR IGNORE INTO news_article_events (article_id, event_id, relevance) VALUES (?, ?, ?)",
                                (aid, r["event_id"], round(r["confidence"], 2)))
                     db2.execute("UPDATE events SET article_count=article_count+1 WHERE id=?", (r["event_id"],))
                     safe_commit(db2); db2.close()
@@ -917,7 +907,7 @@ def _batch_ai_recluster():
                     db2 = _conn()
                     cur = db2.execute("INSERT INTO events (title, first_seen, last_seen, status) VALUES (?,?,?,'active')",
                                      (art_title[:80], now[:10], now[:10]))
-                    db2.execute("INSERT INTO article_events (article_id, event_id) VALUES (?,?)", (aid, cur.lastrowid))
+                    db2.execute("INSERT INTO news_article_events (article_id, event_id) VALUES (?,?)", (aid, cur.lastrowid))
                     safe_commit(db2); db2.close()
             except Exception as e:
                 if _is_request_timeout_error(e):
@@ -950,7 +940,7 @@ def _batch_ai_summarize_events():
         for idx, (evt_id, _) in enumerate(events, 1):
             _evt_sum_state["current"] = f"事件#{evt_id}"
             db2 = _conn()
-            titles = [r[0] for r in db2.execute("SELECT a.title FROM articles a JOIN article_events ae ON ae.article_id=a.id WHERE ae.event_id=?", (evt_id,)).fetchall()]
+            titles = [r[0] for r in db2.execute("SELECT a.title FROM news_articles a JOIN news_article_events ae ON ae.article_id=a.id WHERE ae.event_id=?", (evt_id,)).fetchall()]
             db2.close()
             if len(titles) < 2: _evt_sum_state["done"] += 1; continue
             block = "\n".join(f"- {t}" for t in titles[:15])
@@ -977,7 +967,7 @@ def _batch_ai_summarize_events():
             _evt_sum_state["current"] = f"事件#{evt_id}"
             _log(_evt_sum_state, f"#{evt_id} 🔄 重试摘要生成...")
             db2 = _conn()
-            titles = [r[0] for r in db2.execute("SELECT a.title FROM articles a JOIN article_events ae ON ae.article_id=a.id WHERE ae.event_id=?", (evt_id,)).fetchall()]
+            titles = [r[0] for r in db2.execute("SELECT a.title FROM news_articles a JOIN news_article_events ae ON ae.article_id=a.id WHERE ae.event_id=?", (evt_id,)).fetchall()]
             db2.close()
             if len(titles) < 2: _evt_sum_state["done"] += 1; continue
             block = "\n".join(f"- {t}" for t in titles[:15])
@@ -1015,10 +1005,9 @@ def _batch_ai_filter():
     try:
         db = _conn()
         rows = db.execute("""
-            SELECT id, title, source FROM articles
-            WHERE (local_path = '' OR local_path IS NULL)
+            SELECT id, title, source FROM news_articles
+            WHERE content_status = 'pending'
               AND (ai_filtered = 0)
-              AND category NOT IN ('platform_hotlists', 'bilibili_videos')
             ORDER BY fetched_at DESC
         """).fetchall()
         db.close()
@@ -1047,10 +1036,10 @@ def _batch_ai_filter():
             db2 = _conn()
             for aid, title, source in batch:
                 if aid in batch_ids:
-                    db2.execute("UPDATE articles SET ai_filtered=1 WHERE id=?", (aid,))
+                    db2.execute("UPDATE news_articles SET ai_filtered=1 WHERE id=?", (aid,))
                     _filter_state["done"] += 1
                 else:
-                    db2.execute("UPDATE articles SET ai_filtered=-1 WHERE id=?", (aid,))
+                    db2.execute("UPDATE news_articles SET ai_filtered=-1 WHERE id=?", (aid,))
                     _filter_state["done"] += 1
                     _filter_state["failed"] += 1
             safe_commit(db2); db2.close()
@@ -1079,10 +1068,9 @@ def start_batch_ai_filter():
         return {"ok": False, "message": msg}
     db = _conn()
     n = db.execute("""
-        SELECT COUNT(*) FROM articles
-        WHERE (local_path = '' OR local_path IS NULL)
+        SELECT COUNT(*) FROM news_articles
+        WHERE content_status = 'pending'
           AND (ai_filtered = 0)
-          AND category NOT IN ('platform_hotlists', 'bilibili_videos')
     """).fetchone()[0]
     db.close()
     task_state.init_state('ai_filter', total=n)
@@ -1099,7 +1087,7 @@ def get_batch_ai_filter_status():
 def _hp_check(aid: int) -> bool:
     """检查文章是否人工已处理"""
     db = _conn()
-    r = db.execute("SELECT human_processed FROM articles WHERE id=?", (aid,)).fetchone()
+    r = db.execute("SELECT human_processed FROM news_articles WHERE id=?", (aid,)).fetchone()
     db.close()
     return bool(r and r[0])
 
@@ -1116,7 +1104,7 @@ def start_batch_keywords():
     if _kw_state.get("running"): return {"ok": False, "message": "关键词提取已在运行中"}
     ok, msg = _check_and_lock('keywords')
     if not ok: return {"ok": False, "message": msg}
-    db = _conn(); n = db.execute("SELECT COUNT(*) FROM articles WHERE text_content!='' AND (ai_keywords IS NULL OR ai_keywords='') AND category NOT IN ('platform_hotlists', 'bilibili_videos')").fetchone()[0]; db.close()
+    db = _conn(); n = db.execute("SELECT COUNT(*) FROM news_articles WHERE content_status IN ('fetched', 'translated') AND (ai_keywords IS NULL OR ai_keywords='')").fetchone()[0]; db.close()
     task_state.init_state('keywords', total=n)
     threading.Thread(target=_batch_ai_keywords, daemon=True).start()
     return {"ok": True, "message": f"启动 AI 关键词提取，预计 {n} 篇", "pending": n}
@@ -1127,7 +1115,7 @@ def start_batch_classify():
     if _cls_state.get("running"): return {"ok": False, "message": "分类已在运行中"}
     ok, msg = _check_and_lock('classify')
     if not ok: return {"ok": False, "message": msg}
-    db = _conn(); n = db.execute("SELECT COUNT(*) FROM articles WHERE text_content!='' AND (ai_category IS NULL OR ai_category='') AND category NOT IN ('platform_hotlists', 'bilibili_videos')").fetchone()[0]; db.close()
+    db = _conn(); n = db.execute("SELECT COUNT(*) FROM news_articles WHERE content_status IN ('fetched', 'translated') AND (ai_category IS NULL OR ai_category='')").fetchone()[0]; db.close()
     task_state.init_state('classify', total=n)
     threading.Thread(target=_batch_ai_classify, daemon=True).start()
     return {"ok": True, "message": f"启动 AI 分类，预计 {n} 篇", "pending": n}
@@ -1138,7 +1126,7 @@ def start_batch_score():
     if _score_state.get("running"): return {"ok": False, "message": "评分已在运行中"}
     ok, msg = _check_and_lock('score')
     if not ok: return {"ok": False, "message": msg}
-    db = _conn(); n = db.execute("SELECT COUNT(*) FROM articles WHERE text_content!='' AND (ai_priority_score IS NULL OR ai_priority_score=0.0) AND category NOT IN ('platform_hotlists', 'bilibili_videos')").fetchone()[0]; db.close()
+    db = _conn(); n = db.execute("SELECT COUNT(*) FROM news_articles WHERE content_status IN ('fetched', 'translated') AND (ai_priority_score IS NULL OR ai_priority_score=0.0)").fetchone()[0]; db.close()
     task_state.init_state('score', total=n)
     threading.Thread(target=_batch_ai_score, daemon=True).start()
     return {"ok": True, "message": f"启动 AI 评分，预计 {n} 篇", "pending": n}
@@ -1149,7 +1137,7 @@ def start_batch_recluster():
     if _recluster_state.get("running"): return {"ok": False, "message": "重聚类已在运行中"}
     ok, msg = _check_and_lock('recluster')
     if not ok: return {"ok": False, "message": msg}
-    db = _conn(); n = db.execute("SELECT COUNT(*) FROM articles a LEFT JOIN article_events ae ON a.id=ae.article_id WHERE ae.article_id IS NULL AND a.text_content!='' AND a.category NOT IN ('platform_hotlists', 'bilibili_videos')").fetchone()[0]; db.close()
+    db = _conn(); n = db.execute("SELECT COUNT(*) FROM news_articles a LEFT JOIN news_article_events ae ON a.id=ae.article_id WHERE ae.article_id IS NULL AND a.content_status IN ('fetched', 'translated')").fetchone()[0]; db.close()
     task_state.init_state('recluster', total=n)
     threading.Thread(target=_batch_ai_recluster, daemon=True).start()
     return {"ok": True, "message": f"启动智能重聚类，预计 {n} 篇", "pending": n}
@@ -1202,11 +1190,9 @@ def _batch_clean():
     try:
         db = _conn()
         rows = db.execute("""
-            SELECT id, title, local_path FROM articles
-            WHERE local_path != '' AND local_path NOT LIKE '[ERR:%'
+            SELECT id, title, local_path FROM news_articles
+            WHERE content_status IN ('fetched', 'translated')
             AND (ai_cleaned_content IS NULL OR ai_cleaned_content = '')
-            AND category NOT IN ('platform_hotlists', 'bilibili_videos')
-            AND content_status NOT IN ('dead', 'metadata_only')
             ORDER BY id DESC
         """).fetchall()
         db.close()
@@ -1219,7 +1205,7 @@ def _batch_clean():
 
         from ai_client import clean_article_content
         from config import config
-        from api.articles import _sanitize_html
+        from api.news import _sanitize_html
         import os, time
 
         cache_dir = config.content_cache_path
@@ -1232,7 +1218,7 @@ def _batch_clean():
                 _clean_state["done"] += 1
                 # 写入标记避免下次重复查询，陷入无限循环
                 db2 = _conn()
-                db2.execute("UPDATE articles SET ai_cleaned_content='[ERR:FILE_MISSING]' WHERE id=?", (aid,))
+                db2.execute("UPDATE news_articles SET ai_cleaned_content='[ERR:FILE_MISSING]' WHERE id=?", (aid,))
                 db2.commit()
                 db2.close()
                 continue
@@ -1244,7 +1230,7 @@ def _batch_clean():
                 _log(_clean_state, f"#{aid} ⚠️ 读取失败")
                 _clean_state["done"] += 1
                 db2 = _conn()
-                db2.execute("UPDATE articles SET ai_cleaned_content='[ERR:READ_FAILED]' WHERE id=?", (aid,))
+                db2.execute("UPDATE news_articles SET ai_cleaned_content='[ERR:READ_FAILED]' WHERE id=?", (aid,))
                 db2.commit()
                 db2.close()
                 continue
@@ -1253,7 +1239,7 @@ def _batch_clean():
                 _log(_clean_state, f"#{aid} ⚠️ HTML 过短 ({len(html)} 字符)")
                 _clean_state["done"] += 1
                 db2 = _conn()
-                db2.execute("UPDATE articles SET ai_cleaned_content='[ERR:HTML_TOO_SHORT]' WHERE id=?", (aid,))
+                db2.execute("UPDATE news_articles SET ai_cleaned_content='[ERR:HTML_TOO_SHORT]' WHERE id=?", (aid,))
                 db2.commit()
                 db2.close()
                 continue
@@ -1264,7 +1250,7 @@ def _batch_clean():
                 if cleaned and len(cleaned) > 100:
                     cleaned = _sanitize_html(cleaned)
                     db2 = _conn()
-                    db2.execute("UPDATE articles SET ai_cleaned_content=? WHERE id=?", (cleaned, aid))
+                    db2.execute("UPDATE news_articles SET ai_cleaned_content=? WHERE id=?", (cleaned, aid))
                     db2.commit()
                     db2.close()
                     _log(_clean_state, f"#{aid} ✅ {title[:40]} [{len(cleaned)//1024}KB]")
@@ -1300,10 +1286,9 @@ def start_batch_clean():
         return {"ok": False, "message": msg}
     db = _conn()
     pending = db.execute("""
-        SELECT COUNT(*) FROM articles
-        WHERE local_path != '' AND local_path NOT LIKE '[ERR:%'
+        SELECT COUNT(*) FROM news_articles
+        WHERE content_status IN ('fetched', 'translated')
         AND (ai_cleaned_content IS NULL OR ai_cleaned_content = '')
-        AND category NOT IN ('platform_hotlists', 'bilibili_videos')
     """).fetchone()[0]
     db.close()
     task_state.init_state('clean', total=pending)
@@ -1316,15 +1301,13 @@ def get_batch_clean_status():
     if _clean_state.get("running"):
         db = _conn()
         total = db.execute("""
-            SELECT COUNT(*) FROM articles
-            WHERE local_path != '' AND local_path NOT LIKE '[ERR:%'
+            SELECT COUNT(*) FROM news_articles
+            WHERE content_status IN ('fetched', 'translated')
             AND (ai_cleaned_content IS NULL OR ai_cleaned_content = '')
-            AND category NOT IN ('platform_hotlists', 'bilibili_videos')
         """).fetchone()[0]
         done = db.execute("""
-            SELECT COUNT(*) FROM articles
+            SELECT COUNT(*) FROM news_articles
             WHERE ai_cleaned_content != '' AND ai_cleaned_content IS NOT NULL
-            AND category NOT IN ('platform_hotlists', 'bilibili_videos')
         """).fetchone()[0]
         db.close()
         return {"running": True, "total": total + done, "done": done, "failed": 0,

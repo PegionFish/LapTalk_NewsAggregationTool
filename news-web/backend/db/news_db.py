@@ -3,14 +3,14 @@
 新闻数据库模块 — SQLite 存储 + 事件关联 + 优先级评分 + 人工反馈 + 评语系统
 
 三层架构：
-  1. 数据层 — articles / events / article_events
+  1. 数据层 — news_articles / events / news_article_events
   2. 分析层 — calculate_priority（关键词由 AI 提取，非规则引擎）
   3. 反馈层 — human_feedback / event_relations / tag_propagation
 
 用法：
   from news_db import NewsDB
   db = NewsDB()
-  db.save_articles(category, articles)
+  db.save_news_articles(category, news_articles)
   db.link_articles_to_events()
   db.calculate_priority(article_id)
 
@@ -127,7 +127,7 @@ class NewsDB:
     def _init_db(self):
         with self._conn() as conn:
             conn.executescript("""
-                CREATE TABLE IF NOT EXISTS articles (
+                CREATE TABLE IF NOT EXISTS news_articles (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     title TEXT NOT NULL,
                     source TEXT NOT NULL,
@@ -154,16 +154,35 @@ class NewsDB:
                     priority_label TEXT DEFAULT 'medium'
                 );
 
-                CREATE TABLE IF NOT EXISTS article_events (
-                    article_id INTEGER REFERENCES articles(id),
+                CREATE TABLE IF NOT EXISTS news_article_events (
+                    article_id INTEGER REFERENCES news_articles(id),
                     event_id INTEGER REFERENCES events(id),
                     relevance REAL DEFAULT 1.0,
                     PRIMARY KEY (article_id, event_id)
                 );
 
+                CREATE TABLE IF NOT EXISTS trending_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL,
+                    platform TEXT NOT NULL,
+                    trend_type TEXT NOT NULL,
+                    url TEXT DEFAULT '',
+                    rank INTEGER DEFAULT 0,
+                    heat_score REAL DEFAULT 0.0,
+                    video_desc TEXT DEFAULT '',
+                    author TEXT DEFAULT '',
+                    play_count INTEGER DEFAULT 0,
+                    danmaku_count INTEGER DEFAULT 0,
+                    cover_url TEXT DEFAULT '',
+                    fetched_at TEXT NOT NULL,
+                    published_date TEXT DEFAULT '',
+                    metadata TEXT DEFAULT '{}',
+                    text_content TEXT DEFAULT ''
+                );
+
                 CREATE TABLE IF NOT EXISTS human_feedback (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    article_id INTEGER REFERENCES articles(id),
+                    article_id INTEGER REFERENCES news_articles(id),
                     field TEXT NOT NULL,
                     old_value TEXT,
                     new_value TEXT,
@@ -182,14 +201,14 @@ class NewsDB:
                     UNIQUE(from_event_id, to_event_id, relation)
                 );
 
-                CREATE INDEX IF NOT EXISTS idx_articles_date ON articles(fetched_at);
-                CREATE INDEX IF NOT EXISTS idx_articles_source ON articles(source);
-                CREATE INDEX IF NOT EXISTS idx_articles_verified ON articles(human_verified);
+                CREATE INDEX IF NOT EXISTS idx_articles_date ON news_articles(fetched_at);
+                CREATE INDEX IF NOT EXISTS idx_articles_source ON news_articles(source);
+                CREATE INDEX IF NOT EXISTS idx_articles_verified ON news_articles(human_verified);
                 CREATE INDEX IF NOT EXISTS idx_events_status ON events(status);
                 CREATE INDEX IF NOT EXISTS idx_evrel_from ON event_relations(from_event_id);
                 CREATE INDEX IF NOT EXISTS idx_evrel_to ON event_relations(to_event_id);
             """)
-            # 迁移：给 articles 表加列（如已有则忽略）
+            # 迁移：给 news_articles 表加列（如已有则忽略）
             for col, dtype in [('keywords','TEXT DEFAULT \'[]\''),
                                ('priority_score','REAL DEFAULT 0.0'),
                                ('priority_label','TEXT DEFAULT \'unset\''),
@@ -219,7 +238,7 @@ class NewsDB:
                                # AI 内容清洗缓存
                                ('ai_cleaned_content','TEXT DEFAULT \'\'')]:
                 try:
-                    conn.execute(f"ALTER TABLE articles ADD COLUMN {col} {dtype}")
+                    conn.execute(f"ALTER TABLE news_articles ADD COLUMN {col} {dtype}")
                 except sqlite3.OperationalError:
                     pass
             # 迁移：给 events 表加 ai_summary
@@ -237,7 +256,7 @@ class NewsDB:
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS article_comments (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+                    article_id INTEGER NOT NULL REFERENCES news_articles(id) ON DELETE CASCADE,
                     user_id INTEGER,
                     username TEXT DEFAULT 'anonymous',
                     parent_id INTEGER REFERENCES article_comments(id) ON DELETE CASCADE,
@@ -263,15 +282,25 @@ class NewsDB:
     # 保存
     # ═══════════════════════════════════════════════════════
 
-    def save_articles(self, category: str, articles: list) -> tuple:
-        """保存文章列表到数据库。返回 (saved: 新增数, skipped: 重复跳过数)。"""
-        if not articles:
+    @staticmethod
+    def _extract_platform(source: str) -> str:
+        """从源名称提取平台标识，如 'weibo_hotlist' -> 'weibo'。"""
+        for suffix in ['_hotlist', '_hot', '_trending']:
+            if source.endswith(suffix):
+                return source[:-len(suffix)]
+        return source
+
+    def save_news_articles(self, category: str, news_articles: list) -> tuple:
+        """保存文章列表到数据库。返回 (saved: 新增数, skipped: 重复跳过数)。
+        非热榜/非B站 → news_articles；热榜/B站 → trending_items。"""
+        if not news_articles:
             return (0, 0)
         now = datetime.now().isoformat(timespec='seconds')
         saved = 0
         skipped = 0
+        is_trend = category in ('platform_hotlists', 'bilibili_videos')
         with self._conn() as conn:
-            for art in articles:
+            for art in news_articles:
                 title = art.get('title', '').strip()
                 source = art.get('source', '')
                 url = art.get('url', '')
@@ -280,41 +309,47 @@ class NewsDB:
                 pub_date = art.get('metadata', {}).get('published', '') if isinstance(art.get('metadata'), dict) else ''
                 if not pub_date:
                     pub_date = art.get('published_date', '')
-                meta = json.dumps(art.get('metadata', {}), ensure_ascii=False)
-                keywords = json.dumps([], ensure_ascii=False)  # AI 关键词由 pipeline/analyze.py 提取
+                meta = art.get('metadata', {})
+                meta_json = json.dumps(meta, ensure_ascii=False) if isinstance(meta, dict) else '{}'
+
+                if is_trend:
+                    result = self._save_trending_item(conn, title, source, url, category, str(pub_date)[:20], now, meta)
+                    if result:
+                        saved += 1
+                    else:
+                        skipped += 1
+                    continue
+
+                # ——— 非热榜：插入 news_articles ———
+                keywords = '[]'
                 try:
-                    # 同平台同标题去重：检查是否已有相同标题+来源的文章（不论 URL）
                     existing = conn.execute(
-                        "SELECT id, url, ai_filtered FROM articles WHERE title=? AND source=? LIMIT 1",
+                        "SELECT id, url, ai_filtered FROM news_articles WHERE title=? AND source=? LIMIT 1",
                         (title, source)
                     ).fetchone()
                     if existing:
-                        # 如果现有文章无 URL 或被拒绝，但新文章有 URL，则更新
                         eid, eurl, eaf = existing
                         if url and (not eurl or eaf == -1):
-                            conn.execute("UPDATE articles SET url=?, ai_filtered=0 WHERE id=?", (url[:500], eid))
+                            conn.execute("UPDATE news_articles SET url=?, ai_filtered=0 WHERE id=?", (url[:500], eid))
                             saved += 1
                         else:
                             skipped += 1
                         continue
-                    # 无重复 — 正常插入
                     conn.execute("""
-                        INSERT OR IGNORE INTO articles
+                        INSERT OR IGNORE INTO news_articles
                             (title, source, url, category, published_date, fetched_at, metadata, keywords)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (title, source, url[:500], category, str(pub_date)[:20], now, meta, keywords))
+                    """, (title, source, url[:500], category, str(pub_date)[:20], now, meta_json, keywords))
                     if conn.total_changes > 0:
                         saved += 1
-                        # 对新文章计算优先级
                         new_id = conn.execute(
-                            "SELECT id FROM articles WHERE title=? AND source=? AND url=?",
+                            "SELECT id FROM news_articles WHERE title=? AND source=? AND url=?",
                             (title, source, url[:500])
                         ).fetchone()
                         if new_id:
                             self.calculate_priority(new_id[0], conn)
                     else:
                         skipped += 1
-                        # 记录跳过的重复文章标题（截取前 50 字）
                         import logging
                         logging.getLogger(__name__).debug(
                             f"   ⏭️ 跳过重复: [{source}] {title[:60]}"
@@ -324,25 +359,55 @@ class NewsDB:
             conn.commit()
         return (saved, skipped)
 
+    def _save_trending_item(self, conn, title, source, url, category,
+                            pub_date, now, meta) -> int:
+        """插入一条热榜/B站记录到 trending_items。返回新增数 (0 或 1)。"""
+        platform = self._extract_platform(source)
+        trend_type = 'video' if category == 'bilibili_videos' else 'hotlist'
+        rank = meta.get('rank', 0) if isinstance(meta, dict) else 0
+        heat_score = float(meta.get('heat', meta.get('views', 0)) or 0)
+        author = meta.get('author', '') if isinstance(meta, dict) else ''
+        play_count = int(meta.get('play_count', 0) or 0)
+        danmaku_count = int(meta.get('danmaku_count', 0) or 0)
+        cover_url = meta.get('cover_url', '') if isinstance(meta, dict) else ''
+        video_desc = meta.get('video_desc', meta.get('description', '')) if isinstance(meta, dict) else ''
+        meta_json = json.dumps(meta, ensure_ascii=False) if isinstance(meta, dict) else '{}'
+
+        existing = conn.execute(
+            "SELECT id FROM trending_items WHERE title=? AND platform=? AND url=? LIMIT 1",
+            (title, platform, url[:500])
+        ).fetchone()
+        if existing:
+            return 0
+
+        conn.execute("""
+            INSERT OR IGNORE INTO trending_items
+                (title, platform, trend_type, url, rank, heat_score,
+                 video_desc, author, play_count, danmaku_count, cover_url,
+                 fetched_at, published_date, metadata)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (title, platform, trend_type, url[:500], rank, heat_score,
+              video_desc, author, play_count, danmaku_count, cover_url,
+              now, pub_date, meta_json))
+        return 1 if conn.total_changes > 0 else 0
+
     def fill_trend_text(self) -> int:
-        """为热榜/B站视频条目直接填充 text_content（标题+元数据），
+        """为 trending_items（热榜/B站视频）直接填充 text_content（标题+元数据），
         无需走 fetch_content 下载 HTML。返回填充数量。"""
         updated = 0
         with self._conn() as conn:
             rows = conn.execute("""
-                SELECT id, title, metadata, source
-                FROM articles
-                WHERE category IN ('platform_hotlists', 'bilibili_videos')
-                  AND (text_content IS NULL OR text_content = '')
+                SELECT id, title, metadata, platform
+                FROM trending_items
+                WHERE text_content IS NULL OR text_content = ''
             """).fetchall()
-            for aid, title, meta_json, source in rows:
+            for tid, title, meta_json, platform in rows:
                 try:
                     meta = json.loads(meta_json) if meta_json else {}
                 except (json.JSONDecodeError, TypeError):
                     meta = {}
-                # 拼接标题和有用的元数据
                 parts = [f"标题：{title}"]
-                parts.append(f"来源：{source}")
+                parts.append(f"来源：{platform}")
                 if meta.get('rank') is not None:
                     parts.append(f"排名：第{meta['rank']}位")
                 if meta.get('heat'):
@@ -359,17 +424,14 @@ class NewsDB:
                     parts.append(f"描述：{meta['description']}")
                 if meta.get('video_count'):
                     parts.append(f"相关视频：{meta['video_count']}个")
+                if meta.get('play_count'):
+                    parts.append(f"播放量：{meta['play_count']}")
+                if meta.get('danmaku_count'):
+                    parts.append(f"弹幕数：{meta['danmaku_count']}")
                 text = '\n'.join(parts)
-                from datetime import datetime
                 conn.execute("""
-                    UPDATE articles SET
-                        local_path='[N/A:trend]',
-                        content_fetched_at=?,
-                        text_content=?,
-                        content_lang='zh',
-                        content_status='metadata_only'
-                    WHERE id=?
-                """, (datetime.now().isoformat(timespec='seconds'), text, aid))
+                    UPDATE trending_items SET text_content=? WHERE id=?
+                """, (text, tid))
                 updated += 1
             conn.commit()
         return updated
@@ -394,7 +456,7 @@ class NewsDB:
             row = conn.execute("""
                 SELECT a.title, a.source, a.fetched_at, a.priority_label,
                        a.human_verified, a.category, a.human_processed
-                FROM articles a WHERE a.id=?
+                FROM news_articles a WHERE a.id=?
             """, (article_id,)).fetchone()
             if not row:
                 return 0.0
@@ -406,7 +468,7 @@ class NewsDB:
                 score = label_scores.get(label, 50)
                 _, c_label = topic_score(title)
                 tc = self.TOPIC_CATEGORY_MAP.get(c_label, '其他')
-                conn.execute("UPDATE articles SET priority_score=?, topic_category=? WHERE id=?",
+                conn.execute("UPDATE news_articles SET priority_score=?, topic_category=? WHERE id=?",
                              (score, tc, article_id))
                 if close:
                     conn.commit()
@@ -419,7 +481,7 @@ class NewsDB:
             b_score = 0.0
             evt = conn.execute("""
                 SELECT e.article_count FROM events e
-                JOIN article_events ae ON ae.event_id = e.id
+                JOIN news_article_events ae ON ae.event_id = e.id
                 WHERE ae.article_id=?
             """, (article_id,)).fetchone()
             if evt:
@@ -456,7 +518,7 @@ class NewsDB:
             # 同步写入 topic_category
             tc = self.TOPIC_CATEGORY_MAP.get(c_label, '其他')
 
-            conn.execute("UPDATE articles SET priority_score=?, topic_category=? WHERE id=?",
+            conn.execute("UPDATE news_articles SET priority_score=?, topic_category=? WHERE id=?",
                          (final, tc, article_id))
             if close:
                 conn.commit()
@@ -477,7 +539,7 @@ class NewsDB:
                 SUM(CASE WHEN hf.new_value='excluded' THEN 1 ELSE 0 END),
                 COUNT(*)
             FROM human_feedback hf
-            JOIN articles a ON a.id = hf.article_id
+            JOIN news_articles a ON a.id = hf.article_id
             WHERE hf.field='priority_label' AND a.source=? AND a.category=?
         """, (source, topic_label)).fetchone()
         if not row or row[2] < 5:  # 少于5条反馈不漂移
@@ -494,7 +556,7 @@ class NewsDB:
     def update_all_priorities(self) -> int:
         """全量重算所有文章的优先级"""
         with self._conn() as conn:
-            ids = conn.execute("SELECT id FROM articles").fetchall()
+            ids = conn.execute("SELECT id FROM news_articles").fetchall()
         for (aid,) in ids:
             self.calculate_priority(aid)
         return len(ids)
@@ -507,11 +569,10 @@ class NewsDB:
         with self._conn() as conn:
             unlinked = conn.execute("""
                 SELECT a.id, a.title, a.published_date, a.fetched_at
-                FROM articles a
-                LEFT JOIN article_events ae ON a.id = ae.article_id
+                FROM news_articles a
+                LEFT JOIN news_article_events ae ON a.id = ae.article_id
                 WHERE ae.article_id IS NULL
-                AND a.category NOT IN ('platform_hotlists', 'bilibili_videos')
-                AND (a.content_status IS NULL OR a.content_status != 'dead')
+                AND a.content_status IN ('fetched', 'translated')
             """).fetchall()
             if not unlinked:
                 return 0
@@ -535,7 +596,7 @@ class NewsDB:
                         best_event = evt_id
                 if best_event and best_score >= threshold:
                     conn.execute("""
-                        INSERT OR IGNORE INTO article_events (article_id, event_id, relevance)
+                        INSERT OR IGNORE INTO news_article_events (article_id, event_id, relevance)
                         VALUES (?, ?, ?)
                     """, (art_id, best_event, round(best_score, 2)))
                     conn.execute("""
@@ -549,7 +610,7 @@ class NewsDB:
                     """, (event_title, event_date, event_date))
                     evt_id = cur.lastrowid
                     conn.execute("""
-                        INSERT INTO article_events (article_id, event_id)
+                        INSERT INTO news_article_events (article_id, event_id)
                         VALUES (?, ?)
                     """, (art_id, evt_id))
                     new_events += 1
@@ -574,13 +635,13 @@ class NewsDB:
         now = datetime.now().isoformat(timespec='seconds')
         with self._conn() as conn:
             if field == 'excluded':
-                conn.execute("UPDATE articles SET human_verified=-1 WHERE id=?", (article_id,))
+                conn.execute("UPDATE news_articles SET human_verified=-1 WHERE id=?", (article_id,))
                 conn.execute("""
                     INSERT INTO human_feedback (article_id, field, old_value, new_value, created_at)
                     VALUES (?, 'priority_label', ?, 'excluded', ?)
                 """, (article_id, old_value, now))
             elif field == 'priority_label':
-                conn.execute("UPDATE articles SET priority_label=?, human_verified=1 WHERE id=?",
+                conn.execute("UPDATE news_articles SET priority_label=?, human_verified=1 WHERE id=?",
                              (new_value, article_id))
                 conn.execute("""
                     INSERT INTO human_feedback (article_id, field, old_value, new_value, created_at)
@@ -589,7 +650,7 @@ class NewsDB:
                 # 重算评分
                 self.calculate_priority(article_id, conn)
             elif field == 'keywords':
-                conn.execute("UPDATE articles SET human_tags=? WHERE id=?",
+                conn.execute("UPDATE news_articles SET human_tags=? WHERE id=?",
                              (json.dumps(new_value.split(','), ensure_ascii=False), article_id))
                 conn.execute("""
                     INSERT INTO human_feedback (article_id, field, old_value, new_value, created_at)
@@ -608,19 +669,19 @@ class NewsDB:
             # 获取有人工标签的事件
             tagged_events = conn.execute("""
                 SELECT DISTINCT ae.event_id
-                FROM article_events ae
-                JOIN articles a ON a.id = ae.article_id
+                FROM news_article_events ae
+                JOIN news_articles a ON a.id = ae.article_id
                 WHERE a.human_tags != '[]' AND a.human_tags != '[]'
             """).fetchall()
             for (evt_id,) in tagged_events:
                 # 获取该事件的所有人工标签
                 human_tags = set()
-                tagged_articles = conn.execute("""
-                    SELECT a.human_tags FROM article_events ae
-                    JOIN articles a ON a.id = ae.article_id
+                tagged_news_articles = conn.execute("""
+                    SELECT a.human_tags FROM news_article_events ae
+                    JOIN news_articles a ON a.id = ae.article_id
                     WHERE ae.event_id=?
                 """, (evt_id,)).fetchall()
-                for (ht,) in tagged_articles:
+                for (ht,) in tagged_news_articles:
                     try:
                         for t in json.loads(ht):
                             human_tags.add(t)
@@ -631,8 +692,8 @@ class NewsDB:
                 tags_json = json.dumps(list(human_tags), ensure_ascii=False)
                 # 传播到该事件中还没有这些标签的文章
                 untagged = conn.execute("""
-                    SELECT a.id, a.human_tags FROM article_events ae
-                    JOIN articles a ON a.id = ae.article_id
+                    SELECT a.id, a.human_tags FROM news_article_events ae
+                    JOIN news_articles a ON a.id = ae.article_id
                     WHERE ae.event_id=? AND (a.human_tags='[]' OR a.human_tags='[]')
                 """, (evt_id,)).fetchall()
                 for aid, existing in untagged:
@@ -643,7 +704,7 @@ class NewsDB:
                     new_tags = human_tags - existing_tags
                     if new_tags:
                         merged = list(existing_tags | new_tags)
-                        conn.execute("UPDATE articles SET human_tags=? WHERE id=?",
+                        conn.execute("UPDATE news_articles SET human_tags=? WHERE id=?",
                                      (json.dumps(merged, ensure_ascii=False), aid))
                         propagated += 1
             conn.commit()
@@ -869,11 +930,11 @@ class NewsDB:
         """
         with self._conn() as conn:
             # 文章列表（排除 AI 已拒绝的文章）
-            articles = conn.execute("""
+            news_articles = conn.execute("""
                 SELECT a.id, a.title, a.source, a.url, a.fetched_at, a.priority_score,
                        a.human_verified, a.keywords
-                FROM article_events ae
-                JOIN articles a ON a.id = ae.article_id
+                FROM news_article_events ae
+                JOIN news_articles a ON a.id = ae.article_id
                 WHERE ae.event_id=? AND (a.ai_filtered IS NULL OR a.ai_filtered != -1)
                 ORDER BY a.fetched_at ASC
             """, (event_id,)).fetchall()
@@ -910,7 +971,7 @@ class NewsDB:
                 {'id': a[0], 'title': a[1], 'source': a[2], 'url': a[3],
                  'date': a[4], 'score': a[5], 'verified': a[6],
                  'keywords': json.loads(a[7]) if a[7] else []}
-                for a in articles
+                for a in news_articles
             ],
             'relations': {
                 'outgoing': [
@@ -937,7 +998,7 @@ class NewsDB:
                 SELECT a.id, a.title, a.source, a.url, a.published_date,
                        a.priority_score, a.priority_label, a.keywords, a.human_tags,
                        a.fetched_at
-                FROM articles a
+                FROM news_articles a
                 WHERE a.human_verified=0 AND a.priority_score >= ?
                 ORDER BY a.priority_score DESC, a.fetched_at DESC
                 LIMIT ?
@@ -961,13 +1022,13 @@ class NewsDB:
             recent = conn.execute("""
                 SELECT hf.field, hf.new_value, a.title, a.source, hf.created_at
                 FROM human_feedback hf
-                JOIN articles a ON a.id = hf.article_id
+                JOIN news_articles a ON a.id = hf.article_id
                 ORDER BY hf.id DESC LIMIT 10
             """).fetchall()
             drift_active = conn.execute("""
                 SELECT COUNT(DISTINCT a.source || '|' || a.category)
                 FROM human_feedback hf
-                JOIN articles a ON a.id = hf.article_id
+                JOIN news_articles a ON a.id = hf.article_id
                 WHERE hf.applied=1
             """).fetchone()[0]
         return {
@@ -1134,7 +1195,7 @@ class NewsDB:
         else:
             label = 'low'
         conn.execute(
-            "UPDATE articles SET priority_score=?, priority_label=?, human_processed=1, human_verified=1 WHERE id=?",
+            "UPDATE news_articles SET priority_score=?, priority_label=?, human_processed=1, human_verified=1 WHERE id=?",
             (avg, label, article_id)
         )
         conn.commit()
@@ -1159,9 +1220,8 @@ class NewsDB:
         """预览将被清理的文章（不执行删除）。"""
         with self._conn() as conn:
             count = conn.execute("""
-                SELECT COUNT(*) FROM articles
+                SELECT COUNT(*) FROM news_articles
                 WHERE priority_score < ? AND human_processed = 0 AND human_verified = 0
-                  AND category NOT IN ('platform_hotlists', 'bilibili_videos')
             """, (threshold,)).fetchone()[0]
         return {'count': count, 'threshold': threshold}
 
@@ -1170,9 +1230,8 @@ class NewsDB:
         with self._conn() as conn:
             # 先删除关联的评语
             ids = conn.execute("""
-                SELECT id FROM articles
+                SELECT id FROM news_articles
                 WHERE priority_score < ? AND human_processed = 0 AND human_verified = 0
-                  AND category NOT IN ('platform_hotlists', 'bilibili_videos')
             """, (threshold,)).fetchall()
             aid_list = [r[0] for r in ids]
             if not aid_list:
@@ -1182,9 +1241,9 @@ class NewsDB:
                          f"(SELECT id FROM article_comments WHERE article_id IN ({placeholders}))",
                          aid_list)
             conn.execute(f"DELETE FROM article_comments WHERE article_id IN ({placeholders})", aid_list)
-            conn.execute(f"DELETE FROM article_events WHERE article_id IN ({placeholders})", aid_list)
+            conn.execute(f"DELETE FROM news_article_events WHERE article_id IN ({placeholders})", aid_list)
             conn.execute(f"DELETE FROM human_feedback WHERE article_id IN ({placeholders})", aid_list)
-            conn.execute(f"DELETE FROM articles WHERE id IN ({placeholders})", aid_list)
+            conn.execute(f"DELETE FROM news_articles WHERE id IN ({placeholders})", aid_list)
             conn.commit()
         return {'deleted': len(aid_list)}
 
@@ -1197,13 +1256,13 @@ class NewsDB:
         updated = 0
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT id, title, source, category, topic_category FROM articles "
-                "WHERE topic_category = '' AND category NOT IN ('platform_hotlists', 'bilibili_videos')"
+                "SELECT id, title, source, category, topic_category FROM news_articles "
+                "WHERE topic_category = ''"
             ).fetchall()
             for aid, title, source, category, _ in rows:
                 _, label = topic_score(title)
                 tc = self.TOPIC_CATEGORY_MAP.get(label, '其他')
-                conn.execute("UPDATE articles SET topic_category=? WHERE id=?", (tc, aid))
+                conn.execute("UPDATE news_articles SET topic_category=? WHERE id=?", (tc, aid))
                 updated += 1
             conn.commit()
         return updated
@@ -1212,14 +1271,13 @@ class NewsDB:
         """返回各主题分类的文章数。"""
         with self._conn() as conn:
             rows = conn.execute("""
-                SELECT topic_category, COUNT(*) FROM articles
-                WHERE category NOT IN ('platform_hotlists', 'bilibili_videos')
-                  AND topic_category != ''
+                SELECT topic_category, COUNT(*) FROM news_articles
+                WHERE topic_category != ''
                 GROUP BY topic_category ORDER BY COUNT(*) DESC
             """).fetchall()
         return dict(rows)
 
-    def get_unmatched_events(self, min_articles: int = 1) -> list:
+    def get_unmatched_events(self, min_news_articles: int = 1) -> list:
         """获取没有事件关系的事件（孤立事件），供 UI 建议关联"""
         with self._conn() as conn:
             rows = conn.execute("""
@@ -1228,7 +1286,7 @@ class NewsDB:
                 WHERE e.article_count >= ?
                 ORDER BY e.last_seen DESC
                 LIMIT 50
-            """, (min_articles,)).fetchall()
+            """, (min_news_articles,)).fetchall()
         return [
             {'id': r[0], 'title': r[1], 'first_seen': r[2], 'article_count': r[3],
              'has_relations': False}
@@ -1256,7 +1314,7 @@ class NewsDB:
                 if overlap > 0 or any(title_similarity(evt_title, t) > 0.3 for t in today_titles):
                     timeline = conn.execute("""
                         SELECT a.title, a.source, a.fetched_at, a.url
-                        FROM article_events ae JOIN articles a ON a.id = ae.article_id
+                        FROM news_article_events ae JOIN news_articles a ON a.id = ae.article_id
                         WHERE ae.event_id=? ORDER BY a.fetched_at DESC LIMIT 5
                     """, (evt_id,)).fetchall()
                     relevant.append({
@@ -1270,70 +1328,67 @@ class NewsDB:
 
     def get_stats(self) -> dict:
         with self._conn() as conn:
-            articles = conn.execute(
-                "SELECT COUNT(*) FROM articles WHERE category NOT IN ('platform_hotlists', 'bilibili_videos')"
-                " AND (ai_filtered IS NULL OR ai_filtered != -1)"
+            news_articles = conn.execute(
+                "SELECT COUNT(*) FROM news_articles"
+                " WHERE (ai_filtered IS NULL OR ai_filtered != -1)"
                 " AND (content_status IS NULL OR content_status != 'dead')"
             ).fetchone()[0]
             # 仅统计 RSS 文章关联的事件，排除热榜/B站视频 + AI 已拒绝 + 死链文章
             events = conn.execute("""
-                SELECT COUNT(DISTINCT ae.event_id) FROM article_events ae
-                JOIN articles a ON a.id = ae.article_id
-                WHERE a.category NOT IN ('platform_hotlists', 'bilibili_videos')
-                AND (a.ai_filtered IS NULL OR a.ai_filtered != -1)
+                SELECT COUNT(DISTINCT ae.event_id) FROM news_article_events ae
+                JOIN news_articles a ON a.id = ae.article_id
+                WHERE (a.ai_filtered IS NULL OR a.ai_filtered != -1)
                 AND (a.content_status IS NULL OR a.content_status != 'dead')
             """).fetchone()[0]
             active = conn.execute("""
-                SELECT COUNT(DISTINCT ae.event_id) FROM article_events ae
-                JOIN articles a ON a.id = ae.article_id
+                SELECT COUNT(DISTINCT ae.event_id) FROM news_article_events ae
+                JOIN news_articles a ON a.id = ae.article_id
                 JOIN events e ON e.id = ae.event_id
-                WHERE a.category NOT IN ('platform_hotlists', 'bilibili_videos')
-                AND (a.ai_filtered IS NULL OR a.ai_filtered != -1)
+                WHERE (a.ai_filtered IS NULL OR a.ai_filtered != -1)
                 AND (a.content_status IS NULL OR a.content_status != 'dead')
                 AND e.status = 'active'
             """).fetchone()[0]
             verified = conn.execute(
-                "SELECT COUNT(*) FROM articles WHERE human_verified!=0 AND category NOT IN ('platform_hotlists', 'bilibili_videos')"
+                "SELECT COUNT(*) FROM news_articles WHERE human_verified!=0"
             ).fetchone()[0]
             by_cat = conn.execute(
-                "SELECT category, COUNT(*) FROM articles WHERE category NOT IN ('platform_hotlists', 'bilibili_videos')"
-                " AND (ai_filtered IS NULL OR ai_filtered != -1) GROUP BY category"
+                "SELECT category, COUNT(*) FROM news_articles"
+                " WHERE (ai_filtered IS NULL OR ai_filtered != -1) GROUP BY category"
             ).fetchall()
             # 来源分布 — 按实际媒体名统计（如 Ars Technica、36Kr、IT之家），不按 category 聚合
             by_source = conn.execute(
-                "SELECT source, COUNT(*) FROM articles WHERE category NOT IN ('platform_hotlists', 'bilibili_videos')"
-                " AND (ai_filtered IS NULL OR ai_filtered != -1) GROUP BY source ORDER BY COUNT(*) DESC"
+                "SELECT source, COUNT(*) FROM news_articles"
+                " WHERE (ai_filtered IS NULL OR ai_filtered != -1) GROUP BY source ORDER BY COUNT(*) DESC"
             ).fetchall()
             # 缓存状态统计 — 与 cache.py 保持一致的口径
             # HTML 已下载到磁盘（有 local_path 且非错误标记）
             cache_cached = conn.execute(
-                "SELECT COUNT(*) FROM articles WHERE local_path != '' AND local_path NOT LIKE '[ERR:%' AND category NOT IN ('platform_hotlists', 'bilibili_videos')"
+                "SELECT COUNT(*) FROM news_articles WHERE local_path != '' AND local_path NOT LIKE '[ERR:%'"
             ).fetchone()[0]
             # 文本已提取（可从 DB 直接阅读/分析）
             cache_text = conn.execute(
-                "SELECT COUNT(*) FROM articles WHERE text_content != '' AND category NOT IN ('platform_hotlists', 'bilibili_videos')"
+                "SELECT COUNT(*) FROM news_articles WHERE text_content != ''"
             ).fetchone()[0]
             # 翻译已完成
             cache_translated = conn.execute(
-                "SELECT COUNT(*) FROM articles WHERE translated_content != '' AND category NOT IN ('platform_hotlists', 'bilibili_videos')"
+                "SELECT COUNT(*) FROM news_articles WHERE translated_content != ''"
             ).fetchone()[0]
             # 下载失败
             cache_failed = conn.execute(
-                "SELECT COUNT(*) FROM articles WHERE local_path LIKE '[ERR:%' AND category NOT IN ('platform_hotlists', 'bilibili_videos')"
+                "SELECT COUNT(*) FROM news_articles WHERE local_path LIKE '[ERR:%'"
             ).fetchone()[0]
             # 从未尝试下载（排除 AI 已拒绝的文章）
             cache_pending = conn.execute(
-                "SELECT COUNT(*) FROM articles WHERE category NOT IN ('platform_hotlists', 'bilibili_videos')"
-                " AND (local_path IS NULL OR local_path = '')"
+                "SELECT COUNT(*) FROM news_articles"
+                " WHERE (local_path IS NULL OR local_path = '')"
                 " AND (ai_filtered IS NULL OR ai_filtered != -1)"
             ).fetchone()[0]
             # 死链文章（content_status='dead'）
             cache_dead = conn.execute(
-                "SELECT COUNT(*) FROM articles WHERE content_status='dead'"
-                " AND category NOT IN ('platform_hotlists', 'bilibili_videos')"
+                "SELECT COUNT(*) FROM news_articles WHERE content_status='dead'"
             ).fetchone()[0]
             return {
-                'articles': articles,
+                'articles': news_articles,
                 'events': events,
                 'active_events': active,
                 'human_verified': verified,
@@ -1347,53 +1402,46 @@ class NewsDB:
                 'cache_dead': cache_dead,
             }
 
-    def get_recent_articles(self, limit: int = 20) -> list:
+    def get_recent_news_articles(self, limit: int = 20) -> list:
         with self._conn() as conn:
             rows = conn.execute("""
                 SELECT title, source, category, fetched_at, priority_score, priority_label, human_verified
-                FROM articles ORDER BY fetched_at DESC LIMIT ?
+                FROM news_articles ORDER BY fetched_at DESC LIMIT ?
             """, (limit,)).fetchall()
             return [{'title': r[0], 'source': r[1], 'category': r[2],
                      'date': r[3], 'score': r[4], 'label': r[5], 'verified': r[6]}
                     for r in rows]
 
     def get_hotlists(self, date: str = "", platforms: list = None) -> dict:
-        """获取热榜/B站热门数据，按平台分组。
+        """获取热榜/B站热门数据，按平台分组（从 trending_items 查询）。
         date: 'YYYY-MM-DD'，为空时返回最新一批数据
         platforms: 筛选指定平台列表，默认全部
         返回 {platform_id: {count, items: [{title, url, rank, heat, ...}]}}
         """
         with self._conn() as conn:
-            # 未指定日期时，使用数据中最新日期
             if not date:
                 latest = conn.execute(
-                    "SELECT date(fetched_at) FROM articles "
-                    "WHERE category IN ('platform_hotlists','bilibili_videos') "
+                    "SELECT date(fetched_at) FROM trending_items "
                     "ORDER BY fetched_at DESC LIMIT 1"
                 ).fetchone()
                 date = latest[0] if latest else datetime.now().strftime('%Y-%m-%d')
 
             result = {}
-            category_map = {
-                'weibo': 'platform_hotlists', 'zhihu': 'platform_hotlists',
-                'douyin': 'platform_hotlists', 'toutiao': 'platform_hotlists',
-                'bilibili': 'bilibili_videos',
+            platform_trend_map = {
+                'weibo': 'hotlist', 'zhihu': 'hotlist',
+                'douyin': 'hotlist', 'toutiao': 'hotlist',
+                'bilibili': 'video',
             }
-            source_patterns = {
-                'weibo': 'weibo_%', 'zhihu': 'zhihu_%',
-                'douyin': 'douyin_%', 'toutiao': 'toutiao_%',
-                'bilibili': 'bilibili_%',
-            }
-            target = platforms or list(source_patterns.keys())
+            target = platforms or list(platform_trend_map.keys())
             for pid in target:
-                cat = category_map.get(pid, 'platform_hotlists')
-                pattern = source_patterns.get(pid, f'{pid}_%')
+                trend_type = platform_trend_map.get(pid, 'hotlist')
                 rows = conn.execute("""
-                    SELECT id, title, url, source, metadata, fetched_at, priority_label
-                    FROM articles
-                    WHERE category = ? AND source LIKE ? AND date(fetched_at) = ?
-                    ORDER BY id ASC
-                """, (cat, pattern, date)).fetchall()
+                    SELECT id, title, url, platform, metadata, fetched_at,
+                           rank, heat_score, author
+                    FROM trending_items
+                    WHERE platform = ? AND trend_type = ? AND date(fetched_at) = ?
+                    ORDER BY rank ASC
+                """, (pid, trend_type, date)).fetchall()
                 items = []
                 for r in rows:
                     try:
@@ -1403,13 +1451,12 @@ class NewsDB:
                     items.append({
                         'id': r[0], 'title': r[1], 'url': r[2],
                         'source': r[3],
-                        'rank': meta.get('rank', 0),
-                        'heat': meta.get('heat', meta.get('views', '')),
-                        'author': meta.get('author', ''),
+                        'rank': r[6] if r[6] else meta.get('rank', 0),
+                        'heat': r[7] if r[7] else meta.get('heat', meta.get('views', '')),
+                        'author': r[8] if r[8] else meta.get('author', ''),
                         'fetched_at': r[5],
-                        'priority_label': r[6],
+                        'priority_label': 'medium',
                     })
-                items.sort(key=lambda x: x['rank'])
                 result[pid] = {'count': len(items), 'items': items, 'date': date}
             return result
 
@@ -1463,15 +1510,13 @@ class NewsDB:
 
             # 缓存统计 — 仅 RSS 新闻，排除热榜
             total = conn.execute(
-                "SELECT COUNT(*) FROM articles WHERE category NOT IN ('platform_hotlists', 'bilibili_videos')"
+                "SELECT COUNT(*) FROM news_articles"
             ).fetchone()[0]
             cached = conn.execute(
-                "SELECT COUNT(*) FROM articles WHERE local_path != '' AND local_path NOT LIKE '[ERR:%' "
-                "AND category NOT IN ('platform_hotlists', 'bilibili_videos')"
+                "SELECT COUNT(*) FROM news_articles WHERE local_path != '' AND local_path NOT LIKE '[ERR:%' "
             ).fetchone()[0]
             failed = conn.execute(
-                "SELECT COUNT(*) FROM articles WHERE local_path LIKE '[ERR:%' "
-                "AND category NOT IN ('platform_hotlists', 'bilibili_videos')"
+                "SELECT COUNT(*) FROM news_articles WHERE local_path LIKE '[ERR:%' "
             ).fetchone()[0]
             pending = total - cached - failed
             cached_pct = round(cached / total * 100, 1) if total > 0 else 0.0
@@ -1496,7 +1541,7 @@ class NewsDB:
                 'articles_yesterday': hl_stats[3] or 0,
             },
             'cache': {
-                'total_articles': total,
+                'total_news_articles': total,
                 'cached': cached,
                 'pending': pending,
                 'failed': failed,
@@ -1539,31 +1584,37 @@ class NewsDB:
         return {'healthy': healthy, 'degraded': degraded, 'failing': failing}
 
     def get_fetch_sources(self, source_type: str = '') -> list:
-        """返回所有源的详情列表（含健康状态、缓存覆盖率）。"""
-        # 已从抓取列表中移除的源，不再显示
+        """返回所有源的详情列表（含健康状态、缓存覆盖率）。
+        查询 news_articles（RSS）+ trending_items（热搜/B站）。"""
         _REMOVED_SOURCES = {'BBC World'}
+        CAT_MAP = {'rss': 'rss_news', 'hotlist': 'platform_hotlists', 'bilibili': 'bilibili_videos'}
         with self._conn() as conn:
-            where = "WHERE 1=1"
-            params = []
-            if source_type:
-                cat_map = {'rss': 'rss_news', 'hotlist': 'platform_hotlists', 'bilibili': 'bilibili_videos'}
-                if source_type in cat_map:
-                    where = "WHERE category=?"
-                    params = [cat_map[source_type]]
-            sources = conn.execute(f"""
-                SELECT DISTINCT source, category FROM articles {where}
-                ORDER BY source
-            """, params).fetchall()
+            # 收集所有源名称 + 类型
+            all_sources = []  # [(name, type)]
+            if not source_type or source_type == 'rss':
+                rss_rows = conn.execute("""
+                    SELECT DISTINCT source FROM news_articles WHERE category='rss_news'
+                """).fetchall()
+                for (src_name,) in rss_rows:
+                    if src_name not in _REMOVED_SOURCES:
+                        all_sources.append((src_name, 'rss'))
+            if not source_type or source_type in ('hotlist', 'bilibili'):
+                if source_type == 'hotlist':
+                    tfilter = "WHERE trend_type='hotlist'"
+                elif source_type == 'bilibili':
+                    tfilter = "WHERE trend_type='video'"
+                else:
+                    tfilter = ''
+                trend_rows = conn.execute(f"""
+                    SELECT DISTINCT platform, trend_type FROM trending_items {tfilter}
+                """).fetchall()
+                for platform, ttype in trend_rows:
+                    stype = 'bilibili' if ttype == 'video' else 'hotlist'
+                    all_sources.append((platform, stype))
             result = []
-            for src_name, category in sources:
+            for src_name, stype in all_sources:
                 if src_name in _REMOVED_SOURCES:
                     continue
-                if category == 'rss_news':
-                    stype = 'rss'
-                elif category == 'bilibili_videos':
-                    stype = 'bilibili'
-                else:
-                    stype = 'hotlist'
                 recent_logs = conn.execute("""
                     SELECT status, articles_fetched, articles_new, started_at, error_msg
                     FROM fetch_logs WHERE source_name=?
@@ -1583,17 +1634,25 @@ class NewsDB:
                     health = 'degraded'
                 else:
                     health = 'failing'
-                total = conn.execute(
-                    "SELECT COUNT(*) FROM articles WHERE source=?", (src_name,)
-                ).fetchone()[0]
-                cached = conn.execute(
-                    "SELECT COUNT(*) FROM articles WHERE source=? AND local_path!='' AND local_path NOT LIKE '[ERR:%'",
-                    (src_name,)
-                ).fetchone()[0]
-                failed = conn.execute(
-                    "SELECT COUNT(*) FROM articles WHERE source=? AND local_path LIKE '[ERR:%'",
-                    (src_name,)
-                ).fetchone()[0]
+                # 统计文章数
+                if stype == 'rss':
+                    total = conn.execute(
+                        "SELECT COUNT(*) FROM news_articles WHERE source=?", (src_name,)
+                    ).fetchone()[0]
+                    cached = conn.execute(
+                        "SELECT COUNT(*) FROM news_articles WHERE source=? AND local_path!='' AND local_path NOT LIKE '[ERR:%'",
+                        (src_name,)
+                    ).fetchone()[0]
+                    failed = conn.execute(
+                        "SELECT COUNT(*) FROM news_articles WHERE source=? AND local_path LIKE '[ERR:%'",
+                        (src_name,)
+                    ).fetchone()[0]
+                else:
+                    total = conn.execute(
+                        "SELECT COUNT(*) FROM trending_items WHERE platform=?", (src_name,)
+                    ).fetchone()[0]
+                    cached = total
+                    failed = 0
                 result.append({
                     'name': src_name,
                     'type': stype,

@@ -17,7 +17,7 @@ PARENT_DIR = os.path.dirname(SCRIPT_DIR)
 sys.path.insert(0, PARENT_DIR)
 
 from config import config
-from api.articles import _sanitize_html
+from api.news import _sanitize_html
 from ai_client import clean_article_content
 
 logger = logging.getLogger(__name__)
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 CLEAN_DELAY = 5  # 篇间延迟秒数
 
 
-def clean_articles(db_path: str, limit: int = 0, recent: int = 0) -> dict:
+def clean_news_articles(db_path: str, limit: int = 0, recent: int = 0) -> dict:
     """清洗所有已缓存但未清洗的文章 HTML。
 
     Returns:
@@ -39,10 +39,8 @@ def clean_articles(db_path: str, limit: int = 0, recent: int = 0) -> dict:
 
     # 查询已缓存 HTML 但尚未清洗的文章
     where = [
-        "local_path != ''",
-        "local_path NOT LIKE '[ERR:%'",
+        "content_status IN ('fetched', 'translated')",
         "(ai_cleaned_content IS NULL OR ai_cleaned_content = '')",
-        "content_status NOT IN ('dead', 'metadata_only')",
     ]
     params: list = []
     if recent:
@@ -50,7 +48,7 @@ def clean_articles(db_path: str, limit: int = 0, recent: int = 0) -> dict:
         where.append("fetched_at >= ?")
         params.append(cutoff)
 
-    sql = f"SELECT id, title, local_path FROM articles WHERE {' AND '.join(where)} ORDER BY id DESC"
+    sql = f"SELECT id, title, local_path FROM news_articles WHERE {' AND '.join(where)} ORDER BY id DESC"
     if limit:
         sql += " LIMIT ?"
         params.append(limit)
@@ -75,7 +73,7 @@ def clean_articles(db_path: str, limit: int = 0, recent: int = 0) -> dict:
             print(f"  [{idx}/{total}] #{aid} {title[:45]:45s} ⚠️ HTML 文件不存在")
             # 写入标记避免下次重复查询
             conn2 = sqlite3.connect(db_path)
-            conn2.execute("UPDATE articles SET ai_cleaned_content='[ERR:FILE_MISSING]' WHERE id=?", (aid,))
+            conn2.execute("UPDATE news_articles SET ai_cleaned_content='[ERR:FILE_MISSING]' WHERE id=?", (aid,))
             conn2.commit()
             conn2.close()
             continue
@@ -86,7 +84,7 @@ def clean_articles(db_path: str, limit: int = 0, recent: int = 0) -> dict:
         except Exception:
             print(f"  [{idx}/{total}] #{aid} {title[:45]:45s} ⚠️ 读取失败")
             conn2 = sqlite3.connect(db_path)
-            conn2.execute("UPDATE articles SET ai_cleaned_content='[ERR:READ_FAILED]' WHERE id=?", (aid,))
+            conn2.execute("UPDATE news_articles SET ai_cleaned_content='[ERR:READ_FAILED]' WHERE id=?", (aid,))
             conn2.commit()
             conn2.close()
             continue
@@ -94,7 +92,7 @@ def clean_articles(db_path: str, limit: int = 0, recent: int = 0) -> dict:
         if len(html) < 200:
             print(f"  [{idx}/{total}] #{aid} {title[:45]:45s} ⏭ HTML 太短 ({len(html)} 字符)")
             conn2 = sqlite3.connect(db_path)
-            conn2.execute("UPDATE articles SET ai_cleaned_content='[ERR:HTML_TOO_SHORT]' WHERE id=?", (aid,))
+            conn2.execute("UPDATE news_articles SET ai_cleaned_content='[ERR:HTML_TOO_SHORT]' WHERE id=?", (aid,))
             conn2.commit()
             conn2.close()
             continue
@@ -112,7 +110,7 @@ def clean_articles(db_path: str, limit: int = 0, recent: int = 0) -> dict:
 
                 conn2 = sqlite3.connect(db_path)
                 conn2.execute(
-                    "UPDATE articles SET ai_cleaned_content=? WHERE id=?",
+                    "UPDATE news_articles SET ai_cleaned_content=? WHERE id=?",
                     (result, aid)
                 )
                 conn2.commit()
@@ -147,4 +145,4 @@ if __name__ == '__main__':
         print("Error: 请通过 --db 或 NEWS_DB_PATH 环境变量指定数据库路径")
         sys.exit(1)
 
-    clean_articles(args.db, args.limit, args.recent)
+    clean_news_articles(args.db, args.limit, args.recent)

@@ -219,7 +219,7 @@ def recover_article(article_id: int, db_path: str = None) -> dict:
 
     conn = sqlite3.connect(db_path)
     row = conn.execute(
-        "SELECT id, title, source, url, local_path FROM articles WHERE id=?",
+        "SELECT id, title, source, url, local_path FROM news_articles WHERE id=?",
         (article_id,)
     ).fetchone()
 
@@ -252,7 +252,7 @@ def recover_article(article_id: int, db_path: str = None) -> dict:
             # 更新文章 URL，重置缓存状态
             now = datetime.now().isoformat(timespec='seconds')
             conn.execute("""
-                UPDATE articles SET
+                UPDATE news_articles SET
                     url=?, local_path=NULL, content_fetched_at=NULL,
                     retry_count=0, content_status='pending'
                 WHERE id=?
@@ -336,11 +336,11 @@ if __name__ == '__main__':
 
     if args.id:
         rows = conn.execute(
-            "SELECT id FROM articles WHERE id=?", (args.id,)
+            "SELECT id FROM news_articles WHERE id=?", (args.id,)
         ).fetchall()
     else:
         rows = conn.execute("""
-            SELECT id FROM articles
+            SELECT id FROM news_articles
             WHERE (local_path LIKE '[ERR:HTTP 404%' OR local_path LIKE '[ERR:HTTP 410%')
             AND content_status != 'dead'
             ORDER BY id
@@ -354,7 +354,7 @@ if __name__ == '__main__':
     if args.dry_run:
         for aid in ids:
             conn = sqlite3.connect(db_path)
-            row = conn.execute("SELECT title, source, url FROM articles WHERE id=?", (aid,)).fetchone()
+            row = conn.execute("SELECT title, source, url FROM news_articles WHERE id=?", (aid,)).fetchone()
             conn.close()
             if row:
                 candidates = search_article(row[0], row[1], row[2])

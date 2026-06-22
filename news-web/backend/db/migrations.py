@@ -54,14 +54,17 @@ def ensure_schema(db_path: str):
     conn = sqlite3.connect(db_path)
     cur_ver = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] or 0
     if cur_ver < 2:
-        conn.execute("""
-            UPDATE articles SET priority_score = ROUND(priority_score * 100, 0)
-            WHERE priority_score > 0 AND priority_score <= 1
-        """)
-        conn.execute("""
-            UPDATE articles SET ai_priority_score = ROUND(ai_priority_score * 100, 0)
-            WHERE ai_priority_score > 0 AND ai_priority_score <= 1
-        """)
+        try:
+            conn.execute("""
+                UPDATE news_articles SET priority_score = ROUND(priority_score * 100, 0)
+                WHERE priority_score > 0 AND priority_score <= 1
+            """)
+            conn.execute("""
+                UPDATE news_articles SET ai_priority_score = ROUND(ai_priority_score * 100, 0)
+                WHERE ai_priority_score > 0 AND ai_priority_score <= 1
+            """)
+        except sqlite3.OperationalError:
+            pass  # news_articles 表尚未创建，由 _init_db 创建后再处理
         conn.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (2)")
         conn.commit()
     conn.close()
@@ -70,21 +73,26 @@ def ensure_schema(db_path: str):
     conn = sqlite3.connect(db_path)
     cur_ver = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] or 0
     if cur_ver < 3:
-        # SQLite 不支持 ALTER TABLE ADD COLUMN IF NOT EXISTS，手动检查
-        cols = [c[1] for c in conn.execute("PRAGMA table_info(article_comments)").fetchall()]
-        if 'rating' not in cols:
-            conn.execute("ALTER TABLE article_comments ADD COLUMN rating INTEGER DEFAULT NULL")
+        try:
+            cols = [c[1] for c in conn.execute("PRAGMA table_info(article_comments)").fetchall()]
+            if 'rating' not in cols:
+                conn.execute("ALTER TABLE article_comments ADD COLUMN rating INTEGER DEFAULT NULL")
+        except sqlite3.OperationalError:
+            pass  # article_comments 表尚未创建
         conn.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (3)")
         conn.commit()
     conn.close()
 
-    # ── v4 迁移：articles 添加 retry_count 列（死链温和判定）─
+    # ── v4 迁移：news_articles 添加 retry_count 列（死链温和判定）─
     conn = sqlite3.connect(db_path)
     cur_ver = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] or 0
     if cur_ver < 4:
-        cols = [c[1] for c in conn.execute("PRAGMA table_info(articles)").fetchall()]
-        if 'retry_count' not in cols:
-            conn.execute("ALTER TABLE articles ADD COLUMN retry_count INTEGER DEFAULT 0")
+        try:
+            cols = [c[1] for c in conn.execute("PRAGMA table_info(news_articles)").fetchall()]
+            if 'retry_count' not in cols:
+                conn.execute("ALTER TABLE news_articles ADD COLUMN retry_count INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # news_articles 表尚未创建
         conn.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (4)")
         conn.commit()
     conn.close()
@@ -118,9 +126,19 @@ def ensure_schema(db_path: str):
         CREATE INDEX IF NOT EXISTS idx_fetch_logs_source
         ON fetch_logs(source_name, started_at)
     """)
-    conn.execute("""
-        CREATE INDEX IF NOT EXISTS idx_fetch_logs_type
-        ON fetch_logs(source_type, started_at)
-    """)
     conn.commit()
     conn.close()
+
+    # ── v5 迁移：news_articles 拆分为 news_articles + trending_items ──
+    conn = sqlite3.connect(db_path)
+    cur_ver = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] or 0
+    conn.close()
+    if cur_ver < 5:
+        from db.migration_v5 import run_migration
+        success = run_migration(db_path)
+        if not success:
+            raise RuntimeError(
+                "v5 迁移（news_articles 表拆分）失败！"
+                "请检查日志并手动恢复数据库: "
+                f"cp {db_path}.pre_migration_backup {db_path}"
+            )

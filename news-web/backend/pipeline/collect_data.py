@@ -245,7 +245,7 @@ def main():
         db = NewsDB(db_path)
         total = 0
         for cat in ('platform_hotlists', 'rss_news', 'bilibili_videos'):
-            n, skipped = db.save_articles(cat, sources[cat])
+            n, skipped = db.save_news_articles(cat, sources[cat])
             total += n
             msg = f"   DB ↑ {cat}: {n} 条新增"
             if skipped:

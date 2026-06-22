@@ -340,7 +340,7 @@ def cache_article_html(article_id: int, html: str) -> dict:
 
     conn = _sqlite3.connect(config.db_path)
     conn.execute("""
-        UPDATE articles SET local_path=?, content_fetched_at=?,
+        UPDATE news_articles SET local_path=?, content_fetched_at=?,
             text_content=?, content_lang=?, content_status='fetched'
         WHERE id=?
     """, (rel_path, now, text, lang, article_id))
@@ -372,11 +372,11 @@ if __name__ == '__main__':
 
     if args.article_id:
         rows = conn.execute(
-            "SELECT id, url FROM articles WHERE id=?", (args.article_id,)
+            "SELECT id, url FROM news_articles WHERE id=?", (args.article_id,)
         ).fetchall()
     else:
         rows = conn.execute(
-            "SELECT id, url FROM articles WHERE (local_path IS NULL OR local_path = '') AND url LIKE 'http%' LIMIT ?",
+            "SELECT id, url FROM news_articles WHERE (local_path IS NULL OR local_path = '') AND url LIKE 'http%' LIMIT ?",
             (args.limit,)
         ).fetchall()
     conn.close()

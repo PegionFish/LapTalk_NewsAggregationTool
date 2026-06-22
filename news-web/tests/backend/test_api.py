@@ -15,8 +15,13 @@ from ai_client import _ai_json, analyze_article, chat, extract_keywords_ai
 from api import pipeline as pipeline_api
 import translation_client
 
+# 从 conftest 导入预创建表函数
+from conftest import _precreate_tables
+
 @pytest.fixture
 def client(test_db_path):
+    # 预创建核心表，确保 lifespan 中的 ensure_schema 不会因表不存在而报错
+    _precreate_tables(test_db_path)
     # 直接操作 _data 绕过 setter，避免测试路径写入 config.json
     config._data['db_path'] = test_db_path
     with TestClient(app) as c:
@@ -36,28 +41,28 @@ def test_stats(client, news_db):
     assert "rss_news" in data["by_category"]
 
 def test_list_articles(client, news_db):
-    resp = client.get("/api/articles")
+    resp = client.get("/api/news")
     data = resp.json()
     assert len(data["articles"]) >= 3
     assert data["total"] >= 3
 
 def test_search_articles(client, news_db):
-    resp = client.get("/api/articles?q=Nova")
+    resp = client.get("/api/news?q=Nova")
     data = resp.json()
     assert len(data["articles"]) >= 2
 
 def test_get_article(client, news_db):
     # Get first article ID from the list
-    resp = client.get("/api/articles?limit=1")
+    resp = client.get("/api/news?limit=1")
     articles = resp.json().get("articles", [])
     if articles:
         article_id = articles[0]["id"]
-        resp = client.get(f"/api/articles/{article_id}")
+        resp = client.get(f"/api/news/{article_id}")
         assert resp.status_code == 200
         assert resp.json()["id"] == article_id
 
 def test_update_article(client, news_db):
-    resp = client.patch("/api/articles/1", json={"priority_label": "high"})
+    resp = client.patch("/api/news/1", json={"priority_label": "high"})
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
 
@@ -252,7 +257,7 @@ def _seed_pipeline_article(db_path: str, content_cache_path: str, article_id: in
             article_id,
         ),
     )
-    conn.execute("UPDATE articles SET local_path='', translated_content='already translated' WHERE id!=?", (article_id,))
+    conn.execute("UPDATE news_articles SET local_path='', translated_content='already translated' WHERE id!=?", (article_id,))
     conn.commit()
     conn.close()
 
@@ -264,12 +269,14 @@ def test_cache_status_only_counts_ai_approved_rss_articles(client, news_db, test
     now = datetime.utcnow().isoformat(timespec="seconds")
 
     conn = sqlite3.connect(test_db_path)
-    conn.execute("UPDATE articles SET ai_filtered=1 WHERE id=1")
-    conn.execute("UPDATE articles SET ai_filtered=0 WHERE id=2")
-    conn.execute("UPDATE articles SET ai_filtered=-1 WHERE id=3")
+    conn.execute("UPDATE news_articles SET ai_filtered=1 WHERE id=1")
+    conn.execute("UPDATE news_articles SET ai_filtered=0 WHERE id=2")
+    conn.execute("UPDATE news_articles SET ai_filtered=-1 WHERE id=3")
+    # 注意：以下 hotlist/bilibili 数据已迁移到 trending_items 表，
+    # 但本测试仅验证 RSS 缓存状态计数，插入这些行不应影响结果
     conn.execute(
         """
-        INSERT INTO articles
+        INSERT INTO news_articles
             (title, source, url, category, published_date, fetched_at, metadata, keywords, ai_filtered)
         VALUES (?, ?, ?, ?, '', ?, '{}', '[]', 1)
         """,
@@ -277,7 +284,7 @@ def test_cache_status_only_counts_ai_approved_rss_articles(client, news_db, test
     )
     conn.execute(
         """
-        INSERT INTO articles
+        INSERT INTO news_articles
             (title, source, url, category, published_date, fetched_at, metadata, keywords, ai_filtered)
         VALUES (?, ?, ?, ?, '', ?, '{}', '[]', 1)
         """,
@@ -326,7 +333,7 @@ def test_batch_translate_retries_request_timeout_at_queue_tail(monkeypatch, test
     assert any("已排到队列末尾重试" in line for line in pipeline_api._translate_state["log"])
 
     conn = sqlite3.connect(test_db_path)
-    translated = conn.execute("SELECT translated_content, content_status FROM articles WHERE id=1").fetchone()
+    translated = conn.execute("SELECT translated_content, content_status FROM news_articles WHERE id=1").fetchone()
     conn.close()
     assert translated[0] == "这是中文翻译结果，长度足够用于断言，并且包含更多字符。"
     assert translated[1] == "translated"
@@ -377,7 +384,7 @@ def test_batch_analyze_retries_request_timeout_at_queue_tail(monkeypatch, test_d
     assert any("已排到队列末尾重试" in line for line in pipeline_api._analyze_state["log"])
 
     conn = sqlite3.connect(test_db_path)
-    analyzed = conn.execute("SELECT ai_summary, ai_analyzed FROM articles WHERE id=1").fetchone()
+    analyzed = conn.execute("SELECT ai_summary, ai_analyzed FROM news_articles WHERE id=1").fetchone()
     conn.close()
     assert analyzed[0] == "这是 AI 分析摘要，长度足够用于断言。"
     assert analyzed[1] == 1
@@ -437,7 +444,7 @@ def test_fetch_source_retry_unknown(client, news_db):
 
 def test_fetch_source_articles(client, news_db):
     """源文章列表筛选 + 分页正确"""
-    resp = client.get("/api/fetch/sources/Guru3D/articles?page=1&limit=10")
+    resp = client.get("/api/fetch/sources/Guru3D/news_articles?page=1&limit=10")
     assert resp.status_code == 200
     data = resp.json()
     assert "articles" in data
@@ -450,14 +457,14 @@ def test_fetch_source_articles(client, news_db):
 
 def test_fetch_retry_article_cache(client, news_db):
     """单篇缓存重试返回 ok"""
-    resp = client.post("/api/fetch/articles/1/retry-cache")
+    resp = client.post("/api/fetch/news_articles/1/retry-cache")
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
 
 
 def test_fetch_batch_retry_limit(client, news_db):
-    """批量重试超过 50 篇应返回错误"""
-    resp = client.post("/api/fetch/articles/batch-retry", json={"ids": list(range(1, 60))})
+    """批量重试超过 500 篇应返回错误"""
+    resp = client.post("/api/fetch/news_articles/batch-retry", json={"ids": list(range(1, 510))})
     assert resp.status_code == 400
     data = resp.json()
     assert "detail" in data or "error" in data
@@ -465,7 +472,7 @@ def test_fetch_batch_retry_limit(client, news_db):
 
 def test_fetch_failed_articles(client, news_db):
     """失败文章列表分页正确"""
-    resp = client.get("/api/fetch/articles/failed?page=1&limit=20")
+    resp = client.get("/api/fetch/news_articles/failed?page=1&limit=20")
     assert resp.status_code == 200
     data = resp.json()
     assert "articles" in data

@@ -3,7 +3,7 @@
 文章页面本地存档 — 保存 HTML 文件到磁盘，DB 只记录路径
 
 页面文件保存在 hot_reports/content/{article_id}.html
-DB 中 articles.local_path 指向文件路径。
+DB 中 news_articles.local_path 指向文件路径。
 
 用法:
   python3 fetch_content.py                          # 全量补抓
@@ -162,7 +162,7 @@ def fetch_article_content(url: str, article_id: int, db_path: str = None) -> dic
     conn = sqlite3.connect(db_path)
     try:
         if res['error']:
-            conn.execute("UPDATE articles SET local_path=? WHERE id=?",
+            conn.execute("UPDATE news_articles SET local_path=? WHERE id=?",
                          (f'[ERR:{res["error"]}]', article_id))
             conn.commit()
             return {'ok': False, 'error': res['error']}
@@ -193,7 +193,7 @@ def fetch_article_content(url: str, article_id: int, db_path: str = None) -> dic
         now = datetime.now().isoformat(timespec='seconds')
         rel_path = f'{os.path.basename(content_dir)}/{article_id}.html'
         conn.execute("""
-            UPDATE articles SET
+            UPDATE news_articles SET
                 local_path=?, content_fetched_at=?,
                 text_content=?, content_lang=?, content_status='fetched'
             WHERE id=?
@@ -234,7 +234,7 @@ def _fetch_single(args):
         if err_code is not None:
             # 同类型错误递增计数
             conn.execute("""
-                UPDATE articles SET
+                UPDATE news_articles SET
                     local_path=?, content_fetched_at=?,
                     retry_count = CASE
                         WHEN local_path LIKE ('[ERR:HTTP ' || ? || '%') THEN retry_count + 1
@@ -244,12 +244,12 @@ def _fetch_single(args):
             """, (f'[ERR:{res["error"]}]', datetime.now().isoformat(timespec='seconds'),
                   str(err_code), aid))
             # 检查是否该标记 dead
-            rc = conn.execute("SELECT retry_count FROM articles WHERE id=?", (aid,)).fetchone()
+            rc = conn.execute("SELECT retry_count FROM news_articles WHERE id=?", (aid,)).fetchone()
             if rc and rc[0] >= 2:
-                conn.execute("UPDATE articles SET content_status='dead' WHERE id=?", (aid,))
+                conn.execute("UPDATE news_articles SET content_status='dead' WHERE id=?", (aid,))
         else:
             conn.execute("""
-                UPDATE articles SET local_path=?, content_fetched_at=?, retry_count=retry_count+1
+                UPDATE news_articles SET local_path=?, content_fetched_at=?, retry_count=retry_count+1
                 WHERE id=?
             """, (f'[ERR:{res["error"]}]', datetime.now().isoformat(timespec='seconds'), aid))
         conn.commit()
@@ -286,7 +286,7 @@ def _fetch_single(args):
     # 写入 DB（翻译由 translate_content.py 独立处理）
     conn = sqlite3.connect(db_path)
     conn.execute("""
-        UPDATE articles SET
+        UPDATE news_articles SET
             local_path=?, content_fetched_at=?,
             text_content=?, content_lang=?, content_status='fetched'
         WHERE id=?
@@ -301,13 +301,13 @@ def _fetch_single(args):
 
 
 def archive_pages(db_path: str, limit: int = 0, source: str = None, recent: int = 0):
-    """遍历 articles，找出尚未存档的页面，多线程并行下载并保存 HTML 文件"""
+    """遍历 news_articles，找出尚未存档的页面，多线程并行下载并保存 HTML 文件"""
 
     # ── 准备 DB + 目录 ──
     conn = sqlite3.connect(db_path)
-    cols = [r[1] for r in conn.execute("PRAGMA table_info(articles)")]
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(news_articles)")]
     if 'local_path' not in cols:
-        conn.execute("ALTER TABLE articles ADD COLUMN local_path TEXT DEFAULT ''")
+        conn.execute("ALTER TABLE news_articles ADD COLUMN local_path TEXT DEFAULT ''")
         conn.commit()
 
     content_dir = config.content_cache_path
@@ -315,8 +315,7 @@ def archive_pages(db_path: str, limit: int = 0, source: str = None, recent: int 
 
     # ── 查询未存档文章 ──
     where = [
-        "(local_path IS NULL OR local_path = '')",
-        "category NOT IN ('platform_hotlists', 'bilibili_videos')",
+        "content_status = 'pending'",
         "ai_filtered = 1",
     ]
     params = []
@@ -328,7 +327,7 @@ def archive_pages(db_path: str, limit: int = 0, source: str = None, recent: int 
         where.append("fetched_at >= ?")
         params.append(cutoff)
 
-    sql = f"""SELECT id, title, url, source FROM articles
+    sql = f"""SELECT id, title, url, source FROM news_articles
               WHERE {' AND '.join(where)}
               ORDER BY id DESC"""
     if limit:
