@@ -1,8 +1,9 @@
 """
 数据采集状态监控 API — 抓取历史、源健康、缓存重试、调度管理。
 """
-import os, sqlite3, threading, logging, time
+import os, sqlite3, threading, logging, time, random
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
@@ -17,7 +18,8 @@ _retry_locks: dict = {}
 _retry_lock = threading.Lock()
 
 _retry_state: dict = {
-    "running": False, "total": 0, "done": 0, "failed": 0, "current": "", "log": []
+    "running": False, "total": 0, "done": 0, "failed": 0, "skipped": 0,
+    "current": "", "log": [], "started_at": "", "cancelled": False
 }
 
 
@@ -325,9 +327,18 @@ def retry_article_cache(article_id: int):
 # 批量缓存重试
 # ══════════════════════════════════════════════════════════════
 
+_WORKERS = 4          # 并行 worker 数 — 多源场景下大幅提速
+_RETRY_TIMEOUT = 60   # 已知失败文章的超时秒数
+DEAD_CODES = {404, 410, 451}  # 永久死链 — 不重试
+# 403 / 网络错误会走 Playwright fallback
+
 @router.post("/articles/batch-retry")
 def retry_articles_batch(body: dict):
-    """批量缓存重试 — 支持指定 ID 列表或重试所有失败文章。"""
+    """批量缓存重试 — 支持指定 ID 列表或重试所有失败文章。
+
+    多源并行（4 线程），同源串行（锁 + 5-10s 间隔），404 死链自动跳过，
+    403/网络错误自动 Playwright 渲染回退。
+    """
     if not config.db_path:
         return {"error": "database_not_configured"}
 
@@ -339,7 +350,6 @@ def retry_articles_batch(body: dict):
     ids = body.get('ids', [])
 
     if retry_all:
-        # 获取所有失败文章
         conn = _conn()
         rows = conn.execute(
             "SELECT id FROM articles WHERE local_path LIKE '[ERR:%' "
@@ -356,113 +366,205 @@ def retry_articles_batch(body: dict):
     if not ids:
         return {"ok": True, "total": 0, "message": "没有需要重试的文章"}
 
-    _retry_state = {"running": True, "total": len(ids), "done": 0, "failed": 0, "current": "", "log": [], "source_delay": True}
+    _retry_state = {
+        "running": True, "total": 0, "done": 0, "failed": 0, "skipped": 0,
+        "current": "", "log": [], "started_at": datetime.now().isoformat(),
+        "cancelled": False
+    }
 
     def _batch_retry():
         global _retry_state
         from pipeline.fetch_content import download_page, sanitize_html
+        from pipeline.browser_capture import fetch_with_fallback
         from utils.text import extract_text_from_html, detect_language
         from datetime import datetime as _dt
-        import random
 
-        # 按来源分组，同源文章之间延迟 5-10 秒
+        # ── 查询所有文章，按源分组 ──
         conn = _conn()
         articles = []
         for aid in ids:
-            row = conn.execute("SELECT id, title, url, source FROM articles WHERE id=?", (aid,)).fetchone()
+            row = conn.execute(
+                "SELECT id, title, url, source FROM articles WHERE id=?", (aid,)
+            ).fetchone()
             if row:
                 articles.append(row)
         conn.close()
 
-        # 按 source 分组
-        by_source = {}
+        # ── 预筛：分离死链 ──
+        to_retry = []
+        skipped = 0
         for aid, title, url, source in articles:
-            by_source.setdefault(source, []).append((aid, title, url))
+            if not url or not url.startswith('http'):
+                _log_retry(f"#{aid} ⚠️ 无有效 URL — 跳过")
+                skipped += 1
+                continue
+            # 检查原错误是否为死链
+            conn2 = _conn()
+            err_row = conn2.execute(
+                "SELECT local_path FROM articles WHERE id=?", (aid,)
+            ).fetchone()
+            conn2.close()
+            if err_row and err_row[0]:
+                err_msg = str(err_row[0]).replace('[ERR:', '').rstrip(']')
+                for code in DEAD_CODES:
+                    if f'HTTP {code}' in err_msg:
+                        _log_retry(f"#{aid} 💀 HTTP {code} 死链 — 跳过")
+                        skipped += 1
+                        break
+                else:
+                    to_retry.append((aid, title, url, source))
+            else:
+                to_retry.append((aid, title, url, source))
 
-        done_count = 0
-        for source, items in by_source.items():
-            for idx, (aid, title, url) in enumerate(items):
-                _retry_state["current"] = f"#{aid} {title[:40]}"
-                if not url or not url.startswith('http'):
-                    _log_retry(f"#{aid} ⚠️ 无有效 URL")
-                    _retry_state["failed"] += 1
-                    _retry_state["done"] += 1
-                    done_count += 1
-                    continue
+        _retry_state["total"] = len(to_retry)
+        _retry_state["skipped"] = skipped
+        _retry_state["done"] = 0
+
+        if not to_retry:
+            _retry_state["running"] = False
+            _retry_state["current"] = "完成（全部跳过）"
+            return
+
+        # ── 按 source 创建锁 — 同源串行，不同源并行 ──
+        source_locks: dict[str, threading.Lock] = {}
+        lock_registry = threading.Lock()
+
+        def get_source_lock(source: str) -> threading.Lock:
+            with lock_registry:
+                if source not in source_locks:
+                    source_locks[source] = threading.Lock()
+                return source_locks[source]
+
+        # ── 单篇文章重试 worker ──
+        def _do_retry_one(article: tuple) -> dict:
+            aid, title, url, source = article
+
+            # 检查取消
+            if _retry_state.get("cancelled"):
+                return {"status": "cancelled", "aid": aid}
+
+            s_lock = get_source_lock(source)
+            with s_lock:
+                if _retry_state.get("cancelled"):
+                    return {"status": "cancelled", "aid": aid}
+
+                _retry_state["current"] = f"#{aid} [{source}] {title[:50]}"
+                _log_retry(f"#{aid} 📡 [{source}] {title[:60]}")
 
                 try:
-                    res = download_page(url)
-                    if res['error']:
+                    res = download_page(url, retries=1, timeout=_RETRY_TIMEOUT)
+
+                    # Playwright fallback for retryable HTTP errors
+                    if res.get('error'):
+                        err = res['error']
+                        fallback_triggers = ('403', 'timed out', 'Connection refused',
+                                             'Connection reset', 'Service Unavailable')
+                        if any(k in err for k in fallback_triggers):
+                            _log_retry(f"#{aid} 🎭 HTTP 失败，尝试 Playwright 渲染...")
+                            try:
+                                fb = fetch_with_fallback(url, aid)
+                                if fb.get('html') and fb.get('source') not in ('challenge', 'failed') and len(fb.get('html', '')) > 200:
+                                    res = {'html': fb['html'], 'error': None}
+                                    _log_retry(f"#{aid} ✅ Playwright 渲染成功 [{fb.get('source', '?')}] {len(fb['html'])//1024}KB")
+                                else:
+                                    _log_retry(f"#{aid} ⚠️ Playwright 也未成功: {fb.get('source', '?')}")
+                            except Exception as pe:
+                                _log_retry(f"#{aid} ⚠️ Playwright 异常: {str(pe)[:200]}")
+
+                    if res.get('error'):
                         conn2 = _conn()
                         conn2.execute(
                             "UPDATE articles SET local_path=?, content_fetched_at=? WHERE id=?",
                             (f"[ERR:{res['error']}]", _dt.now().isoformat(timespec='seconds'), aid)
                         )
-                        conn2.commit(); conn2.close()
+                        conn2.commit()
+                        conn2.close()
                         _log_retry(f"#{aid} ❌ {res['error']}")
-                        _retry_state["failed"] += 1
-                    else:
-                        html = sanitize_html(res['html'])
-                        content_dir = config.content_cache_path
-                        os.makedirs(content_dir, exist_ok=True)
-                        file_path = os.path.join(content_dir, f'{aid}.html')
-                        with open(file_path, 'w', encoding='utf-8') as f:
-                            f.write(html)
+                        # 失败后短暂延迟，不给源站点压力
+                        time.sleep(random.uniform(2, 5))
+                        return {"status": "fail", "aid": aid, "error": res['error']}
 
-                        text = extract_text_from_html(html)
-                        lang = detect_language(text)
-                        now = _dt.now().isoformat(timespec='seconds')
-                        rel_path = f'{os.path.basename(content_dir)}/{aid}.html'
-                        conn2 = _conn()
-                        conn2.execute("""
-                            UPDATE articles SET
-                                local_path=?, content_fetched_at=?,
-                                text_content=?, content_lang=?, content_status='fetched'
-                            WHERE id=?
-                        """, (rel_path, now, text, lang, aid))
-                        conn2.commit(); conn2.close()
-                        _log_retry(f"#{aid} ✅ 缓存成功 [{lang}]")
+                    # ── 成功 — 入库 ──
+                    html = sanitize_html(res['html'])
+                    content_dir = config.content_cache_path
+                    os.makedirs(content_dir, exist_ok=True)
+                    file_path = os.path.join(content_dir, f'{aid}.html')
+                    with open(file_path, 'w', encoding='utf-8') as f:
+                        f.write(html)
 
-                    _retry_state["done"] += 1
-                    done_count += 1
+                    text = extract_text_from_html(html)
+                    lang = detect_language(text)
+                    now = _dt.now().isoformat(timespec='seconds')
+                    rel_path = f'{os.path.basename(content_dir)}/{aid}.html'
+                    conn2 = _conn()
+                    conn2.execute("""
+                        UPDATE articles SET
+                            local_path=?, content_fetched_at=?,
+                            text_content=?, content_lang=?, content_status='fetched'
+                        WHERE id=?
+                    """, (rel_path, now, text, lang, aid))
+                    conn2.commit()
+                    conn2.close()
+                    _log_retry(f"#{aid} ✅ 缓存成功 [{lang}] {len(html)//1024}KB")
 
-                    # 同源文章之间延迟 5-10 秒，避免触发风控
-                    if idx < len(items) - 1:
-                        delay = random.uniform(5, 10)
-                        _log_retry(f"⏳ 等待 {delay:.1f}s 后继续抓取 {source}...")
-                        time.sleep(delay)
-                    elif done_count < len(ids):
-                        # 切换源时也短暂延迟
-                        time.sleep(2)
+                    # 成功后同源延迟 5-10s
+                    time.sleep(random.uniform(5, 10))
+                    return {"status": "ok", "aid": aid, "lang": lang, "size_kb": len(html)//1024}
 
                 except Exception as e:
                     _log_retry(f"#{aid} ❌ {str(e)[:300]}")
+                    time.sleep(random.uniform(2, 5))
+                    return {"status": "fail", "aid": aid, "error": str(e)[:300]}
+
+        # ── 提交到线程池 ──
+        with ThreadPoolExecutor(max_workers=_WORKERS) as executor:
+            futures = {executor.submit(_do_retry_one, a): a for a in to_retry}
+            for future in as_completed(futures):
+                if _retry_state.get("cancelled"):
+                    # 尝试取消尚未开始的 future
+                    for f in futures:
+                        f.cancel()
+                try:
+                    r = future.result()
+                except Exception:
+                    r = {"status": "fail", "aid": 0, "error": "worker 异常"}
+                if r.get("status") == "fail":
                     _retry_state["failed"] += 1
-                    _retry_state["done"] += 1
-                    done_count += 1
+                _retry_state["done"] += 1
 
         _retry_state["running"] = False
         _retry_state["current"] = "完成"
+        _log_retry(f"🏁 批量重试完成 — 成功 {_retry_state['done'] - _retry_state['failed']}/{_retry_state['done']}，失败 {_retry_state['failed']}，跳过 {skipped}")
 
     threading.Thread(target=_batch_retry, daemon=True).start()
-    return {"ok": True, "total": len(ids), "message": f"开始批量重试 {len(ids)} 篇缓存（同源间隔 5-10 秒）"}
+    return {
+        "ok": True, "total": len(ids), "skipped": 0,  # skipped 在 _batch_retry 启动后更新
+        "message": f"开始批量重试（{_WORKERS} 线程并行，同源间隔 5-10 秒）"
+    }
 
 
 @router.get("/articles/batch-retry/status")
 def batch_retry_status():
-    """查询批量重试进度。"""
-    return dict(_retry_state)
+    """查询批量重试进度 — 含耗时、跳过数。"""
+    s = dict(_retry_state)
+    if s.get("started_at"):
+        try:
+            started = datetime.fromisoformat(s["started_at"])
+            s["elapsed_seconds"] = int((datetime.now() - started).total_seconds())
+        except (ValueError, TypeError):
+            s["elapsed_seconds"] = 0
+    return s
 
 
 @router.post("/articles/batch-retry/cancel")
 def batch_retry_cancel():
-    """取消当前批量重试任务。"""
+    """取消当前批量重试任务 — 已开始的 worker 会完成，未开始的跳过。"""
     global _retry_state
     if not _retry_state.get("running"):
         return {"ok": False, "message": "没有正在运行的重试任务"}
-    _retry_state["running"] = False
-    _retry_state["current"] = "已取消"
-    return {"ok": True, "message": "重试任务已取消"}
+    _retry_state["cancelled"] = True
+    _log_retry("🛑 收到取消请求 — 正在停止...")
+    return {"ok": True, "message": "重试任务已取消（已开始的 worker 会完成当前文章）"}
 
 
 # ══════════════════════════════════════════════════════════════

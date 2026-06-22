@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import type { Dispatch, SetStateAction } from 'react';
 import { api } from '../../api/client';
+import type { BatchRetryState } from '../../types';
 
 interface CacheStatus {
   checked_at: string;
@@ -37,6 +39,7 @@ interface Props {
 }
 
 export default function CacheSettings({ cachePath, setCachePath }: Props) {
+  const navigate = useNavigate();
   const [status, setStatus] = useState<CacheStatus | null>(null);
   const [checking, setChecking] = useState(false);
   const [cleaning, setCleaning] = useState(false);
@@ -44,6 +47,10 @@ export default function CacheSettings({ cachePath, setCachePath }: Props) {
   const [fetchState, setFetchState] = useState<CacheFetchState>({ running: false, total: 0, done: 0, failed: 0, current: '', log: [] });
   const [fetching, setFetching] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval>>();
+
+  // 批量重试状态（跨页面可见）
+  const [batchRetryState, setBatchRetryState] = useState<BatchRetryState>({ running: false, total: 0, done: 0, failed: 0, current: '', log: [] });
+  const batchRetryTimerRef = useRef<ReturnType<typeof setInterval>>();
 
   const handleCheck = async () => {
     setChecking(true);
@@ -101,6 +108,27 @@ export default function CacheSettings({ cachePath, setCachePath }: Props) {
     }
   }, [status]);
 
+  // 挂载时检查是否有运行中的批量重试 + 轮询
+  useEffect(() => {
+    const checkAndPoll = async () => {
+      try {
+        const s = await api.getBatchRetryStatus();
+        setBatchRetryState(s);
+        if (s.running) {
+          batchRetryTimerRef.current = setInterval(async () => {
+            try {
+              const s2 = await api.getBatchRetryStatus();
+              setBatchRetryState(s2);
+              if (!s2.running) clearInterval(batchRetryTimerRef.current);
+            } catch { clearInterval(batchRetryTimerRef.current); }
+          }, 2000);
+        }
+      } catch { /* ignore */ }
+    };
+    checkAndPoll();
+    return () => clearInterval(batchRetryTimerRef.current);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const s = status?.summary;
 
   return (
@@ -129,6 +157,42 @@ export default function CacheSettings({ cachePath, setCachePath }: Props) {
           <p className="card-description">诊断磁盘文件完整性、DB 记录一致性、翻译覆盖率（仅统计 RSS 新闻）</p>
         </div>
         <div className="card-body">
+          {/* 批量重试进度横幅（跨页面可见） */}
+          {batchRetryState.running && (
+            <div style={{
+              marginBottom: 16,
+              padding: '12px 16px',
+              background: 'rgba(0, 212, 255, 0.08)',
+              borderRadius: 8,
+              border: '1px solid rgba(0, 212, 255, 0.2)',
+              fontSize: 12,
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                <i className="fas fa-spinner fa-spin" style={{ color: 'var(--accent)', fontSize: 14 }} />
+                <span style={{ fontWeight: 600, color: 'var(--accent)' }}>
+                  批量重试中: {batchRetryState.done}/{batchRetryState.total}
+                  ({batchRetryState.total > 0 ? Math.round(batchRetryState.done / batchRetryState.total * 100) : 0}%)
+                </span>
+                {batchRetryState.failed > 0 && (
+                  <span style={{ color: 'var(--accent-red)', fontSize: 11 }}>失败 {batchRetryState.failed}</span>
+                )}
+                <a
+                  onClick={(e) => { e.preventDefault(); navigate('/fetch'); }}
+                  style={{ marginLeft: 'auto', color: 'var(--accent)', textDecoration: 'underline', cursor: 'pointer', fontSize: 11 }}
+                >
+                  查看详情 <i className="fas fa-external-link-alt" style={{ fontSize: 9 }} />
+                </a>
+              </div>
+              <div style={{ height: 4, background: 'var(--bg-primary)', borderRadius: 2, overflow: 'hidden' }}>
+                <div style={{
+                  height: '100%', borderRadius: 2, transition: 'width 0.3s',
+                  width: `${batchRetryState.total > 0 ? (batchRetryState.done / batchRetryState.total) * 100 : 0}%`,
+                  background: 'var(--accent)',
+                }} />
+              </div>
+            </div>
+          )}
+
           <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
             <button className="btn btn-primary" onClick={handleCheck} disabled={checking}>
               <i className={`fas fa-${checking ? 'spinner fa-spin' : 'stethoscope'}`} />
@@ -162,6 +226,20 @@ export default function CacheSettings({ cachePath, setCachePath }: Props) {
                 <StatCard label="磁盘缺失" value={s.missing_disk} icon="fa-unlink" color={s.missing_disk > 0 ? 'var(--accent-red)' : 'var(--text-muted)'} />
                 <StatCard label="孤立文件" value={s.orphan_files} icon="fa-question-circle" color={s.orphan_files > 0 ? 'var(--accent-orange)' : 'var(--text-muted)'} />
               </div>
+
+              {/* 失败文章快速操作 */}
+              {s.failed_download > 0 && !batchRetryState.running && (
+                <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <i className="fas fa-redo" style={{ color: 'var(--accent-red)', fontSize: 10 }} />
+                  <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                    {s.failed_download} 篇下载失败 —{' '}
+                    <a onClick={(e) => { e.preventDefault(); navigate('/fetch'); }}
+                       style={{ color: 'var(--accent)', cursor: 'pointer', textDecoration: 'underline' }}>
+                      前往数据采集页重试
+                    </a>
+                  </span>
+                </div>
+              )}
 
               {/* 覆盖率进度条 */}
               <div style={{ marginTop: 16 }}>

@@ -228,8 +228,12 @@ export interface BatchRetryState {
   total: number;
   done: number;
   failed: number;
+  skipped?: number;
   current: string;
   log: string[];
+  started_at?: string;
+  elapsed_seconds?: number;
+  cancelled?: boolean;
 }
 
 // ── 调度管理 ──────────────────────────────────────────

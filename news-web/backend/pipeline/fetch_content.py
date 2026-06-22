@@ -54,8 +54,12 @@ def can_fetch(url: str) -> bool:
     return bool(url and url.startswith('http') and not any(d in url for d in BLOCKED))
 
 
-def download_page(url: str, retries: int = 2) -> dict:
-    """下载页面 HTML，返回 {'html': str, 'error': str|None}。网络临时错误自动重试。"""
+def download_page(url: str, retries: int = 2, timeout: int = 300) -> dict:
+    """下载页面 HTML，返回 {'html': str, 'error': str|None}。网络临时错误自动重试。
+
+    Args:
+        timeout: 单次请求超时秒数，默认 300s（正常下载）；批量重试传入 60s 即可。
+    """
     if not can_fetch(url):
         return {'html': '', 'error': 'Blocked'}
     last_error = ''
@@ -67,7 +71,7 @@ def download_page(url: str, retries: int = 2) -> dict:
                 'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
                 'Accept-Encoding': 'identity',
             })
-            with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 raw = resp.read()
                 ct = resp.headers.get('Content-Type', '')
                 cs = 'utf-8'

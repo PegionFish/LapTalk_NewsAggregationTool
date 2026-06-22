@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import type { FetchOverview, FetchSource, FetchLog, FailedArticle, FetchArticleItem, BatchRetryState, ScheduleInfo } from '../types';
@@ -10,7 +10,7 @@ const emptyOverview: FetchOverview = {
   cache: { total_articles: 0, cached: 0, pending: 0, failed: 0, cached_pct: 0 },
 };
 
-const emptyBatch: BatchRetryState = { running: false, total: 0, done: 0, failed: 0, current: '', log: [] };
+const emptyBatch: BatchRetryState = { running: false, total: 0, done: 0, failed: 0, skipped: 0, current: '', log: [] };
 
 const typeLabels: Record<string, string> = { rss: 'RSS', hotlist: '平台热榜', bilibili: 'B站视频' };
 
@@ -73,6 +73,29 @@ export default function FetchMonitor() {
   const [batchSubmitting, setBatchSubmitting] = useState(false);
   const batchTimer = useRef<ReturnType<typeof setInterval>>();
 
+  // ── 批量重试进度计算 ──
+  const batchPct = useMemo(() => {
+    if (batchState.total === 0) return 0;
+    return Math.round((batchState.done / batchState.total) * 100);
+  }, [batchState.done, batchState.total]);
+
+  const batchElapsed = useMemo(() => {
+    const secs = batchState.elapsed_seconds ?? 0;
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  }, [batchState.elapsed_seconds]);
+
+  const batchEta = useMemo(() => {
+    if (batchState.done < 5 || !batchState.elapsed_seconds || batchState.elapsed_seconds < 2) return '';
+    const rate = batchState.done / batchState.elapsed_seconds;
+    if (rate <= 0) return '';
+    const remaining = Math.max(0, (batchState.total - batchState.done) / rate);
+    const m = Math.floor(remaining / 60);
+    const s = Math.round(remaining % 60);
+    return `~${m}:${s.toString().padStart(2, '0')}`;
+  }, [batchState.done, batchState.total, batchState.elapsed_seconds]);
+
   // 调度管理状态
   const [scheduleInfo, setScheduleInfo] = useState<ScheduleInfo | null>(null);
   const [scheduleHours, setScheduleHours] = useState<number[]>([10, 17]);
@@ -95,6 +118,16 @@ export default function FetchMonitor() {
     }, 8000);
     return () => clearInterval(t);
   }, []);
+
+  // 挂载时检查是否有运行中的批量重试（跨页面导航恢复状态）
+  useEffect(() => {
+    api.getBatchRetryStatus().then((s: BatchRetryState) => {
+      if (s.running) {
+        setBatchState(s);
+        batchTimer.current = setInterval(pollBatch, 2000);
+      }
+    }).catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 快捷操作
   const handleQuickPipeline = async () => {
@@ -139,8 +172,6 @@ export default function FetchMonitor() {
     try {
       const s = await api.getBatchRetryStatus();
       setBatchState(s);
-      // 实时刷新日志，让用户看到每条重试结果
-      api.getFetchLogs(50).then(r => setLogs(r.logs)).catch(() => {});
       if (!s.running) { clearInterval(batchTimer.current); refreshAll(); }
     } catch { clearInterval(batchTimer.current); }
   }, []);
@@ -685,26 +716,85 @@ export default function FetchMonitor() {
             {batchState.running && (
               <div style={{
                 marginBottom: 12,
-                padding: '10px 14px',
+                padding: '12px 16px',
                 background: 'rgba(0, 212, 255, 0.08)',
                 borderRadius: 8,
                 border: '1px solid rgba(0, 212, 255, 0.2)',
                 fontSize: 12,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
               }}>
-                <i className="fas fa-spinner fa-spin" style={{ color: 'var(--accent)' }} />
-                批量重试中: {batchState.done}/{batchState.total} · {batchState.current}
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  onClick={handleCancelBatch}
-                  style={{ marginLeft: 'auto', color: 'var(--accent-red)' }}
-                >
-                  <i className="fas fa-stop" style={{ marginRight: 4 }} />
-                  取消
-                </Button>
+                {/* 行 1: 标题栏 + 取消按钮 */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                  <i className="fas fa-spinner fa-spin" style={{ color: 'var(--accent)', fontSize: 14 }} />
+                  <span style={{ fontWeight: 600, color: 'var(--accent)' }}>
+                    批量重试中: {batchState.done}/{batchState.total} ({batchPct}%)
+                  </span>
+                  <span style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>
+                    ⏱ {batchElapsed}
+                  </span>
+                  {batchEta && (
+                    <span style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>
+                      · ETA {batchEta}
+                    </span>
+                  )}
+                  {(batchState.skipped ?? 0) > 0 && (
+                    <span style={{ color: 'var(--accent-orange)', fontSize: 11 }}>
+                      · 跳过 {batchState.skipped} 死链
+                    </span>
+                  )}
+                  {batchState.failed > 0 && (
+                    <span style={{ color: 'var(--accent-red)', fontSize: 11 }}>
+                      · 失败 {batchState.failed}
+                    </span>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={handleCancelBatch}
+                    style={{ marginLeft: 'auto', color: 'var(--accent-red)' }}
+                  >
+                    <i className="fas fa-stop" style={{ marginRight: 4 }} />
+                    取消
+                  </Button>
+                </div>
+
+                {/* 行 2: 进度条 */}
+                <div style={{ height: 6, background: 'var(--bg-primary)', borderRadius: 3, overflow: 'hidden', marginBottom: 6 }}>
+                  <div style={{
+                    height: '100%', borderRadius: 3, transition: 'width 0.4s ease',
+                    width: `${batchPct}%`,
+                    background: 'linear-gradient(90deg, var(--accent), var(--accent-tertiary))',
+                  }} />
+                </div>
+
+                {/* 行 3: 当前文章 */}
+                <div style={{ color: 'var(--text-secondary)', fontSize: 11, marginBottom: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  📄 {batchState.current || '准备中...'}
+                </div>
+
+                {/* 行 4: 最近日志 (最后 8 条) */}
+                {batchState.log && batchState.log.length > 0 && (
+                  <div style={{
+                    maxHeight: 100, overflow: 'auto',
+                    fontSize: 10, fontFamily: 'var(--font-mono)',
+                    background: 'rgba(0,0,0,0.12)', borderRadius: 4, padding: '4px 8px',
+                    lineHeight: 1.7,
+                  }}>
+                    {batchState.log.slice(-8).map((entry, i) => {
+                      const isSuccess = entry.includes('✅');
+                      const isError = entry.includes('❌');
+                      const isSkipped = entry.includes('💀');
+                      const isWarn = entry.includes('⚠️') || entry.includes('🎭');
+                      const isInfo = entry.includes('📡') || entry.includes('⏳') || entry.includes('🏁') || entry.includes('🛑');
+                      return (
+                        <div key={i} style={{
+                          color: isSuccess ? '#81c784' : isError ? '#ef5350' : isSkipped ? '#ffb74d' : isWarn ? '#ffb74d' : isInfo ? '#64b5f6' : 'var(--text-secondary)',
+                        }}>
+                          {entry}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
 
