@@ -315,6 +315,9 @@ export const api = {
   getBatchRetryStatus: () =>
     fetchJSON<import('../types').BatchRetryState>('/fetch/articles/batch-retry/status'),
 
+  cancelBatchRetry: () =>
+    fetchJSON<{ ok: boolean; message: string }>('/fetch/articles/batch-retry/cancel', { method: 'POST' }),
+
   getFailedArticles: (page = 1, limit = 50) =>
     fetchJSON<{ total: number; page: number; limit: number; articles: import('../types').FailedArticle[] }>(
       `/fetch/articles/failed?page=${page}&limit=${limit}`

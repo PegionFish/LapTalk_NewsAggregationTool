@@ -454,6 +454,17 @@ def batch_retry_status():
     return dict(_retry_state)
 
 
+@router.post("/articles/batch-retry/cancel")
+def batch_retry_cancel():
+    """取消当前批量重试任务。"""
+    global _retry_state
+    if not _retry_state.get("running"):
+        return {"ok": False, "message": "没有正在运行的重试任务"}
+    _retry_state["running"] = False
+    _retry_state["current"] = "已取消"
+    return {"ok": True, "message": "重试任务已取消"}
+
+
 # ══════════════════════════════════════════════════════════════
 # 最近抓取日志
 # ══════════════════════════════════════════════════════════════

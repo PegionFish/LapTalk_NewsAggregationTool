@@ -122,6 +122,8 @@ export default function FetchMonitor() {
         showToast(`开始批量重试 ${res.total} 篇`);
         setBatchState({ running: true, total: res.total, done: 0, failed: 0, current: '', log: [] });
         batchTimer.current = setInterval(pollBatch, 2000);
+      } else {
+        showToast((res as any).message || '重试启动失败');
       }
     } catch (e) {
       showToast('重试失败: ' + (e as Error).message);
@@ -220,8 +222,10 @@ export default function FetchMonitor() {
         setSelectedIds(new Set());
         setBatchState({ running: true, total: res.total, done: 0, failed: 0, current: '', log: [] });
         batchTimer.current = setInterval(pollBatch, 2000);
+      } else {
+        showToast((res as any).message || '重试启动失败');
       }
-    } catch { /* ignore */ }
+    } catch (e) { showToast('重试失败: ' + (e as Error).message); }
     finally { setBatchSubmitting(false); }
   };
 
@@ -248,9 +252,21 @@ export default function FetchMonitor() {
         setSelectedIds(new Set());
         setBatchState({ running: true, total: res.total, done: 0, failed: 0, current: '', log: [] });
         batchTimer.current = setInterval(pollBatch, 2000);
+      } else {
+        showToast((res as any).message || '重试启动失败');
       }
-    } catch { /* ignore */ }
+    } catch (e) { showToast('重试失败: ' + (e as Error).message); }
     finally { setBatchSubmitting(false); }
+  };
+
+  const handleCancelBatch = async () => {
+    try {
+      await api.cancelBatchRetry();
+      clearInterval(batchTimer.current);
+      setBatchState(emptyBatch);
+      showToast('重试任务已取消');
+      refreshAll();
+    } catch (e) { showToast('取消失败: ' + (e as Error).message); }
   };
 
   // ── 调度管理操作 ──
@@ -680,6 +696,15 @@ export default function FetchMonitor() {
               }}>
                 <i className="fas fa-spinner fa-spin" style={{ color: 'var(--accent)' }} />
                 批量重试中: {batchState.done}/{batchState.total} · {batchState.current}
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  onClick={handleCancelBatch}
+                  style={{ marginLeft: 'auto', color: 'var(--accent-red)' }}
+                >
+                  <i className="fas fa-stop" style={{ marginRight: 4 }} />
+                  取消
+                </Button>
               </div>
             )}
 
