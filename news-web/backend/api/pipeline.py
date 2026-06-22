@@ -97,6 +97,7 @@ def _batch_translate():
             WHERE local_path != '' AND local_path NOT LIKE '[ERR:%'
               AND (translated_content IS NULL OR translated_content = '')
               AND category NOT IN ('platform_hotlists', 'bilibili_videos')
+              AND content_status NOT IN ('dead', 'metadata_only')
             ORDER BY id DESC
         """).fetchall()
         db.close()
@@ -120,6 +121,11 @@ def _batch_translate():
                 _log(_translate_state, f"#{aid} ⚠️ HTML 文件不存在")
                 _translate_state["failed"] += 1
                 _translate_state["done"] += 1
+                # 写入标记避免下次重复查询，陷入无限循环
+                db2 = _conn()
+                db2.execute("UPDATE articles SET translated_content='[ERR:FILE_MISSING]' WHERE id=?", (aid,))
+                safe_commit(db2)
+                db2.close()
                 continue
 
             _translate_state["current"] = f"#{aid} {title[:50]}"
@@ -131,12 +137,20 @@ def _batch_translate():
                 _log(_translate_state, f"#{aid} ❌ 文件读取失败")
                 _translate_state["failed"] += 1
                 _translate_state["done"] += 1
+                db2 = _conn()
+                db2.execute("UPDATE articles SET translated_content='[ERR:READ_FAILED]' WHERE id=?", (aid,))
+                safe_commit(db2)
+                db2.close()
                 continue
 
             if len(html) < 100:
                 _log(_translate_state, f"#{aid} ⚠️ HTML 过短 ({len(html)} 字节)")
                 _translate_state["failed"] += 1
                 _translate_state["done"] += 1
+                db2 = _conn()
+                db2.execute("UPDATE articles SET translated_content='[ERR:HTML_TOO_SHORT]' WHERE id=?", (aid,))
+                safe_commit(db2)
+                db2.close()
                 continue
 
             # 仅提取纯文本用于语言检测，翻译和存储均使用原始 HTML
@@ -1192,6 +1206,7 @@ def _batch_clean():
             WHERE local_path != '' AND local_path NOT LIKE '[ERR:%'
             AND (ai_cleaned_content IS NULL OR ai_cleaned_content = '')
             AND category NOT IN ('platform_hotlists', 'bilibili_videos')
+            AND content_status NOT IN ('dead', 'metadata_only')
             ORDER BY id DESC
         """).fetchall()
         db.close()
@@ -1215,6 +1230,11 @@ def _batch_clean():
             if not os.path.isfile(html_path):
                 _log(_clean_state, f"#{aid} ⚠️ 文件不存在")
                 _clean_state["done"] += 1
+                # 写入标记避免下次重复查询，陷入无限循环
+                db2 = _conn()
+                db2.execute("UPDATE articles SET ai_cleaned_content='[ERR:FILE_MISSING]' WHERE id=?", (aid,))
+                db2.commit()
+                db2.close()
                 continue
 
             try:
@@ -1223,10 +1243,19 @@ def _batch_clean():
             except Exception:
                 _log(_clean_state, f"#{aid} ⚠️ 读取失败")
                 _clean_state["done"] += 1
+                db2 = _conn()
+                db2.execute("UPDATE articles SET ai_cleaned_content='[ERR:READ_FAILED]' WHERE id=?", (aid,))
+                db2.commit()
+                db2.close()
                 continue
 
             if len(html) < 200:
+                _log(_clean_state, f"#{aid} ⚠️ HTML 过短 ({len(html)} 字符)")
                 _clean_state["done"] += 1
+                db2 = _conn()
+                db2.execute("UPDATE articles SET ai_cleaned_content='[ERR:HTML_TOO_SHORT]' WHERE id=?", (aid,))
+                db2.commit()
+                db2.close()
                 continue
 
             html = _sanitize_html(html)

@@ -42,6 +42,7 @@ def translate_articles(db_path: str, limit: int = 0, recent: int = 0) -> dict:
         "local_path != ''",
         "local_path NOT LIKE '[ERR:%'",
         "(translated_content IS NULL OR translated_content = '')",
+        "content_status NOT IN ('dead', 'metadata_only')",
     ]
     params: list = []
     if recent:
@@ -72,6 +73,11 @@ def translate_articles(db_path: str, limit: int = 0, recent: int = 0) -> dict:
         html_path = os.path.join(cache_dir, os.path.basename(local_path))
         if not os.path.isfile(html_path):
             print(f"  [{idx}/{total}] #{aid} {title[:45]:45s} ⚠️ HTML 文件不存在")
+            # 写入标记避免下次重复查询
+            conn2 = sqlite3.connect(db_path)
+            conn2.execute("UPDATE articles SET translated_content='[ERR:FILE_MISSING]' WHERE id=?", (aid,))
+            conn2.commit()
+            conn2.close()
             continue
 
         try:
@@ -79,9 +85,17 @@ def translate_articles(db_path: str, limit: int = 0, recent: int = 0) -> dict:
                 html = f.read()
         except Exception:
             print(f"  [{idx}/{total}] #{aid} {title[:45]:45s} ⚠️ 读取失败")
+            conn2 = sqlite3.connect(db_path)
+            conn2.execute("UPDATE articles SET translated_content='[ERR:READ_FAILED]' WHERE id=?", (aid,))
+            conn2.commit()
+            conn2.close()
             continue
 
         if len(html) < 100:
+            conn2 = sqlite3.connect(db_path)
+            conn2.execute("UPDATE articles SET translated_content='[ERR:HTML_TOO_SHORT]' WHERE id=?", (aid,))
+            conn2.commit()
+            conn2.close()
             continue
 
         print(f"  [{idx}/{total}] #{aid} {title[:45]:45s} [{len(html)//1024}KB]", end=" ", flush=True)
