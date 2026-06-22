@@ -400,6 +400,16 @@ async def serve_article_html(article_id: int):
 
     url, local_path = row
 
+    # 通用安全头：明确禁止脚本执行，消除浏览器扩展注入告警
+    _secure_headers = {"Content-Security-Policy": "script-src 'none'; object-src 'none'"}
+
+    def _mk_response(content: str, extra_headers: dict | None = None) -> HTMLResponse:
+        """构建带安全头的 HTML 响应，消除 sandbox 脚本拦截警告。"""
+        headers = dict(_secure_headers)
+        if extra_headers:
+            headers.update(extra_headers)
+        return HTMLResponse(content=content, media_type="text/html", headers=headers)
+
     # 1. 本地 HTML 缓存
     if local_path and not local_path.startswith('[ERR:'):
         cache_dir = config.content_cache_path
@@ -410,7 +420,7 @@ async def serve_article_html(article_id: int):
             if url:
                 html = _inject_base(html, url)
             html = _sanitize_html(html)
-            return HTMLResponse(content=html, media_type="text/html")
+            return _mk_response(html)
 
     # 2. 未缓存 → 按需下载并存盘
     if url and url.startswith('http'):
@@ -443,7 +453,7 @@ async def serve_article_html(article_id: int):
                 if url:
                     html = _inject_base(html, url)
                 html = _sanitize_html(html)
-                return HTMLResponse(content=html, media_type="text/html")
+                return _mk_response(html)
         except Exception:
             pass
 
@@ -465,11 +475,7 @@ async def serve_article_html(article_id: int):
                     if url:
                         html = _inject_base(html, url)
                     html = _sanitize_html(html)
-                    return HTMLResponse(
-                        content=html,
-                        media_type="text/html",
-                        headers={"X-Capture-Source": pw_result.get('source', 'playwright')},
-                    )
+                    return _mk_response(html, {"X-Capture-Source": pw_result.get('source', 'playwright')})
             elif challenge.get('is_challenge'):
                 # 检测到人机验证 → 返回带验证提示的 fallback 页
                 chal_type = challenge.get('type', 'unknown')
@@ -493,11 +499,7 @@ async def serve_article_html(article_id: int):
                     </a>
                     <p class="hint">验证通过后，返回此页面使用"手动粘贴内容"功能即可加载</p>
                 </body></html>"""
-                return HTMLResponse(
-                    content=chal_fallback,
-                    media_type="text/html",
-                    headers={"X-Challenge-Type": chal_type},
-                )
+                return _mk_response(chal_fallback, {"X-Challenge-Type": chal_type})
         except Exception:
             pass
 
@@ -512,7 +514,7 @@ async def serve_article_html(article_id: int):
         <p style="font-size:13px;color:#999">服务器无法直接获取此页面内容</p>
         <a href="{url}" target="_blank" rel="noopener">在浏览器中打开原文 <i class="fas fa-external-link-alt"></i></a>
     </body></html>"""
-    return HTMLResponse(content=fallback, media_type="text/html")
+    return _mk_response(fallback)
 
 
 @router.post("/{article_id}/analyze")

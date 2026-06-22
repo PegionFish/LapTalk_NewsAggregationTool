@@ -191,10 +191,12 @@ export default function ArticlePane({ article, onClose }: Props) {
 
     // 标记是否已处理过 load 事件，防止重复触发
     let handled = false;
+    let timeoutId: ReturnType<typeof setTimeout>;
 
     const onLoad = () => {
       if (handled) return;
       handled = true;
+      clearTimeout(timeoutId);
       handleIframeLoad();
       try {
         iframe.contentDocument?.addEventListener('scroll', handleIframeScroll);
@@ -208,8 +210,17 @@ export default function ArticlePane({ article, onClose }: Props) {
       iframe.addEventListener('load', onLoad);
     }
 
+    // 兜底超时：10 秒后强制执行，防止任何情况下 spinner 永转
+    timeoutId = setTimeout(() => {
+      if (!handled) {
+        console.warn('[ArticlePane] iframe load timeout — forcing loaded state');
+        onLoad();
+      }
+    }, 10000);
+
     return () => {
       handled = true;
+      clearTimeout(timeoutId);
       iframe.removeEventListener('load', onLoad);
       try {
         iframe.contentDocument?.removeEventListener('scroll', handleIframeScroll);
