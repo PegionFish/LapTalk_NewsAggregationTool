@@ -34,6 +34,7 @@ export default function ArticlePane({ article, onClose }: Props) {
   const translationRef = useRef<HTMLDivElement>(null);
   const syncingRef = useRef(false);
   const fallbackCheckDone = useRef(false);
+  const iframeLoadHandled = useRef(false);   // 追踪当前 src 的 load 事件是否已处理
 
   useEffect(() => {
     setLoaded(false);
@@ -49,6 +50,7 @@ export default function ArticlePane({ article, onClose }: Props) {
     setSaveStatus('');
     setIsRetrying(false);
     fallbackCheckDone.current = false;
+    iframeLoadHandled.current = false;
   }, [article?.id]);
 
   useEffect(() => {
@@ -117,6 +119,7 @@ export default function ArticlePane({ article, onClose }: Props) {
       if (res.ok) {
         // 重试成功 — 刷新 iframe
         fallbackCheckDone.current = false;
+        iframeLoadHandled.current = false;
         setIsChallenge(false);
         setIsFallback(false);
         setLoaded(false);
@@ -146,6 +149,7 @@ export default function ArticlePane({ article, onClose }: Props) {
         setSaveStatus('已保存！刷新页面加载内容...');
         setTimeout(() => {
           fallbackCheckDone.current = false;
+          iframeLoadHandled.current = false;
           setIsChallenge(false);
           setPasteMode(false);
           setLoaded(false);
@@ -189,13 +193,11 @@ export default function ArticlePane({ article, onClose }: Props) {
     const iframe = iframeRef.current;
     if (!iframe) return;
 
-    // 标记是否已处理过 load 事件，防止重复触发
-    let handled = false;
     let timeoutId: ReturnType<typeof setTimeout>;
 
     const onLoad = () => {
-      if (handled) return;
-      handled = true;
+      if (iframeLoadHandled.current) return;
+      iframeLoadHandled.current = true;
       clearTimeout(timeoutId);
       handleIframeLoad();
       try {
@@ -212,14 +214,14 @@ export default function ArticlePane({ article, onClose }: Props) {
 
     // 兜底超时：10 秒后强制执行，防止任何情况下 spinner 永转
     timeoutId = setTimeout(() => {
-      if (!handled) {
+      if (!iframeLoadHandled.current) {
         console.warn('[ArticlePane] iframe load timeout — forcing loaded state');
         onLoad();
       }
     }, 10000);
 
     return () => {
-      handled = true;
+      iframeLoadHandled.current = true;
       clearTimeout(timeoutId);
       iframe.removeEventListener('load', onLoad);
       try {
