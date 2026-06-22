@@ -350,8 +350,8 @@ def retry_articles_batch(body: dict):
     elif not isinstance(ids, list) or not ids:
         raise HTTPException(400, "请提供文章 ID 列表或设置 retry_all=true")
 
-    if len(ids) > 50:
-        raise HTTPException(400, "单次批量重试最多支持 50 篇文章")
+    if len(ids) > 500:
+        raise HTTPException(400, "单次批量重试最多支持 500 篇文章")
 
     if not ids:
         return {"ok": True, "total": 0, "message": "没有需要重试的文章"}
