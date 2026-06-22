@@ -29,7 +29,6 @@ export default function Dashboard() {
   const [esRunning, setEsRunning] = useState(false); const [esState, setEsState] = useState<BatchState>(emptyBatch);
   const [fullRunning, setFullRunning] = useState(false);
   const [fullState, setFullState] = useState<BatchState>(emptyBatch);
-  const [filterRunning, setFilterRunning] = useState(false); const [filterState, setFilterState] = useState<BatchState>(emptyBatch);
   const [cleanRunning, setCleanRunning] = useState(false); const [cleanState, setCleanState] = useState<BatchState>(emptyBatch);
 
   // 低分清理
@@ -74,7 +73,6 @@ export default function Dashboard() {
   const reclTimer = useRef<ReturnType<typeof setInterval>>();
   const esTimer = useRef<ReturnType<typeof setInterval>>();
   const fullTimer = useRef<ReturnType<typeof setInterval>>();
-  const filterTimer = useRef<ReturnType<typeof setInterval>>();
   const cleanTimer = useRef<ReturnType<typeof setInterval>>();
 
   const poll = useCallback((fn: () => Promise<unknown>, setter: (v: unknown) => void, stop: () => void, timer: ReturnType<typeof useRef<ReturnType<typeof setInterval>>>) => {
@@ -89,8 +87,6 @@ export default function Dashboard() {
     api.getBatchCleanStatus, v => setCleanState(v as BatchState), () => setCleanRunning(false), cleanTimer), []);
   const pollChains = useCallback(() => poll(
     api.getBuildChainsStatus, v => setChainState(v as ChainState), () => setChaining(false), chainTimer), []);
-  const pollFilter = useCallback(() => poll(
-    api.getBatchAiFilterStatus, v => setFilterState(v as BatchState), () => setFilterRunning(false), filterTimer), []);
 
   useEffect(() => { api.getStats().then(setStats).catch(() => setStats(null)).finally(() => setLoading(false)); }, []);
 
@@ -104,10 +100,9 @@ export default function Dashboard() {
     api.getBatchReclusterStatus().then((s: unknown) => { const st = s as BatchState; if (st.running) { setReclRunning(true); reclTimer.current = setInterval(pollRecl, 2000); } else setReclState(st); }).catch(() => {});
     api.getBatchSummarizeEventsStatus().then((s: unknown) => { const st = s as BatchState; if (st.running) { setEsRunning(true); esTimer.current = setInterval(pollEs, 2000); } else setEsState(st); }).catch(() => {});
     api.getBatchAiFullStatus().then((s: unknown)    => { const st = s as BatchState; if (st.running) { setFullRunning(true); fullTimer.current = setInterval(pollFull, 2000); } else setFullState(st); }).catch(() => {});
-    api.getBatchAiFilterStatus().then((s: unknown) => { const st = s as BatchState; if (st.running) { setFilterRunning(true); filterTimer.current = setInterval(pollFilter, 2000); } else setFilterState(st); }).catch(() => {});
     api.getBatchCleanStatus().then((s: unknown)   => { const st = s as BatchState; if (st.running) { setCleanRunning(true);  cleanTimer.current  = setInterval(pollClean, 2000);  } else setCleanState(st);  }).catch(() => {});
     return () => {
-      [transTimer, analyTimer, chainTimer, kwTimer, clsTimer, scoreTimer, reclTimer, esTimer, fullTimer, filterTimer, cleanTimer].forEach(t => clearInterval(t.current));
+      [transTimer, analyTimer, chainTimer, kwTimer, clsTimer, scoreTimer, reclTimer, esTimer, fullTimer, cleanTimer].forEach(t => clearInterval(t.current));
     };
   }, []); // eslint-disable-line
 
@@ -143,7 +138,6 @@ export default function Dashboard() {
   const pollFull = useCallback(() => poll(api.getBatchAiFullStatus, v => {const s=v as BatchState; setFullState(s); if(!s.running){setFullRunning(false);clearInterval(fullTimer.current)}},(()=>setFullRunning(false)),fullTimer),[]);
   const handleFullAi = startPoll(api.startBatchAiFull, pollFull, fullTimer, setFullRunning);
 
-  const handleFilter = startPoll(api.startBatchAiFilter, pollFilter, filterTimer, setFilterRunning);
   const handleClean  = startPoll(api.startBatchClean, pollClean, cleanTimer, setCleanRunning);
 
   const progressPct = (done: number, total: number) => total > 0 ? Math.round((done / total) * 100) : 0;
@@ -272,32 +266,6 @@ export default function Dashboard() {
           )}
 
           {fullState.log && fullState.log.length > 0 && <LogPanel entries={fullState.log} />}
-        </Card>
-
-        {/* ═══ AI 预筛选 ═══ */}
-        <Card>
-          <CardHeader icon="fa-filter" iconColor="var(--accent-orange)" title="AI 预筛选" desc="批量判断文章标题是否值得缓存，筛掉不需要的内容" />
-          <CardBody>
-            <Button
-              variant="ghost"
-              onClick={handleFilter}
-              loading={filterRunning}
-              icon="fa-play"
-              style={{ borderColor: 'var(--accent-orange)', color: 'var(--accent-orange)' }}
-            >
-              {filterRunning ? '筛选中...' : '开始 AI 筛选'}
-            </Button>
-            {filterState.total > 0 && (
-              <ProgressBar
-                done={filterState.done}
-                total={filterState.total}
-                failed={filterState.failed}
-                current={filterState.current}
-                color="var(--accent-orange)"
-              />
-            )}
-          </CardBody>
-          {filterState.log && filterState.log.length > 0 && <LogPanel entries={filterState.log} />}
         </Card>
 
         {/* ═══ AI 内容清洗 ═══ */}
