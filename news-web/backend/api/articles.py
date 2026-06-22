@@ -380,6 +380,17 @@ def _sanitize_html(html: str) -> str:
         re.IGNORECASE,
     )
     html = _LINK_CORS.sub('', html)
+    # 7. 移除 JS 框架指令属性（Alpine.js x-*, Vue v-*, Angular ng-* 等）
+    # 这些属性在无脚本环境下无意义，且可能触发浏览器的 XSS 审计
+    html = re.sub(r'\s+x-(?:data|html|init|show|cloak|bind|on|model|effect|ref|text|if|for|teleport|transition|ignore|id)\s*=\s*"[^"]*"', '', html, flags=re.IGNORECASE)
+    html = re.sub(r"\s+x-(?:data|html|init|show|cloak|bind|on|model|effect|ref|text|if|for|teleport|transition|ignore|id)\s*=\s*'[^']*'", '', html, flags=re.IGNORECASE)
+    html = re.sub(r'\s+v-(?:if|else|for|bind|on|model|html|text|show|cloak|once|pre)\s*=\s*"[^"]*"', '', html, flags=re.IGNORECASE)
+    html = re.sub(r"\s+v-(?:if|else|for|bind|on|model|html|text|show|cloak|once|pre)\s*=\s*'[^']*'", '', html, flags=re.IGNORECASE)
+    html = re.sub(r'\s+ng-(?:app|controller|bind|model|click|change|submit|init|cloak|show|hide|if|for|switch|class|style)\s*=\s*"[^"]*"', '', html, flags=re.IGNORECASE)
+    html = re.sub(r"\s+ng-(?:app|controller|bind|model|click|change|submit|init|cloak|show|hide|if|for|switch|class|style)\s*=\s*'[^']*'", '', html, flags=re.IGNORECASE)
+    # 7b. 移除无值的框架布尔属性（如 <div x-cloak>）
+    html = re.sub(r'\s+x-cloak\b', '', html, flags=re.IGNORECASE)
+    html = re.sub(r'\s+v-cloak\b', '', html, flags=re.IGNORECASE)
     return html
 
 
