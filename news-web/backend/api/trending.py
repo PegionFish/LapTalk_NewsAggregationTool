@@ -92,42 +92,6 @@ def list_trending(
     return {"items": items, "total": count, "page": page, "limit": limit}
 
 
-@router.get("/{item_id}")
-def get_trending_item(item_id: int):
-    """获取单条热搜/趋势详情。"""
-    db = get_db()
-    with db._conn() as conn:
-        row = conn.execute(
-            """SELECT id, title, platform, trend_type, url, rank, heat_score,
-                      video_desc, author, play_count, danmaku_count, cover_url,
-                      fetched_at, published_date, metadata, text_content
-               FROM trending_items WHERE id=?""",
-            (item_id,),
-        ).fetchone()
-
-    if not row:
-        raise HTTPException(404, "trending_item_not_found")
-
-    return {
-        "id": row[0],
-        "title": row[1],
-        "platform": row[2],
-        "trend_type": row[3],
-        "url": row[4],
-        "rank": row[5],
-        "heat_score": row[6],
-        "video_desc": row[7],
-        "author": row[8],
-        "play_count": row[9],
-        "danmaku_count": row[10],
-        "cover_url": row[11],
-        "fetched_at": row[12],
-        "published_date": row[13] or "",
-        "metadata": json.loads(row[14]) if row[14] and row[14] != "{}" else {},
-        "text_content": row[15] or "",
-    }
-
-
 @router.get("/platforms")
 def list_platforms():
     """列出所有平台及其条目数。"""
@@ -162,4 +126,40 @@ def list_platforms():
         "platforms": sorted(
             platforms.values(), key=lambda x: x["total"], reverse=True
         )
+    }
+
+
+@router.get("/{item_id}")
+def get_trending_item(item_id: int):
+    """获取单条热搜/趋势详情。"""
+    db = get_db()
+    with db._conn() as conn:
+        row = conn.execute(
+            """SELECT id, title, platform, trend_type, url, rank, heat_score,
+                      video_desc, author, play_count, danmaku_count, cover_url,
+                      fetched_at, published_date, metadata, text_content
+               FROM trending_items WHERE id=?""",
+            (item_id,),
+        ).fetchone()
+
+    if not row:
+        raise HTTPException(404, "trending_item_not_found")
+
+    return {
+        "id": row[0],
+        "title": row[1],
+        "platform": row[2],
+        "trend_type": row[3],
+        "url": row[4],
+        "rank": row[5],
+        "heat_score": row[6],
+        "video_desc": row[7],
+        "author": row[8],
+        "play_count": row[9],
+        "danmaku_count": row[10],
+        "cover_url": row[11],
+        "fetched_at": row[12],
+        "published_date": row[13] or "",
+        "metadata": json.loads(row[14]) if row[14] and row[14] != "{}" else {},
+        "text_content": row[15] or "",
     }
