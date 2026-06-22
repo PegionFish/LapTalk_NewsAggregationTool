@@ -188,14 +188,28 @@ export default function ArticlePane({ article, onClose }: Props) {
   useEffect(() => {
     const iframe = iframeRef.current;
     if (!iframe) return;
+
+    // 标记是否已处理过 load 事件，防止重复触发
+    let handled = false;
+
     const onLoad = () => {
+      if (handled) return;
+      handled = true;
       handleIframeLoad();
       try {
         iframe.contentDocument?.addEventListener('scroll', handleIframeScroll);
       } catch {}
     };
-    iframe.addEventListener('load', onLoad);
+
+    // 修复竞态条件：如果 iframe 在绑定监听器之前已经加载完毕，直接触发
+    if (iframe.contentDocument?.readyState === 'complete' || iframe.contentDocument?.readyState === 'interactive') {
+      onLoad();
+    } else {
+      iframe.addEventListener('load', onLoad);
+    }
+
     return () => {
+      handled = true;
       iframe.removeEventListener('load', onLoad);
       try {
         iframe.contentDocument?.removeEventListener('scroll', handleIframeScroll);
@@ -385,7 +399,7 @@ export default function ArticlePane({ article, onClose }: Props) {
               ref={iframeRef}
               src={`/api/articles/${article.id}/html`}
               style={{ width: '100%', height: '100%', border: 'none' }}
-              sandbox="allow-scripts allow-same-origin allow-popups"
+              sandbox="allow-same-origin allow-popups"
               title={article.title}
             />
           </div>

@@ -484,21 +484,14 @@ async def serve_article_html(article_id: int):
                            text-decoration: none; font-size: 14px; font-weight: 500; margin-top: 8px; }}
                     .btn:hover {{ background: #00b8e6; }}
                     .hint {{ color: #999; font-size: 11px; }}
-                    .manual {{ margin-top: 16px; border-top: 1px solid #ddd; padding-top: 16px; width: 100%; max-width: 400px; }}
-                    textarea {{ width: 100%; min-height: 80px; border: 1px solid #ccc; border-radius: 6px; padding: 8px; font-size: 12px; }}
                 </style></head><body>
                     <div class="icon"><i class="fas fa-shield-halved"></i></div>
                     <h3>需要人机验证</h3>
                     <p>{chal_reason}<br>请用你的浏览器打开原站完成验证</p>
-                    <a class="btn" href="{url}" target="_blank" rel="noopener" onclick="window.open('{url}','_blank')">
+                    <a class="btn" href="{url}" target="_blank" rel="noopener">
                         打开原站验证 <i class="fas fa-external-link-alt"></i>
                     </a>
-                    <p class="hint">验证通过后，返回此页面刷新即可加载内容</p>
-                    <div class="manual">
-                        <p style="font-size:12px;color:#999;">如果以上方式均无效，请复制页面内容并粘贴：</p>
-                        <textarea id="pasteContent" placeholder="粘贴文章内容后，自动保存到缓存..."></textarea>
-                        <button onclick="(function(){{var t=document.getElementById('pasteContent');if(t.value.length>50)fetch('/api/articles/{article_id}/cache-html',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{html:t.value}})}}).then(r=>r.json()).then(d=>alert(d.ok?'已保存':'保存失败:'+JSON.stringify(d))).catch(e=>alert('请求失败:'+e.message));else alert('内容太短，请粘贴完整的文章内容')}})()" style="margin-top:8px;padding:8px 16px;background:#e8e8e8;border:none;border-radius:6px;cursor:pointer;font-size:12px;">保存到缓存</button>
-                    </div>
+                    <p class="hint">验证通过后，返回此页面使用"手动粘贴内容"功能即可加载</p>
                 </body></html>"""
                 return HTMLResponse(
                     content=chal_fallback,
@@ -508,22 +501,16 @@ async def serve_article_html(article_id: int):
         except Exception:
             pass
 
-    # 4. 全部无法获取 → 自动打开原站页面的过渡页
-    auto_open_js = ""
-    if url:
-        auto_open_js = f'window.open("{url}", "_blank");'
+    # 4. 全部无法获取 → 返回提示页面（前端会检测并展示 fallback UI）
     fallback = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><style>
         body {{ font-family: -apple-system, sans-serif; display: flex; align-items: center; justify-content: center;
                height: 100vh; margin: 0; background: #f5f5f5; color: #666; flex-direction: column; gap: 16px; }}
         a {{ color: var(--accent, #00d4ff); text-decoration: none; padding: 8px 16px; border: 1px solid currentColor;
              border-radius: 6px; font-size: 13px; }}
         a:hover {{ background: rgba(0,212,255,0.1); }}
-        .loading {{ font-size: 13px; color: #999; display: flex; align-items: center; gap: 8px; }}
     </style></head><body>
-        <div class="loading"><i class="fas fa-spinner fa-spin"></i> 正在打开原站页面...</div>
-        <p style="font-size:13px;color:#999;margin-top:-8px">服务器无法直接获取此页面内容</p>
-        <a href="{url}" target="_blank" rel="noopener">手动打开 <i class="fas fa-external-link-alt"></i></a>
-        <script>{auto_open_js}</script>
+        <p style="font-size:13px;color:#999">服务器无法直接获取此页面内容</p>
+        <a href="{url}" target="_blank" rel="noopener">在浏览器中打开原文 <i class="fas fa-external-link-alt"></i></a>
     </body></html>"""
     return HTMLResponse(content=fallback, media_type="text/html")
 
