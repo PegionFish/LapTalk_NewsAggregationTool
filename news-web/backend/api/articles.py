@@ -1,7 +1,8 @@
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional
-import httpx
+import httpx, threading, time
+from datetime import datetime
 from config import config
 from db.news_db import NewsDB
 from utils.proxy import get_httpx_proxy
@@ -738,3 +739,106 @@ def verify_dead_links():
         'note': 'retry_count≥2 的文章已被自动标记 dead。'
                 '如需解标记，调用 PATCH /api/articles/{id} 设置 content_status 为空。',
     }
+
+
+# ══════════════════════════════════════════════════════════════
+# 死链 URL 恢复 — 搜索引擎查找新链接
+# ══════════════════════════════════════════════════════════════
+
+_recover_state: dict = {
+    "running": False, "total": 0, "done": 0, "recovered": 0,
+    "not_found": 0, "current": "", "log": [], "started_at": "",
+}
+
+
+@router.post("/recover-dead")
+def recover_dead_links(body: dict):
+    """通过搜索引擎查找死链文章的新 URL。支持指定 ID 或全部。
+
+    body: { ids: number[] } 或 { retry_all: true }
+    """
+    global _recover_state
+    if _recover_state.get("running"):
+        return {"ok": False, "message": "恢复任务已在运行中"}
+
+    if not config.db_path:
+        return {"error": "database_not_configured"}
+
+    retry_all = body.get('retry_all', False)
+    ids = body.get('ids', [])
+
+    if retry_all:
+        import sqlite3
+        conn = sqlite3.connect(config.db_path)
+        rows = conn.execute("""
+            SELECT id FROM articles
+            WHERE (local_path LIKE '[ERR:HTTP 404%' OR local_path LIKE '[ERR:HTTP 410%')
+            AND content_status != 'dead'
+            AND category NOT IN ('platform_hotlists', 'bilibili_videos')
+        """).fetchall()
+        conn.close()
+        ids = [r[0] for r in rows]
+    elif not ids:
+        from fastapi import HTTPException
+        raise HTTPException(400, "请提供文章 ID 列表或设置 retry_all=true")
+
+    if not ids:
+        return {"ok": True, "total": 0, "message": "没有需要恢复的文章"}
+
+    _recover_state.update({
+        "running": True, "total": len(ids), "done": 0, "recovered": 0,
+        "not_found": 0, "current": "", "log": [],
+        "started_at": datetime.now().isoformat(),
+    })
+
+    def _do_recover():
+        global _recover_state
+        import sqlite3, random
+        from pipeline.dead_link_recovery import recover_article
+
+        for aid in ids:
+            conn2 = sqlite3.connect(config.db_path)
+            row = conn2.execute(
+                "SELECT title FROM articles WHERE id=?", (aid,)
+            ).fetchone()
+            conn2.close()
+            title = row[0][:60] if row else str(aid)
+
+            _recover_state["current"] = f"#{aid} {title}"
+            ts = datetime.now().strftime('%H:%M:%S')
+            _recover_state["log"].append(f"[{ts}] 🔍 搜索: #{aid} {title}")
+
+            r = recover_article(aid)
+            _recover_state["done"] += 1
+
+            if r['status'] == 'recovered':
+                _recover_state["recovered"] += 1
+                _recover_state["log"].append(f"[{ts}] ✅ #{aid} → {r.get('new_url', '?')[:80]}")
+            else:
+                _recover_state["not_found"] += 1
+                _recover_state["log"].append(f"[{ts}] ❌ #{aid} {r.get('message', '')[:60]}")
+
+            # 速率限制
+            time.sleep(random.uniform(4, 8))
+
+        _recover_state["running"] = False
+        _recover_state["current"] = "完成"
+
+    threading.Thread(target=_do_recover, daemon=True).start()
+    return {
+        "ok": True, "total": len(ids),
+        "message": f"开始搜索恢复 {len(ids)} 篇死链（DDG 搜索，间隔 4-8 秒）"
+    }
+
+
+@router.get("/recover-dead/status")
+def recover_dead_status():
+    """查询死链恢复任务进度。"""
+    s = dict(_recover_state)
+    if s.get("started_at"):
+        try:
+            started = datetime.fromisoformat(s["started_at"])
+            s["elapsed_seconds"] = int((datetime.now() - started).total_seconds())
+        except (ValueError, TypeError):
+            s["elapsed_seconds"] = 0
+    return s

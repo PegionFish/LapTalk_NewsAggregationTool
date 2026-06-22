@@ -325,6 +325,19 @@ export const api = {
   cancelBatchRetry: () =>
     fetchJSON<{ ok: boolean; message: string }>('/fetch/articles/batch-retry/cancel', { method: 'POST' }),
 
+  recoverDeadLinks: (idsOrOptions: number[] | { retry_all: boolean }) =>
+    fetchJSON<{ ok: boolean; total: number; message: string }>(
+      '/articles/recover-dead', {
+        method: 'POST',
+        body: JSON.stringify(
+          Array.isArray(idsOrOptions) ? { ids: idsOrOptions } : idsOrOptions
+        )
+      }
+    ),
+
+  getRecoverDeadStatus: () =>
+    fetchJSON<import('../types').BatchRetryState>('/articles/recover-dead/status'),
+
   getFailedArticles: (page = 1, limit = 50) =>
     fetchJSON<{ total: number; page: number; limit: number; articles: import('../types').FailedArticle[] }>(
       `/fetch/articles/failed?page=${page}&limit=${limit}`

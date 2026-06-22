@@ -301,6 +301,36 @@ export default function FetchMonitor() {
     } catch (e) { showToast('取消失败: ' + (e as Error).message); }
   };
 
+  // ── 死链 URL 恢复 ──
+  const [recoverState, setRecoverState] = useState<BatchRetryState>(emptyBatch);
+  const [recovering, setRecovering] = useState(false);
+  const recoverTimer = useRef<ReturnType<typeof setInterval>>();
+
+  const pollRecover = useCallback(async () => {
+    try {
+      const s = await api.getRecoverDeadStatus();
+      setRecoverState(s);
+      if (!s.running) { clearInterval(recoverTimer.current); refreshAll(); }
+    } catch { clearInterval(recoverTimer.current); }
+  }, []);
+
+  const handleRecoverDead = async (retryAll = false) => {
+    if (recoverState.running) return;
+    if (retryAll && !confirm('将用搜索引擎查找所有 404/410 文章的新 URL。间隔 4-8 秒/篇，约需数分钟。确定？')) return;
+    setRecovering(true);
+    try {
+      const res = await api.recoverDeadLinks(retryAll ? { retry_all: true } : Array.from(selectedIds));
+      if (res.ok) {
+        showToast(`开始搜索恢复 ${res.total} 篇死链`);
+        setRecoverState({ ...emptyBatch, running: true, total: res.total, done: 0, failed: 0, current: '', log: [] });
+        recoverTimer.current = setInterval(pollRecover, 3000);
+      } else {
+        showToast((res as any).message || '启动失败');
+      }
+    } catch (e) { showToast('恢复失败: ' + (e as Error).message); }
+    setRecovering(false);
+  };
+
   // ── 调度管理操作 ──
   const handleSaveSchedule = async () => {
     setScheduleSaving(true);
@@ -831,7 +861,74 @@ export default function FetchMonitor() {
               >
                 重试所有失败 ({failedTotal} 篇)
               </Button>
+              <Button
+                variant="purple"
+                size="xs"
+                icon="fa-search"
+                onClick={() => handleRecoverDead(false)}
+                disabled={selectedIds.size === 0 || recovering || batchState.running || recoverState.running}
+                loading={recovering}
+              >
+                {recoverState.running ? `恢复中 ${recoverState.done}/${recoverState.total}` : `搜索恢复 (${selectedIds.size} 篇)`}
+              </Button>
+              <Button
+                variant="ghost"
+                size="xs"
+                icon="fa-globe"
+                onClick={() => handleRecoverDead(true)}
+                disabled={recovering || batchState.running || recoverState.running}
+              >
+                搜索恢复全部死链
+              </Button>
             </div>
+
+            {/* 死链恢复进度横幅 */}
+            {recoverState.running && (
+              <div style={{
+                marginBottom: 12,
+                padding: '10px 14px',
+                background: 'rgba(171, 71, 188, 0.08)',
+                borderRadius: 8,
+                border: '1px solid rgba(171, 71, 188, 0.2)',
+                fontSize: 12,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                  <i className="fas fa-search fa-spin" style={{ color: '#ab47bc', fontSize: 12 }} />
+                  <span style={{ fontWeight: 600, color: '#ab47bc' }}>
+                    🔍 搜索恢复死链: {recoverState.done}/{recoverState.total}
+                    ({recoverState.total > 0 ? Math.round(recoverState.done / recoverState.total * 100) : 0}%)
+                  </span>
+                  {(recoverState as any).recovered !== undefined && (
+                    <span style={{ color: 'var(--accent-green)', fontSize: 11 }}>
+                      ✅ {(recoverState as any).recovered} 恢复
+                    </span>
+                  )}
+                </div>
+                <div style={{ height: 4, background: 'var(--bg-primary)', borderRadius: 2, overflow: 'hidden' }}>
+                  <div style={{
+                    height: '100%', borderRadius: 2, transition: 'width 0.3s',
+                    width: `${recoverState.total > 0 ? (recoverState.done / recoverState.total) * 100 : 0}%`,
+                    background: '#ab47bc',
+                  }} />
+                </div>
+                {recoverState.log && recoverState.log.length > 0 && (
+                  <div style={{
+                    marginTop: 6, maxHeight: 80, overflow: 'auto',
+                    fontSize: 10, fontFamily: 'var(--font-mono)',
+                    background: 'rgba(0,0,0,0.1)', borderRadius: 4, padding: '4px 8px',
+                    lineHeight: 1.6,
+                  }}>
+                    {recoverState.log.slice(-5).map((entry, i) => (
+                      <div key={i} style={{
+                        color: entry.includes('✅') ? '#81c784' : entry.includes('❌') ? '#ef5350' : 'var(--text-secondary)',
+                      }}>
+                        {entry}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             <Card flat style={{ padding: 0 }}>
               <Table>

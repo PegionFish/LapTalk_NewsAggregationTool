@@ -472,40 +472,65 @@ def retry_articles_batch(body: dict):
                                 _log_retry(f"#{aid} ⚠️ Playwright 异常: {str(pe)[:200]}")
 
                     if res.get('error'):
-                        conn2 = _conn()
-                        # 递增 retry_count；404/410/451 连续 ≥2 次标记 dead
-                        DEAD_ERRORS = {404, 410, 451}
-                        err_code = None
-                        for code in DEAD_ERRORS:
-                            if f'HTTP {code}' in res['error']:
-                                err_code = code
-                                break
-                        if err_code is not None:
-                            conn2.execute("""
-                                UPDATE articles SET
-                                    local_path=?, content_fetched_at=?,
-                                    retry_count = CASE
-                                        WHEN local_path LIKE ('[ERR:HTTP ' || ? || '%') THEN retry_count + 1
-                                        ELSE 1
-                                    END
-                                WHERE id=?
-                            """, (f"[ERR:{res['error']}]", _dt.now().isoformat(timespec='seconds'),
-                                  str(err_code), aid))
-                            rc = conn2.execute("SELECT retry_count FROM articles WHERE id=?", (aid,)).fetchone()
-                            if rc and rc[0] >= 2:
-                                conn2.execute("UPDATE articles SET content_status='dead' WHERE id=?", (aid,))
-                                _log_retry(f"#{aid} 💀 HTTP {err_code} ×{rc[0]} → 标记 dead")
+                        err = res['error']
+
+                        # ── 404/410 死链：先尝试搜索引擎恢复 URL ──
+                        if 'HTTP 404' in err or 'HTTP 410' in err:
+                            _log_retry(f"#{aid} 🔍 死链，尝试搜索恢复...")
+                            try:
+                                from pipeline.dead_link_recovery import recover_article as search_recover
+                                rr = search_recover(aid)
+                                if rr['status'] == 'recovered':
+                                    new_url = rr.get('new_url', '')
+                                    _log_retry(f"#{aid} ✅ URL 恢复: {new_url[:80]}")
+                                    res2 = download_page(new_url, retries=1, timeout=_RETRY_TIMEOUT)
+                                    if not res2.get('error'):
+                                        res = res2
+                                        _log_retry(f"#{aid} ✅ 新 URL 下载成功")
+                                    else:
+                                        _log_retry(f"#{aid} ⚠️ 新 URL 也失败: {res2['error']}")
+                                else:
+                                    _log_retry(f"#{aid} ❌ 未找到新 URL")
+                            except Exception as se:
+                                _log_retry(f"#{aid} ⚠️ 搜索异常: {str(se)[:150]}")
+
+                        # 恢复成功 → 跳过错误处理，进入成功入库流程
+                        if not res.get('error'):
+                            pass  # 由下方成功路径处理
                         else:
-                            conn2.execute("""
-                                UPDATE articles SET local_path=?, content_fetched_at=?, retry_count=retry_count+1
-                                WHERE id=?
-                            """, (f"[ERR:{res['error']}]", _dt.now().isoformat(timespec='seconds'), aid))
-                        conn2.commit()
-                        conn2.close()
-                        _log_retry(f"#{aid} ❌ {res['error']}")
-                        # 失败后短暂延迟，不给源站点压力
-                        time.sleep(random.uniform(2, 5))
-                        return {"status": "fail", "aid": aid, "error": res['error']}
+                            conn2 = _conn()
+                            # 递增 retry_count；404/410/451 连续 ≥2 次标记 dead
+                            DEAD_ERRORS = {404, 410, 451}
+                            err_code = None
+                            for code in DEAD_ERRORS:
+                                if f'HTTP {code}' in err:
+                                    err_code = code
+                                    break
+                            if err_code is not None:
+                                conn2.execute("""
+                                    UPDATE articles SET
+                                        local_path=?, content_fetched_at=?,
+                                        retry_count = CASE
+                                            WHEN local_path LIKE ('[ERR:HTTP ' || ? || '%') THEN retry_count + 1
+                                            ELSE 1
+                                        END
+                                    WHERE id=?
+                                """, (f"[ERR:{err}]", _dt.now().isoformat(timespec='seconds'),
+                                      str(err_code), aid))
+                                rc = conn2.execute("SELECT retry_count FROM articles WHERE id=?", (aid,)).fetchone()
+                                if rc and rc[0] >= 2:
+                                    conn2.execute("UPDATE articles SET content_status='dead' WHERE id=?", (aid,))
+                                    _log_retry(f"#{aid} 💀 HTTP {err_code} ×{rc[0]} → 标记 dead")
+                            else:
+                                conn2.execute("""
+                                    UPDATE articles SET local_path=?, content_fetched_at=?, retry_count=retry_count+1
+                                    WHERE id=?
+                                """, (f"[ERR:{err}]", _dt.now().isoformat(timespec='seconds'), aid))
+                            conn2.commit()
+                            conn2.close()
+                            _log_retry(f"#{aid} ❌ {err}")
+                            time.sleep(random.uniform(2, 5))
+                            return {"status": "fail", "aid": aid, "error": err}
 
                     # ── 成功 — 入库 ──
                     html = sanitize_html(res['html'])
