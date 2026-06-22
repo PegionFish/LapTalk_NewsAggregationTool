@@ -609,6 +609,7 @@ _score_state = _new_state()
 _recluster_state  = _new_state()
 _evt_sum_state    = _new_state()
 _filter_state     = _new_state()
+_clean_state      = _new_state()
 
 
 def _batch_ai_keywords():
@@ -1177,7 +1178,129 @@ def get_batch_rank_events_status(): return dict(_rank_state)
 
 
 # ═════════════════════════════════════════════════════════
-# 统一全流程 — 翻译 → 关键词 → 分类 → 评分 → 分析 → 聚类 → 摘要 → 链
+# 批量 AI 内容清洗 — 提取纯净文章正文
+# ═════════════════════════════════════════════════════════
+
+def _batch_clean():
+    """批量清洗所有已缓存文章，LLM 提取纯净正文（去广告/导航/侧栏）。"""
+    global _clean_state
+    _clean_state = {"running": True, "total": 0, "done": 0, "failed": 0, "current": "", "log": []}
+    try:
+        db = _conn()
+        rows = db.execute("""
+            SELECT id, title, local_path FROM articles
+            WHERE local_path != '' AND local_path NOT LIKE '[ERR:%'
+            AND (ai_cleaned_content IS NULL OR ai_cleaned_content = '')
+            ORDER BY id DESC
+        """).fetchall()
+        db.close()
+        if not rows:
+            _clean_state["running"] = False
+            _log(_clean_state, "所有文章已完成内容清洗")
+            return
+        _clean_state["total"] = len(rows)
+        _log(_clean_state, f"待清洗 {len(rows)} 篇文章")
+
+        from ai_client import clean_article_content
+        from config import config
+        from api.articles import _sanitize_html
+        import os, time
+
+        cache_dir = config.content_cache_path
+
+        for idx, (aid, title, local_path) in enumerate(rows, 1):
+            _clean_state["current"] = f"#{aid} {title[:50]}"
+            html_path = os.path.join(cache_dir, os.path.basename(local_path))
+            if not os.path.isfile(html_path):
+                _log(_clean_state, f"#{aid} ⚠️ 文件不存在")
+                _clean_state["done"] += 1
+                continue
+
+            try:
+                with open(html_path, 'r', encoding='utf-8') as f:
+                    html = f.read()
+            except Exception:
+                _log(_clean_state, f"#{aid} ⚠️ 读取失败")
+                _clean_state["done"] += 1
+                continue
+
+            if len(html) < 200:
+                _clean_state["done"] += 1
+                continue
+
+            html = _sanitize_html(html)
+            try:
+                cleaned = clean_article_content(html)
+                if cleaned and len(cleaned) > 100:
+                    cleaned = _sanitize_html(cleaned)
+                    db2 = _conn()
+                    db2.execute("UPDATE articles SET ai_cleaned_content=? WHERE id=?", (cleaned, aid))
+                    db2.commit()
+                    db2.close()
+                    _log(_clean_state, f"#{aid} ✅ {title[:40]} [{len(cleaned)//1024}KB]")
+                    _clean_state["done"] += 1
+                else:
+                    _log(_clean_state, f"#{aid} ⚠️ AI 返回空")
+                    _clean_state["done"] += 1
+            except Exception as e:
+                _log(_clean_state, f"#{aid} ❌ {str(e)[:120]}")
+                _clean_state["failed"] += 1
+
+            if idx < len(rows):
+                time.sleep(5)
+    except Exception as e:
+        _log(_clean_state, f"清洗异常: {str(e)[:200]}")
+    finally:
+        _clean_state["running"] = False
+        _clean_state["current"] = (
+            f"完成: {_clean_state['done']} 成功, {_clean_state['failed']} 失败"
+        )
+        _unlock('clean')
+        task_state.finish('clean', success=True)
+
+
+@router.post("/batch-clean")
+def start_batch_clean():
+    """批量 AI 清洗所有已缓存文章内容。"""
+    global _clean_state
+    if _clean_state.get("running"):
+        return {"ok": False, "message": "内容清洗已在运行中", "state": _clean_state}
+    ok, msg = _check_and_lock('clean')
+    if not ok:
+        return {"ok": False, "message": msg}
+    db = _conn()
+    pending = db.execute("""
+        SELECT COUNT(*) FROM articles
+        WHERE local_path != '' AND local_path NOT LIKE '[ERR:%'
+        AND (ai_cleaned_content IS NULL OR ai_cleaned_content = '')
+    """).fetchone()[0]
+    db.close()
+    task_state.init_state('clean', total=pending)
+    threading.Thread(target=_batch_clean, daemon=True).start()
+    return {"ok": True, "message": f"启动内容清洗，预计 {pending} 篇", "pending": pending}
+
+
+@router.get("/batch-clean/status")
+def get_batch_clean_status():
+    if _clean_state.get("running"):
+        db = _conn()
+        total = db.execute("""
+            SELECT COUNT(*) FROM articles
+            WHERE local_path != '' AND local_path NOT LIKE '[ERR:%'
+            AND (ai_cleaned_content IS NULL OR ai_cleaned_content = '')
+        """).fetchone()[0]
+        done = db.execute("""
+            SELECT COUNT(*) FROM articles
+            WHERE ai_cleaned_content != '' AND ai_cleaned_content IS NOT NULL
+        """).fetchone()[0]
+        db.close()
+        return {"running": True, "total": total + done, "done": done, "failed": 0,
+                "current": _clean_state["current"], "log": _clean_state["log"]}
+    return dict(_clean_state)
+
+
+# ═════════════════════════════════════════════════════════
+# 统一全流程 — 清洗 → 翻译 → 关键词 → 分类 → 评分 → 分析 → 聚类 → 摘要 → 链
 # ═════════════════════════════════════════════════════════
 
 _full_state = _new_state()
@@ -1186,8 +1309,9 @@ def _batch_ai_full():
     """顺序执行全部 AI 处理步骤。每步检查是否有待处理项，无则跳过。"""
     global _full_state
     _full_state = {"running": True, "total": 0, "done": 0, "failed": 0, "current": "", "log": [], "steps": []}
-    step_names = ["翻译", "AI 分析", "关键词提取", "智能分类", "优先级评分", "事件重聚类", "事件摘要", "全景图排序", "构筑逻辑链"]
+    step_names = ["内容清洗", "翻译", "AI 分析", "关键词提取", "智能分类", "优先级评分", "事件重聚类", "事件摘要", "全景图排序", "构筑逻辑链"]
     steps = [
+        ("内容清洗", _batch_clean, _clean_state),
         ("翻译", _batch_translate, _translate_state),
         ("AI 分析", _batch_analyze, _analyze_state),
         ("关键词提取", _batch_ai_keywords, _kw_state),
@@ -1236,9 +1360,9 @@ def start_batch_ai_full():
     ok, msg = _check_and_lock('ai_full')
     if not ok:
         return {"ok": False, "message": msg}
-    task_state.init_state('ai_full', total=9)
+    task_state.init_state('ai_full', total=10)
     threading.Thread(target=_batch_ai_full, daemon=True).start()
-    return {"ok": True, "message": "启动全流程 AI 处理 — 翻译→分析→关键词→分类→评分→聚类→摘要→链"}
+    return {"ok": True, "message": "启动全流程 AI 处理 — 清洗→翻译→分析→关键词→分类→评分→聚类→摘要→链"}
 
 
 @router.get("/batch-ai-full/status")

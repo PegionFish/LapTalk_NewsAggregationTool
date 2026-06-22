@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 TASK_LEVELS = {
     'ai_full':         2,  # 一键全量 AI（阻塞其他 AI，不阻塞数据采集）
     'translate':       1,
+    'clean':           1,
     'analyze':         1,
     'keywords':        1,
     'classify':        1,

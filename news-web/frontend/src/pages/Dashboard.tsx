@@ -30,6 +30,7 @@ export default function Dashboard() {
   const [fullRunning, setFullRunning] = useState(false);
   const [fullState, setFullState] = useState<BatchState>(emptyBatch);
   const [filterRunning, setFilterRunning] = useState(false); const [filterState, setFilterState] = useState<BatchState>(emptyBatch);
+  const [cleanRunning, setCleanRunning] = useState(false); const [cleanState, setCleanState] = useState<BatchState>(emptyBatch);
 
   // 低分清理
   const [cleanupThreshold, setCleanupThreshold] = useState('20');
@@ -74,6 +75,7 @@ export default function Dashboard() {
   const esTimer = useRef<ReturnType<typeof setInterval>>();
   const fullTimer = useRef<ReturnType<typeof setInterval>>();
   const filterTimer = useRef<ReturnType<typeof setInterval>>();
+  const cleanTimer = useRef<ReturnType<typeof setInterval>>();
 
   const poll = useCallback((fn: () => Promise<unknown>, setter: (v: unknown) => void, stop: () => void, timer: ReturnType<typeof useRef<ReturnType<typeof setInterval>>>) => {
     fn().then(v => { setter(v); if (!(v as BatchState).running) { stop(); clearInterval(timer.current); } }).catch(stop);
@@ -83,6 +85,8 @@ export default function Dashboard() {
     api.getBatchTranslateStatus, v => setTransState(v as BatchState), () => setTranslating(false), transTimer), []);
   const pollAnalyze = useCallback(() => poll(
     api.getBatchAnalyzeStatus, v => setAnalyState(v as BatchState), () => setAnalyzing(false), analyTimer), []);
+  const pollClean = useCallback(() => poll(
+    api.getBatchCleanStatus, v => setCleanState(v as BatchState), () => setCleanRunning(false), cleanTimer), []);
   const pollChains = useCallback(() => poll(
     api.getBuildChainsStatus, v => setChainState(v as ChainState), () => setChaining(false), chainTimer), []);
   const pollFilter = useCallback(() => poll(
@@ -101,8 +105,9 @@ export default function Dashboard() {
     api.getBatchSummarizeEventsStatus().then((s: unknown) => { const st = s as BatchState; if (st.running) { setEsRunning(true); esTimer.current = setInterval(pollEs, 2000); } else setEsState(st); }).catch(() => {});
     api.getBatchAiFullStatus().then((s: unknown)    => { const st = s as BatchState; if (st.running) { setFullRunning(true); fullTimer.current = setInterval(pollFull, 2000); } else setFullState(st); }).catch(() => {});
     api.getBatchAiFilterStatus().then((s: unknown) => { const st = s as BatchState; if (st.running) { setFilterRunning(true); filterTimer.current = setInterval(pollFilter, 2000); } else setFilterState(st); }).catch(() => {});
+    api.getBatchCleanStatus().then((s: unknown)   => { const st = s as BatchState; if (st.running) { setCleanRunning(true);  cleanTimer.current  = setInterval(pollClean, 2000);  } else setCleanState(st);  }).catch(() => {});
     return () => {
-      [transTimer, analyTimer, chainTimer, kwTimer, clsTimer, scoreTimer, reclTimer, esTimer, fullTimer, filterTimer].forEach(t => clearInterval(t.current));
+      [transTimer, analyTimer, chainTimer, kwTimer, clsTimer, scoreTimer, reclTimer, esTimer, fullTimer, filterTimer, cleanTimer].forEach(t => clearInterval(t.current));
     };
   }, []); // eslint-disable-line
 
@@ -139,6 +144,7 @@ export default function Dashboard() {
   const handleFullAi = startPoll(api.startBatchAiFull, pollFull, fullTimer, setFullRunning);
 
   const handleFilter = startPoll(api.startBatchAiFilter, pollFilter, filterTimer, setFilterRunning);
+  const handleClean  = startPoll(api.startBatchClean, pollClean, cleanTimer, setCleanRunning);
 
   const progressPct = (done: number, total: number) => total > 0 ? Math.round((done / total) * 100) : 0;
 
@@ -292,6 +298,32 @@ export default function Dashboard() {
             )}
           </CardBody>
           {filterState.log && filterState.log.length > 0 && <LogPanel entries={filterState.log} />}
+        </Card>
+
+        {/* ═══ AI 内容清洗 ═══ */}
+        <Card>
+          <CardHeader icon="fa-magic" iconColor="var(--accent-blue)" title="AI 内容清洗" desc="LLM 提取纯净文章正文，去广告/导航/侧栏/弹窗" />
+          <CardBody>
+            <Button
+              variant="ghost"
+              onClick={handleClean}
+              loading={cleanRunning}
+              icon="fa-play"
+              style={{ borderColor: 'var(--accent-blue)', color: 'var(--accent-blue)' }}
+            >
+              {cleanRunning ? '清洗中...' : '批量清洗所有已缓存文章'}
+            </Button>
+            {cleanState.total > 0 && (
+              <ProgressBar
+                done={cleanState.done}
+                total={cleanState.total}
+                failed={cleanState.failed}
+                current={cleanState.current}
+                color="var(--accent-blue)"
+              />
+            )}
+          </CardBody>
+          {cleanState.log && cleanState.log.length > 0 && <LogPanel entries={cleanState.log} />}
         </Card>
 
         {/* ═══ 批量翻译 ═══ */}
