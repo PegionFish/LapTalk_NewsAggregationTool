@@ -1191,6 +1191,7 @@ def _batch_clean():
             SELECT id, title, local_path FROM articles
             WHERE local_path != '' AND local_path NOT LIKE '[ERR:%'
             AND (ai_cleaned_content IS NULL OR ai_cleaned_content = '')
+            AND category NOT IN ('platform_hotlists', 'bilibili_videos')
             ORDER BY id DESC
         """).fetchall()
         db.close()
@@ -1273,6 +1274,7 @@ def start_batch_clean():
         SELECT COUNT(*) FROM articles
         WHERE local_path != '' AND local_path NOT LIKE '[ERR:%'
         AND (ai_cleaned_content IS NULL OR ai_cleaned_content = '')
+        AND category NOT IN ('platform_hotlists', 'bilibili_videos')
     """).fetchone()[0]
     db.close()
     task_state.init_state('clean', total=pending)
@@ -1288,10 +1290,12 @@ def get_batch_clean_status():
             SELECT COUNT(*) FROM articles
             WHERE local_path != '' AND local_path NOT LIKE '[ERR:%'
             AND (ai_cleaned_content IS NULL OR ai_cleaned_content = '')
+            AND category NOT IN ('platform_hotlists', 'bilibili_videos')
         """).fetchone()[0]
         done = db.execute("""
             SELECT COUNT(*) FROM articles
             WHERE ai_cleaned_content != '' AND ai_cleaned_content IS NOT NULL
+            AND category NOT IN ('platform_hotlists', 'bilibili_videos')
         """).fetchone()[0]
         db.close()
         return {"running": True, "total": total + done, "done": done, "failed": 0,
