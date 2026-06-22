@@ -70,6 +70,10 @@ export const api = {
   analyzeArticle: (id: number) =>
     fetchJSON<{ ok: boolean; cached: boolean; analysis: string }>(`/articles/${id}/analyze`, { method: 'POST' }),
 
+  // ── AI 内容清洗 ──────────────────────────────────────
+  getCleanedContent: (id: number) =>
+    fetchJSON<{ cleaned: string; cached: boolean; source: string }>(`/articles/${id}/cleaned-content`),
+
   // ── 主题分类 ──────────────────────────────────────────
   getTopicCategories: () =>
     fetchJSON<{ categories: Record<string, number> }>('/articles/categories'),

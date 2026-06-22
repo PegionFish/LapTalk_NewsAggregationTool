@@ -30,6 +30,9 @@ export default function ArticlePane({ article, onClose }: Props) {
   const [pasteMode, setPasteMode] = useState(false);
   const [pasteContent, setPasteContent] = useState('');
   const [saveStatus, setSaveStatus] = useState('');
+  const [showCleaned, setShowCleaned] = useState(false);
+  const [cleanedContent, setCleanedContent] = useState<string | null>(null);
+  const [cleanedLoading, setCleanedLoading] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const translationRef = useRef<HTMLDivElement>(null);
   const syncingRef = useRef(false);
@@ -37,8 +40,7 @@ export default function ArticlePane({ article, onClose }: Props) {
   const iframeLoadHandled = useRef(false);   // 追踪当前 src 的 load 事件是否已处理
 
   useEffect(() => {
-    console.log('[ArticlePane] article changed, resetting state. id:', article?.id);
-    setLoaded(false);
+setLoaded(false);
     setShowTranslation(false);
     setContent(null);
     setIsFallback(false);
@@ -50,6 +52,8 @@ export default function ArticlePane({ article, onClose }: Props) {
     setPasteContent('');
     setSaveStatus('');
     setIsRetrying(false);
+    setShowCleaned(false);
+    setCleanedContent(null);
     fallbackCheckDone.current = false;
     iframeLoadHandled.current = false;
   }, [article?.id]);
@@ -70,34 +74,36 @@ export default function ArticlePane({ article, onClose }: Props) {
       .finally(() => setContentLoading(false));
   }, [article?.id]);
 
+  // 切换到清洗视图时获取 AI 清洗内容
+  useEffect(() => {
+    if (!showCleaned || !article) return;
+    if (cleanedContent !== null) return; // 已有缓存（本次会话内）
+    setCleanedLoading(true);
+    api.getCleanedContent(article.id)
+      .then(r => setCleanedContent(r.cleaned || ''))
+      .catch(() => setCleanedContent(''))
+      .finally(() => setCleanedLoading(false));
+  }, [showCleaned, article?.id, cleanedContent]);
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     if (article) { window.addEventListener('keydown', handler); return () => window.removeEventListener('keydown', handler); }
   }, [article, onClose]);
 
   const handleIframeLoad = useCallback(() => {
-    console.log('[ArticlePane] handleIframeLoad — setting loaded=true. fallbackCheckDone:', fallbackCheckDone.current);
     setLoaded(true);
-    if (fallbackCheckDone.current) {
-      console.log('[ArticlePane] fallbackCheckDone already true, skipping detection');
-      return;
-    }
+    if (fallbackCheckDone.current) return;
     fallbackCheckDone.current = true;
 
     try {
       const iframe = iframeRef.current;
-      if (!iframe?.contentDocument) {
-        console.warn('[ArticlePane] contentDocument is null');
-        return;
-      }
+      if (!iframe?.contentDocument) return;
       const doc = iframe.contentDocument;
       const body = doc.body?.textContent || '';
-      console.log('[ArticlePane] document body length:', body.length, 'title:', doc.title);
 
       // 检测 challenge meta 标签（后端 fallback 页标记）
       const chalMeta = doc.querySelector('meta[name="x-challenge"]');
       if (chalMeta) {
-        console.log('[ArticlePane] challenge meta detected:', chalMeta.getAttribute('content'));
         setIsChallenge(true);
         setChallengeType(chalMeta.getAttribute('content') || 'unknown');
         setChallengeReason(doc.body?.querySelector('h3')?.textContent || '需要人机验证');
@@ -105,7 +111,6 @@ export default function ArticlePane({ article, onClose }: Props) {
       }
 
       if (body.includes('内容暂未缓存') || body.includes('无法获取此页面')) {
-        console.log('[ArticlePane] fallback text detected');
         setIsFallback(true);
         const links = doc.querySelectorAll('a');
         links.forEach(a => {
@@ -113,12 +118,8 @@ export default function ArticlePane({ article, onClose }: Props) {
             setOriginalUrl(a.href);
           }
         });
-      } else {
-        console.log('[ArticlePane] content looks normal — article loaded successfully');
       }
-    } catch (e) {
-      console.error('[ArticlePane] handleIframeLoad error:', e);
-    }
+    } catch {}
   }, []);
 
   const handleOpenOriginal = useCallback(() => {
@@ -206,15 +207,12 @@ export default function ArticlePane({ article, onClose }: Props) {
 
   // 当 iframe 加载完成时，处理 fallback/challenge 检测并附加滚动同步
   const handleIframeOnLoad = useCallback(() => {
-    console.log('[ArticlePane] handleIframeOnLoad. iframeLoadHandled:', iframeLoadHandled.current);
     if (iframeLoadHandled.current) return;
     iframeLoadHandled.current = true;
     handleIframeLoad();
     try {
       iframeRef.current?.contentDocument?.addEventListener('scroll', handleIframeScroll);
-    } catch (e) {
-      console.warn('[ArticlePane] scroll listener attach failed:', e);
-    }
+    } catch {}
   }, [handleIframeLoad, handleIframeScroll]);
 
   // 超时兜底：10 秒后强制执行
@@ -222,7 +220,6 @@ export default function ArticlePane({ article, onClose }: Props) {
     if (!article) return;
     const timeoutId = setTimeout(() => {
       if (!iframeLoadHandled.current) {
-        console.warn('[ArticlePane] iframe load timeout — forcing');
         handleIframeOnLoad();
       }
     }, 10000);
@@ -298,6 +295,20 @@ export default function ArticlePane({ article, onClose }: Props) {
               <i className="fas fa-external-link-alt" />
             </a>
           )}
+          {/* AI 清洗按钮 — 切换为纯净阅读视图 */}
+          <button
+            onClick={() => setShowCleaned(v => !v)}
+            style={{
+              ...toggleBtn,
+              background: showCleaned ? 'var(--accent-tertiary)' : 'var(--bg-card)',
+              color: showCleaned ? '#000' : 'var(--text-secondary)',
+            }}
+            title={showCleaned ? '返回原文视图' : 'AI 清洗 — 提取纯净正文'}
+          >
+            <i className={`fas ${showCleaned ? 'fa-file-alt' : 'fa-magic'}`} />
+            <span>{showCleaned ? '原文' : '清洗'}</span>
+          </button>
+
           {isEnglish && hasTranslation && (
             <button
               onClick={() => setShowTranslation(v => !v)}
@@ -415,16 +426,41 @@ export default function ArticlePane({ article, onClose }: Props) {
             </div>
           )}
 
-          <div style={{ flex: 1, position: 'relative', background: '#fff', display: isFallback || isChallenge ? 'none' : undefined }}>
-            <iframe
-              ref={iframeRef}
-              src={`/api/articles/${article.id}/html`}
-              style={{ width: '100%', height: '100%', border: 'none' }}
-              sandbox="allow-same-origin allow-popups"
-              title={article.title}
-              onLoad={handleIframeOnLoad}
-            />
-          </div>
+          {showCleaned ? (
+            /* AI 清洗后的纯净阅读视图 */
+            <div style={{
+              flex: 1, overflow: 'auto', padding: '24px 32px',
+              background: '#fff', fontSize: 16, lineHeight: 1.85,
+              color: '#1a1a1a', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+            }}>
+              {cleanedLoading ? (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+                  <i className="fas fa-spinner fa-spin" style={{ color: 'var(--accent)', fontSize: 20, marginRight: 8 }} />
+                  <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>AI 清洗中...</span>
+                </div>
+              ) : cleanedContent ? (
+                <div
+                  className="cleaned-content"
+                  dangerouslySetInnerHTML={{ __html: cleanedContent }}
+                />
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', fontSize: 13 }}>
+                  该文章暂无可清洗内容
+                </div>
+              )}
+            </div>
+          ) : (
+            <div style={{ flex: 1, position: 'relative', background: '#fff', display: isFallback || isChallenge ? 'none' : undefined }}>
+              <iframe
+                ref={iframeRef}
+                src={`/api/articles/${article.id}/html`}
+                style={{ width: '100%', height: '100%', border: 'none' }}
+                sandbox="allow-same-origin allow-popups"
+                title={article.title}
+                onLoad={handleIframeOnLoad}
+              />
+            </div>
+          )}
 
           {showTranslation && (
             <div style={translationPanelStyle}>

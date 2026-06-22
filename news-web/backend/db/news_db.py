@@ -215,7 +215,9 @@ class NewsDB:
                                # AI 预筛选：0=未筛选, 1=通过, -1=拒绝
                                ('ai_filtered','INTEGER DEFAULT 0'),
                                # 主题分类（硬件/AI/游戏/移动/发布/其他）
-                               ('topic_category','TEXT DEFAULT \'\'')]:
+                               ('topic_category','TEXT DEFAULT \'\''),
+                               # AI 内容清洗缓存
+                               ('ai_cleaned_content','TEXT DEFAULT \'\'')]:
                 try:
                     conn.execute(f"ALTER TABLE articles ADD COLUMN {col} {dtype}")
                 except sqlite3.OperationalError:

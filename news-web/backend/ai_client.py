@@ -255,6 +255,50 @@ def analyze_article(title: str, text: str) -> str:
     )
 
 
+def clean_article_content(html: str) -> str:
+    """将文章 HTML 送入 LLM，提取纯净正文（去广告/导航/侧栏/弹窗/评论）。
+
+    利用 DeepSeek V3.2 160K 上下文直接处理完整 HTML 结构，
+    保留标题、段落、链接、图片、引用、列表等核心内容标签。
+    返回仅含文章正文的 HTML 片段，不包含 <html>/<head>/<body>。
+    """
+    # 截断超长 HTML，为 prompt 和响应留出余量（160K tokens ≈ 480K chars）
+    MAX_HTML_CHARS = 120000
+    if len(html) > MAX_HTML_CHARS:
+        html = html[:MAX_HTML_CHARS]
+
+    system_prompt = (
+        "你是一个新闻文章内容提取专家。"
+        "从提供的 HTML 中仅提取文章正文主体。"
+        "移除以下所有非正文元素："
+        "导航栏、侧边栏、相关文章推荐/小组件、Cookie 横幅、"
+        "广告、社交分享按钮、评论区、页脚链接、订阅表单、"
+        "弹出窗口、以及任何页面框架/装饰性内容。"
+        "移除空元素、损坏的图片（无有效 src 或 src 为空）、"
+        "以及明显是追踪像素的图片。修复明显的 HTML 嵌套错误。"
+        "仅返回清洗后的文章正文 HTML，不要包裹在 markdown 代码块中，"
+        "不要添加解释说明。不要包含 <html>/<head>/<body> 标签。"
+    )
+
+    prompt = (
+        "从以下 HTML 页面中提取文章正文内容。\n"
+        "保留的 HTML 标签：标题 (h1-h6)、段落 (p)、带 href 的链接 (a)、"
+        "带有效 src 和 alt 的图片 (img)、引用块 (blockquote)、"
+        "有序/无序列表 (ul/ol/li)、行内格式 (strong/b, em/i, code)、"
+        "代码块 (pre/code)、图表及其标题 (figure/figcaption)、"
+        "表格 (table/thead/tbody/tr/td/th) 如果包含正文数据。\n"
+        "如果文章包含作者和日期信息，保留它们。\n\n"
+        f"{html}"
+    )
+
+    return chat(
+        prompt,
+        system_prompt=system_prompt,
+        max_tokens=16384,       # 足够长的文章输出
+        temperature=0.05,       # 低温度确保确定性提取
+    )
+
+
 # ══════════════════════════════════════════════════════════════
 # AI 接管规则 — 替代 news_db.py 硬编码逻辑
 # ══════════════════════════════════════════════════════════════

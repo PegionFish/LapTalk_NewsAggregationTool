@@ -568,6 +568,64 @@ def analyze_article(article_id: int):
             "ai_analyzed": True}
 
 
+@router.get("/{article_id}/cleaned-content")
+def get_cleaned_content(article_id: int):
+    """获取 AI 清洗后的文章正文 HTML。缓存优先，首次调用触发 AI 清洗。"""
+    import os, sqlite3 as _sqlite3
+
+    db = get_db()
+    with db._conn() as conn:
+        row = conn.execute(
+            "SELECT id, url, local_path, ai_cleaned_content FROM articles WHERE id=?",
+            (article_id,)
+        ).fetchone()
+    if not row:
+        raise HTTPException(404, "article_not_found")
+
+    aid, url, local_path, cached_cleaned = row
+
+    # 1. 有缓存直接返回
+    if cached_cleaned:
+        return {"cleaned": cached_cleaned, "cached": True, "source": "cache"}
+
+    # 2. 需要读取 HTML 并调用 AI 清洗
+    if not local_path or local_path.startswith('[ERR:'):
+        return {"cleaned": "", "cached": False, "error": "no_html_available"}
+
+    cache_dir = config.content_cache_path
+    full_path = os.path.join(cache_dir, os.path.basename(local_path))
+    if not os.path.isfile(full_path):
+        return {"cleaned": "", "cached": False, "error": "html_file_not_found"}
+
+    with open(full_path, 'r', encoding='utf-8') as f:
+        html = f.read()
+
+    html = _sanitize_html(html)
+    if len(html) < 100:
+        return {"cleaned": "", "cached": False, "error": "html_too_short"}
+
+    from ai_client import clean_article_content
+    try:
+        cleaned = clean_article_content(html)
+        if not cleaned:
+            return {"cleaned": "", "cached": False, "error": "ai_returned_empty"}
+        # 安全防线：对 AI 输出再做一次 sanitize
+        cleaned = _sanitize_html(cleaned)
+
+        # 缓存结果到 DB
+        conn2 = _sqlite3.connect(config.db_path)
+        conn2.execute(
+            "UPDATE articles SET ai_cleaned_content=? WHERE id=?",
+            (cleaned, article_id)
+        )
+        conn2.commit()
+        conn2.close()
+
+        return {"cleaned": cleaned, "cached": False, "source": "ai"}
+    except Exception as e:
+        raise HTTPException(502, f"ai_cleaning_failed: {str(e)[:200]}")
+
+
 class CacheHtmlRequest(BaseModel):
     html: str
 
