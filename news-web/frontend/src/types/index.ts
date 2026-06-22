@@ -286,3 +286,31 @@ export interface BackupInfo {
   version: string;
   created_at: string;
 }
+
+// ── 热搜/趋势（trending_items 表 — 微博/知乎/抖音/头条/B站等）──
+
+export interface TrendingItem {
+  id: number;
+  title: string;
+  platform: string;
+  trend_type: string;
+  url: string;
+  rank: number;
+  heat_score: number | null;
+  video_desc: string;
+  author: string;
+  play_count: number | null;
+  danmaku_count: number | null;
+  cover_url: string;
+  fetched_at: string;
+  published_date: string;
+  metadata: Record<string, unknown>;
+  text_content: string;
+}
+
+export interface TrendingPlatform {
+  platform: string;
+  total: number;
+  types: Record<string, number>;
+  last_fetch: string;
+}

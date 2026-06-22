@@ -276,6 +276,31 @@ export const api = {
   startLiveFetch: () =>
     fetchJSON<{ ok: boolean; message?: string }>('/hotlists/live/fetch', { method: 'POST' }),
 
+  // ── 热搜趋势 API（独立表 trending_items — 微博/知乎/抖音/头条/B站）──
+  fetchTrending: (params: {
+    platform?: string; trend_type?: string; date_from?: string; date_to?: string;
+    q?: string; page?: number; limit?: number;
+  } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.platform) qs.set('platform', params.platform);
+    if (params.trend_type) qs.set('trend_type', params.trend_type);
+    if (params.date_from) qs.set('date_from', params.date_from);
+    if (params.date_to) qs.set('date_to', params.date_to);
+    if (params.q) qs.set('q', params.q);
+    if (params.page) qs.set('page', String(params.page));
+    if (params.limit) qs.set('limit', String(params.limit));
+    const query = qs.toString();
+    return fetchJSON<{ items: import('../types').TrendingItem[]; total: number; page: number; limit: number }>(
+      `/trending${query ? `?${query}` : ''}`
+    );
+  },
+
+  fetchTrendingItem: (id: number) =>
+    fetchJSON<import('../types').TrendingItem>(`/trending/${id}`),
+
+  fetchTrendingPlatforms: () =>
+    fetchJSON<{ platforms: import('../types').TrendingPlatform[] }>('/trending/platforms'),
+
   // ── 数据采集监控 ────────────────────────────────────
   getFetchOverview: () =>
     fetchJSON<import('../types').FetchOverview>('/fetch/overview'),
