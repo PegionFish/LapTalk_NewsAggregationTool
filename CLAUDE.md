@@ -6,7 +6,7 @@
 
 **LapTalk 新闻知识聚合中心** — 一个全栈 Web 应用，从 40+ RSS 源自动抓取英文科技新闻，AI 聚类后构建可拖拽的可视化事件逻辑链。
 
-**仓库根目录：** `C:\Users\PegionFish\Desktop\LapTalk_NewsAggregationTool`  
+**仓库根目录：** `/srv/LapTalk_NewsAggregationTool`（Linux 生产部署路径）  
 **主项目代码：** `news-web/`  
 **分支策略：** 直接在 `main` 上开发（单人项目）  
 **每次提交后主动 push 到 GitHub origin。**  
@@ -19,11 +19,13 @@
 | AI | OpenAI 兼容 API — DeepSeek V3.2 @ 硅基流动 | `news-web/backend/ai_client.py` |
 | 翻译 | OpenAI 兼容 API — 独立配置，分段翻译 | `news-web/backend/translation_client.py` |
 | 鉴权 | bcrypt + PyJWT (72h 令牌) | `news-web/backend/auth/auth.py` |
+| 浏览器渲染 | Playwright + playwright-stealth（反爬降级） | `news-web/backend/pipeline/browser_capture.py` |
 | 前端 | React 18, Vite 5, TypeScript, React Flow 12 | `news-web/frontend/src/` |
-| 后端测试 | pytest (15 用例) | `news-web/tests/backend/test_api.py` |
+| 后端测试 | pytest (31 用例) | `news-web/tests/backend/test_api.py` |
 | 前端测试 | Vitest + Testing Library (16 用例) | `news-web/frontend/src/components/__tests__/` |
 | E2E | Playwright (5 用例) | `news-web/frontend/e2e/` |
 | 启动脚本 | bash, stop/start/restart/status/test/build | `start_platform.sh` |
+| 部署 | systemd 服务 + Linux Cockpit 管理插件 | `news-web/deploy/`, `cockpit/` |
 
 ### 关键路径
 
@@ -35,24 +37,37 @@ news-web/
 │   ├── ai_client.py         # chat(), summarize_events(), analyze_article(), build_panoramic_context(), rank_events_panoramic(), build_chains_panoramic()
 │   ├── translation_client.py # translate_to_chinese() — HTML 直传 LLM 翻译
 │   ├── auth/auth.py         # hash_password, verify_password, create_token, get_current_user
-│   ├── api/                 # 12 个模块: settings, stats, articles, events, chains, relations,
-│   │                        #            auth, audit, notifications, logs, cache, pipeline
+│   ├── api/                 # 13 个模块: settings, stats, articles, events, chains, relations,
+│   │                        #            auth, audit, notifications, logs, cache, pipeline, fetch
 │   ├── db/news_db.py        # ORM + link_articles_to_events() + calculate_priority() + 迁移
-│   ├── db/migrations.py     # ensure_schema() — 幂等迁移
-│   └── pipeline/            # 管道步骤: fetch→cluster→archive→translate→analyze
+│   ├── db/migrations.py     # ensure_schema() — 幂等迁移 (v1~v4)
+│   └── pipeline/            # 管道步骤: fetch→sanitize→archive→(browser_capture降级)→translate→analyze
+│       ├── dead_link_recovery.py   # 死链 URL 恢复 — DuckDuckGo 搜索找新链接
+│       └── browser_capture.py      # Playwright 浏览器渲染 — 反爬/验证码降级
 ├── frontend/src/
-│   ├── App.tsx              # 路由: /chains → /chains/new /chains/:id 子路由
+│   ├── App.tsx              # 路由: /chains → /chains/new /chains/:id
 │   ├── contexts/AuthContext.tsx  # JWT localStorage 持久化
 │   ├── hooks/useUndoRedo.ts     # 自定义 50 步历史栈
 │   ├── pages/
-│   │   ├── Dashboard.tsx       # 仪表盘 — 缓存统计 + AI 操作卡片 + 日志窗
-│   │   ├── ArticleSearch.tsx   # 文章检索 — 9 列状态表 + AI 分析面板 + 标注徽章
+│   │   ├── Dashboard.tsx       # 仪表盘 — 统计卡片 + AI 操作区（翻译/分析/内容清洗等）
+│   │   ├── ArticleSearch.tsx   # 文章检索 — 多维度筛选 + AI 分析面板 + 标注徽章
+│   │   ├── FetchMonitor.tsx    # 采集监控 — 源健康/抓取历史/批量重试/调度管理
 │   │   ├── Workspace.tsx       # 逻辑链工作台（/chains 子路由）
 │   │   ├── ChainList.tsx       # 逻辑链列表
-│   │   └── settings/           # 6 个子面板: 通用/AI/翻译/缓存/管理/日志
-│   └── api/client.ts           # 40+ 端点封装
-├── tests/backend/test_api.py   # 15 用例覆盖所有端点
+│   │   └── settings/           # 7 个子面板: 通用/AI/翻译/缓存/管理/日志/采集调度
+│   │       └── CacheSettings.tsx  # 缓存状态检查 + 缺失修复 + 批量预缓存
+│   └── api/client.ts           # 50+ 端点封装
+├── deploy/
+│   ├── install.sh              # systemd 服务一键安装脚本
+│   └── laptalk.service         # systemd 服务单元（安全加固 + 日志输出）
+├── tests/backend/test_api.py   # 31 用例覆盖所有端点
 └── config.json                 # 运行时配置（已 gitignore，含 API 密钥）
+
+cockpit/                         # Linux Cockpit Web 管理面板插件
+├── index.html                   # 单页面: 服务控制/调度配置/系统状态/实时日志
+├── manifest.json                # 插件注册清单
+├── install.sh                   # 一键安装脚本
+└── README.md                    # 插件文档
 ```
 
 ### 常用命令
@@ -69,11 +84,30 @@ bash start_platform.sh status     # 查看服务 / 数据库状态
 bash start_platform.sh test       # 全量测试 (pytest + vitest)
 bash start_platform.sh build      # 仅构建前端
 
+# systemd 服务管理（生产部署）
+systemctl status laptalk           # 查看服务状态
+systemctl restart laptalk          # 重启服务
+journalctl -u laptalk -f           # 实时日志
+sudo bash news-web/deploy/install.sh  # 一键安装 systemd 服务
+
+# Cockpit 管理插件安装
+bash cockpit/install.sh            # 安装到 Cockpit（需 Cockpit ≥ 236）
+
 # 手动测试
 cd news-web
-python -m pytest tests/backend/test_api.py -v   # 15 用例
+python -m pytest tests/backend/test_api.py -v   # 31 用例
 cd frontend && npm test                          # 16 用例
 npm run build                                    # tsc + vite build → dist/
+
+# 死链恢复（命令行独立运行）
+cd news-web/backend
+python3 pipeline/dead_link_recovery.py             # 处理所有 404/410
+python3 pipeline/dead_link_recovery.py --id 42     # 处理指定文章
+python3 pipeline/dead_link_recovery.py --limit 10  # 最多处理 N 篇
+
+# Playwright 浏览器渲染降级
+python3 pipeline/browser_capture.py --article-id 42
+python3 pipeline/browser_capture.py --limit 10
 ```
 
 ### 数据库核心表与字段
@@ -82,11 +116,12 @@ npm run build                                    # tsc + vite build → dist/
 articles
 ├── title, source, url, category, published_date, fetched_at
 ├── priority_score, priority_label, keywords, human_tags
-├── local_path              ← HTML 磁盘缓存路径
+├── local_path              ← HTML 磁盘缓存路径 ([ERR:HTTP 404] 格式记录失败原因)
 ├── text_content            ← 原始 HTML（直传 LLM，保留标签结构）
 ├── translated_content      ← AI 翻译后的中文（译文）
 ├── content_lang            ← 语言检测结果 (en/zh)
-├── content_status          ← 缓存状态 (pending/fetched/translated/failed)
+├── content_status          ← 缓存状态 (pending/fetched/translated/failed/dead)
+├── retry_count             ← 同类 HTTP 错误重试计数，≥2 次 404/410 标记 dead
 ├── ai_summary              ← AI 分析摘要
 ├── ai_analyzed             ← AI 分析完成标记 (0/1)
 ├── human_processed         ← 人工已处理标记 (0/1) — 保护评分/关键词不被 AI 覆写
@@ -99,6 +134,17 @@ logic_chains
 ├── title, description, created_at, updated_at, created_by (human|auto)
 ├── chain_events (chain_id, event_id, position)
 └── chain_relations (parent_chain_id, child_chain_id)
+
+fetch_logs                      ← 抓取历史记录表
+├── source_name, source_type    ← 源名称和类型 (rss|hotlist|bilibili)
+├── articles_fetched, articles_new  ← 抓取/新增数量
+├── status, error_msg           ← 执行状态和错误信息
+├── duration_ms, started_at, finished_at  ← 性能指标
+└── run_type                    ← 运行类型 (scheduled|manual)
+
+article_comments
+├── article_id, user_id, content, created_at
+└── rating                     ← 可选评分列 (v3 迁移新增)
 ```
 
 ### 批量 AI 处理 API（仪表盘操作卡片）
@@ -109,11 +155,47 @@ logic_chains
 | `GET /api/pipeline/batch-translate/status` | 进度: running/total/done/log[] |
 | `POST /api/pipeline/batch-analyze` | 遍历 HTML 内容 → AI 分析摘要 → 入库 |
 | `GET /api/pipeline/batch-analyze/status` | 进度: running/total/done/log[] |
+| `POST /api/pipeline/batch-clean` | AI 内容清洗 — 纯净阅读模式（去除广告/导航/推荐） |
+| `GET /api/pipeline/batch-clean/status` | 进度: running/total/done/log[] |
+| `POST /api/pipeline/batch-ai-full` | 全自动 AI 流程（清洗→分析→关键词→分类→评分 串联） |
+| `GET /api/pipeline/batch-ai-full/status` | 进度: running/total/done/steps[] |
+| `POST /api/pipeline/batch-keywords` | 批量关键词提取 |
+| `POST /api/pipeline/batch-classify` | 批量话题分类 |
+| `POST /api/pipeline/batch-score` | 批量优先级评分 |
+| `POST /api/pipeline/batch-recluster` | 批量重新聚类 |
+| `POST /api/pipeline/batch-summarize-events` | 批量事件摘要 |
 | `POST /api/pipeline/build-chains` | 全景图推理 → AI 识别逻辑链分组 → 创建逻辑链 |
 | `GET /api/pipeline/build-chains/status` | 进度: total_groups/chains_created/log[] |
 | `POST /api/pipeline/batch-rank-events` | 全景图推理 → AI 全局事件优先级排序 |
 | `GET /api/pipeline/batch-rank-events/status` | 进度: running/total/done/log[] |
+
+### 数据采集监控 API（FetchMonitor 页面）
+
+| 端点 | 说明 |
+|------|------|
+| `GET /api/fetch/overview` | 抓取总览 — RSS/热榜/缓存三维度概览 |
+| `GET /api/fetch/sources` | 源详情列表（含健康状态、成功率） |
+| `GET /api/fetch/sources/{name}/history` | 单源抓取历史记录 |
+| `POST /api/fetch/sources/{name}/retry` | 单源重试抓取 |
+| `GET /api/fetch/sources/{name}/articles` | 单源文章列表 |
+| `GET /api/fetch/articles/failed` | 失败文章列表 |
+| `POST /api/fetch/articles/{id}/retry-cache` | 单篇缓存重试 |
+| `POST /api/fetch/articles/batch-retry` | 批量缓存重试（4 线程并行，上限 500） |
+| `GET /api/fetch/articles/batch-retry/status` | 重试进度: running/total/done/failed/log[] |
+| `POST /api/fetch/articles/batch-retry/cancel` | 取消正在进行的批量重试 |
+| `GET /api/fetch/logs` | 抓取日志（分页 + 类型筛选）|
+| `GET /api/fetch/schedule` | 读取定时调度配置 |
+| `PUT /api/fetch/schedule` | 保存调度配置（自动 reload_scheduler，即时生效） |
+| `POST /api/fetch/schedule/toggle` | 开关定时任务 |
+
+### 文章与死链恢复
+
+| 端点 | 说明 |
+|------|------|
 | `POST /api/articles/{id}/analyze` | 单篇分析（前端选中文章自动调用） |
+| `POST /api/articles/{id}/clean` | 单篇内容清洗 |
+| `POST /api/articles/dead-link/recover` | 死链批量恢复 — DuckDuckGo 搜索找新 URL |
+| `POST /api/articles/dead-link/recover/{id}` | 单篇死链恢复 |
 | `POST /api/settings/test-ai` | AI 分析连接测试 |
 | `POST /api/settings/test-translation` | 翻译连接测试 |
 
@@ -132,16 +214,25 @@ logic_chains
 9. **逻辑链自动构筑** — 全景图推理（事件+关键词+关系一次性给 LLM），替代 Jaccard 机械匹配
 10. **事件关系批量检测** — 每批 15 对事件一次 API 调用，替代逐个配对的 O(n²) 调用
 11. **全景图事件排序** — 所有事件蒸馏数据一次性给 LLM，全局上下文推理优先级
-11. **前端鉴权门控** — `App.tsx` 在 AuthProvider 内检查令牌
-12. **API 密钥掩码** — `config.to_dict()` 返回 `"***"`；`settings.py` 忽略 `"***"` 回写
-13. **`config.json` 已 gitignore** — 含 API 密钥，不进入版本控制
-14. **撤销/重做** — 自定义 hook，`onNodeDragStop` 触发快照
-15. **边重建** — from `event_relations` 按颜色/线型映射
-16. **前端路由** — `/chains` 列表 → `/chains/new` 新建工作台 / `/chains/:id` 编辑
-17. **HTML 安全** — `_sanitize_html` 切除 script/iframe/link/tracking，仅保留 rel="stylesheet"
-18. **OpenAI 客户端超时** — AI 30s / 翻译 120s，防止请求无限挂起
-19. **iframe 阅读** — `sandbox="allow-same-origin allow-popups"`（服务器已切除脚本）
-20. **平台热搜采集** — 直连各平台官方 API（微博/知乎/抖音/头条 + B站），B站支持分页，与 RSS 并行入库
+12. **前端鉴权门控** — `App.tsx` 在 AuthProvider 内检查令牌
+13. **API 密钥掩码** — `config.to_dict()` 返回 `"***"`；`settings.py` 忽略 `"***"` 回写
+14. **`config.json` 已 gitignore** — 含 API 密钥，不进入版本控制
+15. **撤销/重做** — 自定义 hook，`onNodeDragStop` 触发快照
+16. **边重建** — from `event_relations` 按颜色/线型映射
+17. **前端路由** — `/chains` 列表 → `/chains/new` 新建工作台 / `/chains/:id` 编辑
+18. **HTML 安全** — `_sanitize_html` 切除 script/iframe/link/tracking，额外剥离 Alpine.js/Vue.js/Angular 框架指令属性
+19. **OpenAI 客户端超时** — AI 30s / 翻译 120s，防止请求无限挂起
+20. **iframe 阅读** — `sandbox="allow-same-origin allow-popups"` + CSP 头加固 + 超时兜底（服务器已切除脚本）
+21. **平台热搜采集** — 直连各平台官方 API（微博/知乎/抖音/头条 + B站），B站支持分页，与 RSS 并行入库
+22. **死链温和标记** — `retry_count` 跟踪同类 HTTP 错误次数；连续 ≥2 次 404/410 时标记 `content_status='dead'`，不删除记录
+23. **死链 URL 自动恢复** — DuckDuckGo HTML 搜索 → 标题+来源匹配候选 URL → HEAD 验证可用性 → 自动更新数据库并重置缓存状态
+24. **浏览器降级捕获** — HTTP 请求被反爬/验证码拦截时，自动降级到 Playwright headless Chromium 渲染页面
+25. **Playwright 隐身增强** — `playwright-stealth` 处理浏览器指纹自动化检测，移除 `--disable-web-security` 等反爬红旗参数
+26. **AI 内容清洗** — 批量清洗广告/导航/推荐等非正文内容，实现纯净阅读模式。清洗范围默认排除热搜/B站分类
+27. **内容统计排除热搜/B站** — `ArticleSearch.tsx` 和 API 查询默认排除 `platform_hotlists` 和 `bilibili_videos` 类别，避免总数虚高
+28. **批量重试并发优化** — 4 线程并行下载 + 取消端点 + 上限 500 篇 + 前端进度实时刷新
+29. **Linux 生产部署** — systemd 服务单元（安全加固: NoNewPrivileges + ProtectSystem + 日志双输出）+ Cockpit Web 管理插件（服务控制/调度配置/实时日志）
+30. **调度热生效** — Cockpit 插件保存调度配置后自动调用 `reload_scheduler()`，无需重启后端
 
 ### 已知设计约束
 
@@ -150,6 +241,9 @@ logic_chains
 - **E2E 测试需运行服务器：** `playwright.config.ts` 自动启动 `:8080`。
 - **测试期间不启动调度器：** `main.py` 在 `NEWS_WEB_TESTING=1` 时跳过 `start_scheduler()`。
 - **批量任务状态不能只绑前端：** status 端点从 DB 派生统计，服务重启不丢失进度。
+- **Playwright 环境依赖：** 生产环境需运行 `playwright install chromium` 安装浏览器；低内存/容器环境需 `--disable-dev-shm-usage`。
+- **Cockpit 插件要求：** 需 Cockpit ≥ 236；安装后必须退出重新登录才能看到新插件。
+- **死链恢复速率限制：** DuckDuckGo 搜索间隔 4~8 秒随机延迟，避免被限流。
 
 ## 核心交互原则
 
@@ -317,7 +411,7 @@ logic_chains
 - 设计时必须评估时间复杂度、内存占用与 I/O 影响，避免无谓消耗。
 - 识别潜在瓶颈后应提供监测或优化建议，确保可持续迭代。
 - 禁止引入未经评估的昂贵依赖或阻塞操作。
-- **AI 调用利用大上下文**：翻译分段 ≤4000 字/段，分析截取 ≤8000 字，关键词/分类/评分截取 ≤6000 字。利用 DeepSeek V3.2 160K 上下文提升分析深度。事件关系检查已从逐个配对改为批量（每批 15 对一次调用）。
+- **AI 调用利用大上下文**：翻译 HTML 直传保留标签结构，AI 分析（分析/关键词/分类/评分/清洗）直接传入完整 HTML/正文。利用 DeepSeek V3.2 160K 上下文。事件关系检查已从逐个配对改为批量（每批 15 对一次调用）。内容清洗、批量重试等后台任务使用线程池并发（4~8 线程）。
 
 ## 通用工作流程
 
