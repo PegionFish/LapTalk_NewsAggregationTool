@@ -137,6 +137,8 @@ export default function FetchMonitor() {
     try {
       const s = await api.getBatchRetryStatus();
       setBatchState(s);
+      // 实时刷新日志，让用户看到每条重试结果
+      api.getFetchLogs(50).then(r => setLogs(r.logs)).catch(() => {});
       if (!s.running) { clearInterval(batchTimer.current); refreshAll(); }
     } catch { clearInterval(batchTimer.current); }
   }, []);
@@ -701,7 +703,7 @@ export default function FetchMonitor() {
                 disabled={selectedIds.size === 0 || batchSubmitting || batchState.running}
                 loading={batchSubmitting}
               >
-                批量重试 ({selectedIds.size} 篇)
+                {batchState.running ? `重试中 ${batchState.done}/${batchState.total}` : `批量重试 (${selectedIds.size} 篇)`}
               </Button>
               <Button
                 variant="orange"
