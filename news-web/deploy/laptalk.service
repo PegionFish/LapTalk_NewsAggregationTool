@@ -1,0 +1,34 @@
+[Unit]
+Description=LapTalk 新闻知识聚合中心
+Documentation=https://github.com/PegionFish/LapTalk_NewsAggregationTool
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bob
+Group=bob
+WorkingDirectory=/srv/LapTalk_NewsAggregationTool/news-web/backend
+Environment=PATH=/usr/bin:/usr/local/bin:/home/bob/.local/bin
+Environment=NEWS_WEB_TESTING=0
+ExecStart=/usr/bin/python3 main.py
+Restart=always
+RestartSec=10
+
+# 日志 — 同时输出到 journald 和文件
+StandardOutput=append:/srv/LapTalk_NewsAggregationTool/logs/backend.log
+StandardError=append:/srv/LapTalk_NewsAggregationTool/logs/backend.log
+
+# 安全加固
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/srv/LapTalk_NewsAggregationTool/news-web/backend/data
+ReadWritePaths=/srv/LapTalk_NewsAggregationTool/logs
+
+# 资源限制
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

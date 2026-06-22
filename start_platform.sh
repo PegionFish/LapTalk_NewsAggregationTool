@@ -51,11 +51,29 @@ to_win_path() {
 }
 
 is_port_in_use() {
-    netstat -ano 2>/dev/null | grep -q ":$1 .*LISTENING"
+    # 优先用 ss（Linux），回退 netstat（Windows/macOS）
+    if command -v ss &>/dev/null; then
+        ss -tlnp 2>/dev/null | grep -q ":$1 "
+    elif command -v netstat &>/dev/null; then
+        # Linux netstat 用 LISTEN，Windows 用 LISTENING
+        netstat -tlnp 2>/dev/null | grep -q ":$1 " || \
+        netstat -ano 2>/dev/null | grep -q ":$1 .*LISTENING"
+    else
+        return 1
+    fi
 }
 
 get_pid_by_port() {
-    netstat -ano 2>/dev/null | grep ":$1 .*LISTENING" | awk '{print $NF}' | head -1
+    if command -v ss &>/dev/null; then
+        ss -tlnp 2>/dev/null | grep ":$1 " | sed -n 's/.*pid=\([0-9]*\).*/\1/p' | head -1
+    elif command -v netstat &>/dev/null; then
+        netstat -tlnp 2>/dev/null | grep ":$1 " | awk '{print $NF}' | sed 's/\/.*//' | head -1
+    fi
+}
+
+# 检测是否为 systemd 管理
+_has_systemd() {
+    [ -f /etc/systemd/system/laptalk.service ] || [ -f "$HOME/.config/systemd/user/laptalk.service" ]
 }
 
 # ═══════════════════════════════════════════════════
@@ -75,6 +93,22 @@ build_frontend() {
 # ═══════════════════════════════════════════════════
 
 start_backend() {
+    # 优先走 systemd（支持自动重启 + journald 日志）
+    if _has_systemd; then
+        info "通过 systemd 启动后端..."
+        sudo systemctl start laptalk 2>/dev/null || systemctl --user start laptalk 2>/dev/null || true
+        for i in $(seq 1 15); do
+            sleep 1
+            if curl -s "http://localhost:$PORT/api/health" >/dev/null 2>&1; then
+                ok "后端就绪 (systemd)"
+                return 0
+            fi
+        done
+        err "后端启动超时 — journalctl -u laptalk 查看日志"
+        return 1
+    fi
+
+    # 回退：无 systemd 时直接启动进程
     if is_port_in_use "$PORT"; then
         local pid; pid=$(get_pid_by_port "$PORT")
         warn "端口 $PORT 已被进程 $pid 占用 — 后端可能已在运行"
@@ -99,12 +133,19 @@ start_backend() {
 }
 
 stop_backend() {
+    # 优先走 systemd
+    if _has_systemd; then
+        info "通过 systemd 停止后端..."
+        sudo systemctl stop laptalk 2>/dev/null || systemctl --user stop laptalk 2>/dev/null || true
+        ok "后端已停止 (systemd)"
+        return 0
+    fi
+
+    # 回退：手动杀进程
     local pid
-    # 优先用 PID 文件
     if [ -f "$BACKEND_PID" ]; then
         pid=$(cat "$BACKEND_PID")
     fi
-    # 回退用端口查
     if [ -z "$pid" ]; then
         pid=$(get_pid_by_port "$PORT")
     fi
@@ -199,6 +240,12 @@ test_backend() {
 WATCHDOG_PID_FILE="$PID_DIR/watchdog.pid"
 
 start_watchdog() {
+    # systemd 自带 Restart=always，无需额外看门狗
+    if _has_systemd; then
+        info "systemd 已管理服务存活 (Restart=always)，跳过看门狗"
+        return 0
+    fi
+
     if [ -f "$WATCHDOG_PID_FILE" ] && kill -0 "$(cat "$WATCHDOG_PID_FILE")" 2>/dev/null; then
         info "看门狗已在运行 (PID: $(cat "$WATCHDOG_PID_FILE"))"
         return 0
@@ -228,6 +275,10 @@ start_watchdog() {
 }
 
 stop_watchdog() {
+    # systemd 管理时无需停止看门狗（根本不会启动）
+    if _has_systemd; then
+        return 0
+    fi
     if [ -f "$WATCHDOG_PID_FILE" ]; then
         local wpid; wpid=$(cat "$WATCHDOG_PID_FILE")
         kill "$wpid" 2>/dev/null && info "看门狗已停止" || true
