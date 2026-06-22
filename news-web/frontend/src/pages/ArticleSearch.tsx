@@ -214,12 +214,49 @@ export default function ArticleSearch() {
     }).catch(() => {}).finally(() => setAnalyzing(false));
   }, [selected?.id]);
 
-  const cacheBadge = (status: string): { icon: string; variant: 'green' | 'blue' | 'red' | 'muted'; tooltip: string } => {
+  /** 根据 content_status + local_path 推导错误类型徽章 */
+  /** 徽章颜色映射 */
+  const badgeColor = (variant: string): string => {
+    const map: Record<string, string> = {
+      green: 'var(--accent-tertiary)',
+      blue: 'var(--accent)',
+      red: 'var(--accent-red)',
+      orange: 'var(--accent-orange)',
+      purple: '#ab47bc',
+      gray: 'var(--text-muted)',
+      muted: 'var(--text-muted)',
+    };
+    return map[variant] || 'var(--text-muted)';
+  };
+
+  const cacheBadge = (status: string, localPath?: string): {
+    icon: string; variant: 'green' | 'blue' | 'red' | 'orange' | 'purple' | 'muted'; tooltip: string;
+  } => {
+    // 死链已确认
+    if (status === 'dead') return { icon: 'fa-skull', variant: 'muted', tooltip: '死链 — 多次 404 已确认不可恢复' };
+    // 有错误标记 — 解析错误类型
+    const lp = localPath || '';
+    if (lp.startsWith('[ERR:')) {
+      if (lp.includes('HTTP 404') || lp.includes('HTTP 410') || lp.includes('HTTP 451'))
+        return { icon: 'fa-skull', variant: 'orange', tooltip: '疑似死链 (404/410) — 待重试确认' };
+      if (lp.includes('HTTP 403'))
+        return { icon: 'fa-lock', variant: 'red', tooltip: '反爬拦截 (403) — 需要浏览器渲染' };
+      if (lp.includes('HTTP 405'))
+        return { icon: 'fa-shield-haltered', variant: 'purple', tooltip: 'WAF 拦截 (405) — 需要浏览器渲染' };
+      if (lp.includes('timed out') || lp.includes('timeout'))
+        return { icon: 'fa-clock', variant: 'orange', tooltip: '连接超时 — 可重试' };
+      if (lp.includes('IncompleteRead'))
+        return { icon: 'fa-cloud-download', variant: 'orange', tooltip: '传输中断 — 可重试' };
+      if (lp.includes('SSL') || lp.includes('certificate'))
+        return { icon: 'fa-certificate', variant: 'orange', tooltip: 'SSL 证书错误' };
+      return { icon: 'fa-exclamation-triangle', variant: 'red', tooltip: `下载失败: ${lp.replace('[ERR:','').slice(0,40)}` };
+    }
     switch (status) {
       case 'translated': return { icon: 'fa-check-circle', variant: 'green', tooltip: '翻译已就绪' };
       case 'fetched': return { icon: 'fa-check-circle', variant: 'green', tooltip: '内容已缓存' };
       case 'failed': return { icon: 'fa-exclamation-triangle', variant: 'red', tooltip: '下载失败' };
       case 'file': return { icon: 'fa-file-alt', variant: 'blue', tooltip: 'HTML 磁盘缓存' };
+      case 'metadata_only': return { icon: 'fa-database', variant: 'muted', tooltip: '仅元数据（热榜/视频）' };
       default: return { icon: 'fa-hourglass-half', variant: 'muted', tooltip: '尚未下载内容' };
     }
   };
@@ -355,7 +392,7 @@ export default function ArticleSearch() {
                     {Math.round(a.score)}
                   </td>
                   <td style={{ padding: '10px 12px', textAlign: 'center', fontSize: 12 }}>
-                    {(() => { const b = cacheBadge(a.content_status); return <i className={`fas ${b.icon}`} style={{ color: `var(--accent-${b.variant === 'green' ? 'tertiary' : b.variant === 'red' ? 'red' : b.variant === 'blue' ? '' : 'muted'})` }} title={b.tooltip} />; })()}
+                    {(() => { const b = cacheBadge(a.content_status, a.local_path); return <i className={`fas ${b.icon}`} style={{ color: badgeColor(b.variant) }} title={b.tooltip} />; })()}
                   </td>
                   <td style={{ padding: '10px 12px', textAlign: 'center', fontSize: 12 }}>
                     <i className={`fas ${a.has_translation ? 'fa-check-circle' : 'fa-minus-circle'}`}
@@ -541,7 +578,7 @@ export default function ArticleSearch() {
           </div>
 
           {/* 缓存状态 */}
-          {(() => { const b = cacheBadge(selected.content_status); return (
+          {(() => { const b = cacheBadge(selected.content_status, selected.local_path); return (
             <div style={{
               display: 'flex',
               alignItems: 'center',

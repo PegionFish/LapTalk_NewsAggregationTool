@@ -20,11 +20,12 @@ const healthVariant: Record<string, 'green' | 'orange' | 'red'> = {
   failing: 'red',
 };
 
-const statusVariant: Record<string, 'green' | 'blue' | 'orange' | 'red'> = {
+const statusVariant: Record<string, 'green' | 'blue' | 'orange' | 'red' | 'purple' | 'muted'> = {
   fetched: 'green',
   translated: 'blue',
   pending: 'orange',
   failed: 'red',
+  dead: 'muted',
 };
 
 /** 计算今日新增的趋势 */

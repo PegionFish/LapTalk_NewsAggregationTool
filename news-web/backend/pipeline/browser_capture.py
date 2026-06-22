@@ -23,13 +23,14 @@ logger = logging.getLogger(__name__)
 TIMEOUT = 60000
 STEALTH_ARGS = [
     '--disable-blink-features=AutomationControlled',
-    '--disable-automation',
-    '--disable-web-security',
     '--no-first-run',
     '--no-default-browser-check',
-    '--disable-popup-blocking',
     '--disable-infobars',
+    '--disable-dev-shm-usage',       # 容器/低内存环境兼容
+    '--disable-features=TranslateUI,BackForwardCache',
+    '--disable-component-extensions-with-background-pages',
 ]
+# 注意：移除了 --disable-web-security（反爬红旗）和 --disable-automation（由 playwright-stealth 接管）
 
 # ── 人机验证/反爬检测关键词 ─────────────────────────────
 CHALLENGE_PATTERNS = [
@@ -147,7 +148,7 @@ def capture_page_playwright(url: str, article_id: int = 0) -> dict:
                 'user_agent': pw_config.get('user_agent') or (
                     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
                     'AppleWebKit/537.36 (KHTML, like Gecko) '
-                    'Chrome/125.0.0.0 Safari/537.36'
+                    'Chrome/150.0.0.0 Safari/537.36'
                 ),
                 'viewport': pw_config.get('viewport', {'width': 1920, 'height': 1080}),
                 'locale': pw_config.get('locale', 'zh-CN'),
@@ -155,18 +156,61 @@ def capture_page_playwright(url: str, article_id: int = 0) -> dict:
             }
             context = browser.new_context(**context_kwargs)
 
+            # 集成 playwright-stealth（自动 patch webdriver/plugins/WebGL/navigator 等）
             page = context.new_page()
+            try:
+                from playwright_stealth import Stealth
+                stealth = Stealth(
+                    navigator_webdriver=True,
+                    navigator_plugins=True,
+                    navigator_languages=True,
+                    navigator_platform=True,
+                    webgl_vendor=True,
+                    chrome_runtime=True,
+                    navigator_permissions=True,
+                    sec_ch_ua=True,
+                )
+                stealth.apply_stealth_sync(page)
+                logger.debug("[browser_capture] playwright-stealth 已激活")
+            except ImportError:
+                # 兜底隐身脚本 — 修复 plugins 为真实 Plugin 结构
+                page.add_init_script("""
+                    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                    // 真实 Plugin 对象而非假数组
+                    const makePlugin = (name, desc, file) => ({
+                        name, description: desc, filename: file, length: 1,
+                        item: () => null, namedItem: () => null,
+                    });
+                    Object.defineProperty(navigator, 'plugins', {
+                        get: () => {
+                            const arr = [
+                                makePlugin('Chrome PDF Plugin', 'Portable Document Format', 'internal-pdf-viewer'),
+                                makePlugin('Chrome PDF Viewer', '', 'mhjfbmdgcfjbbpaeojofohoefgiehjai'),
+                                makePlugin('Native Client', '', 'internal-nacl-plugin'),
+                            ];
+                            arr.item = (i) => arr[i] || null;
+                            arr.namedItem = (n) => arr.find(p => p.name === n) || null;
+                            arr.refresh = () => {};
+                            Object.setPrototypeOf(arr, PluginArray.prototype);
+                            return arr;
+                        }
+                    });
+                    window.chrome = { runtime: {}, loadTimes: () => {}, csi: () => {}, app: {} };
+                    // WebGL 伪装
+                    try {
+                        const getParam = WebGLRenderingContext.prototype.getParameter;
+                        WebGLRenderingContext.prototype.getParameter = function(p) {
+                            if (p === 37445) return 'Intel Inc.';    // UNMASKED_VENDOR_WEBGL
+                            if (p === 37446) return 'Intel Iris OpenGL Engine';  // UNMASKED_RENDERER_WEBGL
+                            return getParam.call(this, p);
+                        };
+                    } catch(e) {}
+                """)
 
+            # 自定义指纹脚本（叠加在 stealth 之上）
             stealth = pw_config.get('stealth_script', '')
             if stealth:
                 page.add_init_script(stealth)
-            else:
-                # 兜底隐身
-                page.add_init_script("""
-                    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-                    Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
-                    window.chrome = { runtime: {} };
-                """)
 
             try:
                 page.goto(url, wait_until='networkidle', timeout=TIMEOUT)

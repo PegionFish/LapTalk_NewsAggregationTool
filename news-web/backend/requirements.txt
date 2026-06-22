@@ -8,3 +8,5 @@ bcrypt==4.2.0
 PyJWT==2.9.0
 feedparser==6.0.12
 python-multipart==0.0.32
+playwright>=1.49.0
+playwright-stealth>=2.0.0

@@ -20,3 +20,4 @@ tools/dist/
 tools/build/
 tools/*.spec
 .pytest-tmp/
+__pycache__/

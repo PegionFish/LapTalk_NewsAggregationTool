@@ -11,13 +11,15 @@ export interface Article {
   keywords: string[];
   human_tags: string[];
   category?: string;
-  content_status: string;  // 缓存状态: pending | fetched | translated | failed
+  content_status: string;  // 缓存状态: pending | fetched | translated | failed | dead
   content_fetched_at?: string;  // 内容抓取时间
   content_lang: string;   // 源语言: en / zh / ''
   ai_analyzed: boolean;   // AI 是否已完成内容分析
   human_processed: boolean; // 是否已人工处理
   has_translation: boolean; // 是否已有译文
   topic_category?: string; // 主题分类: 硬件/AI/游戏/移动/发布/其他
+  local_path?: string;     // 缓存文件路径（含错误标记 [ERR:...]）
+  retry_count?: number;    // 重试次数（死链判定用）
   event?: { id: number; title: string } | null;
 }
 

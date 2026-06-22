@@ -87,9 +87,34 @@ def _build_stealth_script(fp: dict) -> str:
     return f"""
         Object.defineProperty(navigator, 'webdriver', {{ get: () => undefined }});
         Object.defineProperty(navigator, 'platform', {{ get: () => {platform} }});
-        Object.defineProperty(navigator, 'plugins', {{ get: () => [1,2,3,4,5] }});
+        // 真实 Plugin 对象结构 — 替代假数组 [1,2,3,4,5]
+        (() => {{
+            const mk = (name, desc, file) => ({{
+                name, description: desc, filename: file, length: 1,
+                item: () => null, namedItem: () => null,
+            }});
+            const arr = [
+                mk('Chrome PDF Plugin', 'Portable Document Format', 'internal-pdf-viewer'),
+                mk('Chrome PDF Viewer', '', 'mhjfbmdgcfjbbpaeojofohoefgiehjai'),
+                mk('Native Client', '', 'internal-nacl-plugin'),
+            ];
+            arr.item = (i) => arr[i] || null;
+            arr.namedItem = (n) => arr.find(p => p.name === n) || null;
+            arr.refresh = () => {{}};
+            Object.setPrototypeOf(arr, PluginArray.prototype);
+            Object.defineProperty(navigator, 'plugins', {{ get: () => arr }});
+        }})();
         Object.defineProperty(navigator, 'languages', {{ get: () => {lang_list} }});
         Object.defineProperty(navigator, 'deviceMemory', {{ get: () => {device_memory} }});
         Object.defineProperty(navigator, 'hardwareConcurrency', {{ get: () => {hardware_concurrency} }});
-        window.chrome = {{ runtime: {{}} }};
+        window.chrome = {{ runtime: {{}}, loadTimes: () => {{}}, csi: () => {{}}, app: {{}} }};
+        // WebGL vendor/renderer 伪装
+        try {{
+            const gp = WebGLRenderingContext.prototype.getParameter;
+            WebGLRenderingContext.prototype.getParameter = function(p) {{
+                if (p === 37445) return 'Intel Inc.';
+                if (p === 37446) return 'Intel Iris OpenGL Engine';
+                return gp.call(this, p);
+            }};
+        }} catch(e) {{}}
     """

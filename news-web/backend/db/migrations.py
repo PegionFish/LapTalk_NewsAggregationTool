@@ -78,6 +78,17 @@ def ensure_schema(db_path: str):
         conn.commit()
     conn.close()
 
+    # ── v4 迁移：articles 添加 retry_count 列（死链温和判定）─
+    conn = sqlite3.connect(db_path)
+    cur_ver = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] or 0
+    if cur_ver < 4:
+        cols = [c[1] for c in conn.execute("PRAGMA table_info(articles)").fetchall()]
+        if 'retry_count' not in cols:
+            conn.execute("ALTER TABLE articles ADD COLUMN retry_count INTEGER DEFAULT 0")
+        conn.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (4)")
+        conn.commit()
+    conn.close()
+
     # Users table migration
     from auth.models import ensure_users_table
     ensure_users_table(db_path)

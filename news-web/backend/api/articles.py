@@ -77,7 +77,8 @@ def list_articles(
                    a.priority_score, a.priority_label, a.human_verified, a.keywords, a.human_tags,
                    a.content_status, a.content_fetched_at,
                    a.content_lang, a.ai_analyzed, a.human_processed, a.topic_category,
-                   CASE WHEN a.translated_content != '' THEN 1 ELSE 0 END as has_translation
+                   CASE WHEN a.translated_content != '' THEN 1 ELSE 0 END as has_translation,
+                   a.local_path, a.retry_count
             FROM articles a WHERE {where}
             ORDER BY {order_by}
             LIMIT ? OFFSET ?
@@ -97,6 +98,8 @@ def list_articles(
         'human_processed': bool(r[15]),
         'topic_category': r[16] or '',
         'has_translation': bool(r[17]),
+        'local_path': r[18] or '',
+        'retry_count': r[19] or 0,
     } for r in rows]
 
     return {'articles': articles, 'total': count, 'page': page, 'limit': limit}
@@ -192,7 +195,7 @@ def update_article(article_id: int, body: ArticleUpdate):
 @router.get("/{article_id}/content")
 async def get_article_content(article_id: int):
     """获取文章内容 — 四级回退：DB缓存 → 磁盘文件 → 按需下载 → 返回链接。
-    未缓存文章首次打开时自动下载并存盘。"""
+    未缓存文章首次打开时自动下载并存盘。死链文章直接返回死链状态，不重试下载。"""
     db = get_db()
     with db._conn() as conn:
         row = conn.execute(
@@ -203,6 +206,22 @@ async def get_article_content(article_id: int):
         raise HTTPException(404, "article_not_found")
 
     url, local_path, text_content, translated_content, content_lang, content_status, ai_summary, ai_analyzed, human_processed = row
+
+    # 死链文章不尝试重新下载 — 直接返回死链状态
+    if content_status == 'dead':
+        return {
+            "url": url,
+            "content": "",
+            "translation": "",
+            "lang": content_lang or "",
+            "status": "dead_link",
+            "source": "link_only",
+            "summary": ai_summary or "",
+            "ai_analyzed": bool(ai_analyzed),
+            "human_processed": bool(human_processed),
+            "has_pdf": False,
+            "downloaded": False,
+        }
 
     def _has_pdf() -> bool:
         try:
@@ -675,3 +694,47 @@ async def serve_article_pdf(article_id: int):
         raise HTTPException(404, "pdf_not_found")
     return FileResponse(pdf_path, media_type="application/pdf",
                         filename=f'article_{article_id}.pdf')
+
+
+# ══════════════════════════════════════════════════════════════
+# 死链验证 — 复查所有 404/410 文章
+# ══════════════════════════════════════════════════════════════
+
+@router.post("/verify-dead")
+def verify_dead_links():
+    """复查所有疑似死链 (404/410/451)，返回可一键重试的列表。
+
+    不自动标记 dead — 由用户在 UI 中手动确认。
+    """
+    import sqlite3
+    conn = sqlite3.connect(config.db_path)
+    rows = conn.execute("""
+        SELECT id, title, url, source, local_path, retry_count, content_status
+        FROM articles
+        WHERE local_path LIKE '[ERR:HTTP 404%'
+           OR local_path LIKE '[ERR:HTTP 410%'
+           OR local_path LIKE '[ERR:HTTP 451%'
+        ORDER BY retry_count DESC, id
+    """).fetchall()
+    conn.close()
+
+    suspects = []
+    confirmed_dead = 0
+    for r in rows:
+        error = (r[4] or '[ERR:unknown]').replace('[ERR:', '').rstrip(']')
+        is_dead = r[6] == 'dead'
+        if is_dead:
+            confirmed_dead += 1
+        suspects.append({
+            'id': r[0], 'title': r[1], 'url': r[2], 'source': r[3],
+            'error': error, 'retry_count': r[5] or 0,
+            'is_dead': is_dead,
+        })
+
+    return {
+        'total': len(suspects),
+        'confirmed_dead': confirmed_dead,
+        'suspects': suspects,
+        'note': 'retry_count≥2 的文章已被自动标记 dead。'
+                '如需解标记，调用 PATCH /api/articles/{id} 设置 content_status 为空。',
+    }

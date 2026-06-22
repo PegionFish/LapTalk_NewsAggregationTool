@@ -457,7 +457,7 @@ def retry_articles_batch(body: dict):
                     # Playwright fallback for retryable HTTP errors
                     if res.get('error'):
                         err = res['error']
-                        fallback_triggers = ('403', 'timed out', 'Connection refused',
+                        fallback_triggers = ('403', '405', 'timed out', 'Connection refused',
                                              'Connection reset', 'Service Unavailable')
                         if any(k in err for k in fallback_triggers):
                             _log_retry(f"#{aid} 🎭 HTTP 失败，尝试 Playwright 渲染...")
@@ -473,10 +473,33 @@ def retry_articles_batch(body: dict):
 
                     if res.get('error'):
                         conn2 = _conn()
-                        conn2.execute(
-                            "UPDATE articles SET local_path=?, content_fetched_at=? WHERE id=?",
-                            (f"[ERR:{res['error']}]", _dt.now().isoformat(timespec='seconds'), aid)
-                        )
+                        # 递增 retry_count；404/410/451 连续 ≥2 次标记 dead
+                        DEAD_ERRORS = {404, 410, 451}
+                        err_code = None
+                        for code in DEAD_ERRORS:
+                            if f'HTTP {code}' in res['error']:
+                                err_code = code
+                                break
+                        if err_code is not None:
+                            conn2.execute("""
+                                UPDATE articles SET
+                                    local_path=?, content_fetched_at=?,
+                                    retry_count = CASE
+                                        WHEN local_path LIKE ('[ERR:HTTP ' || ? || '%') THEN retry_count + 1
+                                        ELSE 1
+                                    END
+                                WHERE id=?
+                            """, (f"[ERR:{res['error']}]", _dt.now().isoformat(timespec='seconds'),
+                                  str(err_code), aid))
+                            rc = conn2.execute("SELECT retry_count FROM articles WHERE id=?", (aid,)).fetchone()
+                            if rc and rc[0] >= 2:
+                                conn2.execute("UPDATE articles SET content_status='dead' WHERE id=?", (aid,))
+                                _log_retry(f"#{aid} 💀 HTTP {err_code} ×{rc[0]} → 标记 dead")
+                        else:
+                            conn2.execute("""
+                                UPDATE articles SET local_path=?, content_fetched_at=?, retry_count=retry_count+1
+                                WHERE id=?
+                            """, (f"[ERR:{res['error']}]", _dt.now().isoformat(timespec='seconds'), aid))
                         conn2.commit()
                         conn2.close()
                         _log_retry(f"#{aid} ❌ {res['error']}")
@@ -512,6 +535,13 @@ def retry_articles_batch(body: dict):
                     return {"status": "ok", "aid": aid, "lang": lang, "size_kb": len(html)//1024}
 
                 except Exception as e:
+                    conn2 = _conn()
+                    conn2.execute(
+                        "UPDATE articles SET retry_count=retry_count+1 WHERE id=?",
+                        (aid,)
+                    )
+                    conn2.commit()
+                    conn2.close()
                     _log_retry(f"#{aid} ❌ {str(e)[:300]}")
                     time.sleep(random.uniform(2, 5))
                     return {"status": "fail", "aid": aid, "error": str(e)[:300]}

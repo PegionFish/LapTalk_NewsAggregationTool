@@ -69,7 +69,6 @@ def download_page(url: str, retries: int = 2, timeout: int = 300) -> dict:
                 'User-Agent': config.user_agent,
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                 'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-                'Accept-Encoding': 'identity',
             })
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 raw = resp.read()
@@ -217,16 +216,42 @@ MAX_WORKERS = 8  # 并行下载线程数
 
 
 def _fetch_single(args):
-    """单篇文章下载（供线程池调用）。"""
+    """单篇文章下载（供线程池调用）。失败时递增 retry_count，连续 ≥2 次 404/410 标记 dead。"""
     aid, title, url, src, content_dir, db_path = args
     if not can_fetch(url):
         return {'aid': aid, 'status': 'skip', 'msg': 'blocked'}
 
     res = download_page(url)
     if res['error']:
+        # 递增 retry_count 并检查是否应标记 dead
+        DEAD_CODES = {404, 410, 451}
+        err_code = None
+        for code in DEAD_CODES:
+            if f'HTTP {code}' in res['error']:
+                err_code = code
+                break
         conn = sqlite3.connect(db_path)
-        conn.execute("UPDATE articles SET local_path=? WHERE id=?",
-                     (f'[ERR:{res["error"]}]', aid))
+        if err_code is not None:
+            # 同类型错误递增计数
+            conn.execute("""
+                UPDATE articles SET
+                    local_path=?, content_fetched_at=?,
+                    retry_count = CASE
+                        WHEN local_path LIKE ('[ERR:HTTP ' || ? || '%') THEN retry_count + 1
+                        ELSE 1
+                    END
+                WHERE id=?
+            """, (f'[ERR:{res["error"]}]', datetime.now().isoformat(timespec='seconds'),
+                  str(err_code), aid))
+            # 检查是否该标记 dead
+            rc = conn.execute("SELECT retry_count FROM articles WHERE id=?", (aid,)).fetchone()
+            if rc and rc[0] >= 2:
+                conn.execute("UPDATE articles SET content_status='dead' WHERE id=?", (aid,))
+        else:
+            conn.execute("""
+                UPDATE articles SET local_path=?, content_fetched_at=?, retry_count=retry_count+1
+                WHERE id=?
+            """, (f'[ERR:{res["error"]}]', datetime.now().isoformat(timespec='seconds'), aid))
         conn.commit()
         conn.close()
         return {'aid': aid, 'status': 'error', 'msg': res['error'][:80]}

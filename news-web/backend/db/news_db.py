@@ -511,6 +511,7 @@ class NewsDB:
                 LEFT JOIN article_events ae ON a.id = ae.article_id
                 WHERE ae.article_id IS NULL
                 AND a.category NOT IN ('platform_hotlists', 'bilibili_videos')
+                AND (a.content_status IS NULL OR a.content_status != 'dead')
             """).fetchall()
             if not unlinked:
                 return 0
@@ -1272,13 +1273,15 @@ class NewsDB:
             articles = conn.execute(
                 "SELECT COUNT(*) FROM articles WHERE category NOT IN ('platform_hotlists', 'bilibili_videos')"
                 " AND (ai_filtered IS NULL OR ai_filtered != -1)"
+                " AND (content_status IS NULL OR content_status != 'dead')"
             ).fetchone()[0]
-            # 仅统计 RSS 文章关联的事件，排除热榜/B站视频 + AI 已拒绝的文章
+            # 仅统计 RSS 文章关联的事件，排除热榜/B站视频 + AI 已拒绝 + 死链文章
             events = conn.execute("""
                 SELECT COUNT(DISTINCT ae.event_id) FROM article_events ae
                 JOIN articles a ON a.id = ae.article_id
                 WHERE a.category NOT IN ('platform_hotlists', 'bilibili_videos')
                 AND (a.ai_filtered IS NULL OR a.ai_filtered != -1)
+                AND (a.content_status IS NULL OR a.content_status != 'dead')
             """).fetchone()[0]
             active = conn.execute("""
                 SELECT COUNT(DISTINCT ae.event_id) FROM article_events ae
@@ -1286,6 +1289,7 @@ class NewsDB:
                 JOIN events e ON e.id = ae.event_id
                 WHERE a.category NOT IN ('platform_hotlists', 'bilibili_videos')
                 AND (a.ai_filtered IS NULL OR a.ai_filtered != -1)
+                AND (a.content_status IS NULL OR a.content_status != 'dead')
                 AND e.status = 'active'
             """).fetchone()[0]
             verified = conn.execute(
@@ -1323,6 +1327,11 @@ class NewsDB:
                 " AND (local_path IS NULL OR local_path = '')"
                 " AND (ai_filtered IS NULL OR ai_filtered != -1)"
             ).fetchone()[0]
+            # 死链文章（content_status='dead'）
+            cache_dead = conn.execute(
+                "SELECT COUNT(*) FROM articles WHERE content_status='dead'"
+                " AND category NOT IN ('platform_hotlists', 'bilibili_videos')"
+            ).fetchone()[0]
             return {
                 'articles': articles,
                 'events': events,
@@ -1335,6 +1344,7 @@ class NewsDB:
                 'cache_translated': cache_translated,
                 'cache_pending': cache_pending,
                 'cache_failed': cache_failed,
+                'cache_dead': cache_dead,
             }
 
     def get_recent_articles(self, limit: int = 20) -> list:
