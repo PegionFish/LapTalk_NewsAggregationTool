@@ -37,6 +37,7 @@ export default function ArticlePane({ article, onClose }: Props) {
   const iframeLoadHandled = useRef(false);   // 追踪当前 src 的 load 事件是否已处理
 
   useEffect(() => {
+    console.log('[ArticlePane] article changed, resetting state. id:', article?.id);
     setLoaded(false);
     setShowTranslation(false);
     setContent(null);
@@ -75,19 +76,28 @@ export default function ArticlePane({ article, onClose }: Props) {
   }, [article, onClose]);
 
   const handleIframeLoad = useCallback(() => {
+    console.log('[ArticlePane] handleIframeLoad — setting loaded=true. fallbackCheckDone:', fallbackCheckDone.current);
     setLoaded(true);
-    if (fallbackCheckDone.current) return;
+    if (fallbackCheckDone.current) {
+      console.log('[ArticlePane] fallbackCheckDone already true, skipping detection');
+      return;
+    }
     fallbackCheckDone.current = true;
 
     try {
       const iframe = iframeRef.current;
-      if (!iframe?.contentDocument) return;
+      if (!iframe?.contentDocument) {
+        console.warn('[ArticlePane] contentDocument is null');
+        return;
+      }
       const doc = iframe.contentDocument;
       const body = doc.body?.textContent || '';
+      console.log('[ArticlePane] document body length:', body.length, 'title:', doc.title);
 
       // 检测 challenge meta 标签（后端 fallback 页标记）
       const chalMeta = doc.querySelector('meta[name="x-challenge"]');
       if (chalMeta) {
+        console.log('[ArticlePane] challenge meta detected:', chalMeta.getAttribute('content'));
         setIsChallenge(true);
         setChallengeType(chalMeta.getAttribute('content') || 'unknown');
         setChallengeReason(doc.body?.querySelector('h3')?.textContent || '需要人机验证');
@@ -95,6 +105,7 @@ export default function ArticlePane({ article, onClose }: Props) {
       }
 
       if (body.includes('内容暂未缓存') || body.includes('无法获取此页面')) {
+        console.log('[ArticlePane] fallback text detected');
         setIsFallback(true);
         const links = doc.querySelectorAll('a');
         links.forEach(a => {
@@ -102,8 +113,12 @@ export default function ArticlePane({ article, onClose }: Props) {
             setOriginalUrl(a.href);
           }
         });
+      } else {
+        console.log('[ArticlePane] content looks normal — article loaded successfully');
       }
-    } catch {}
+    } catch (e) {
+      console.error('[ArticlePane] handleIframeLoad error:', e);
+    }
   }, []);
 
   const handleOpenOriginal = useCallback(() => {
@@ -189,46 +204,39 @@ export default function ArticlePane({ article, onClose }: Props) {
     requestAnimationFrame(() => { syncingRef.current = false; });
   }, []);
 
-  useEffect(() => {
-    const iframe = iframeRef.current;
-    if (!iframe) return;
-
-    let timeoutId: ReturnType<typeof setTimeout>;
-
-    const onLoad = () => {
-      if (iframeLoadHandled.current) return;
-      iframeLoadHandled.current = true;
-      clearTimeout(timeoutId);
-      handleIframeLoad();
-      try {
-        iframe.contentDocument?.addEventListener('scroll', handleIframeScroll);
-      } catch {}
-    };
-
-    // 修复竞态条件：如果 iframe 在绑定监听器之前已经加载完毕，直接触发
-    if (iframe.contentDocument?.readyState === 'complete' || iframe.contentDocument?.readyState === 'interactive') {
-      onLoad();
-    } else {
-      iframe.addEventListener('load', onLoad);
+  // 当 iframe 加载完成时，处理 fallback/challenge 检测并附加滚动同步
+  const handleIframeOnLoad = useCallback(() => {
+    console.log('[ArticlePane] handleIframeOnLoad. iframeLoadHandled:', iframeLoadHandled.current);
+    if (iframeLoadHandled.current) return;
+    iframeLoadHandled.current = true;
+    handleIframeLoad();
+    try {
+      iframeRef.current?.contentDocument?.addEventListener('scroll', handleIframeScroll);
+    } catch (e) {
+      console.warn('[ArticlePane] scroll listener attach failed:', e);
     }
+  }, [handleIframeLoad, handleIframeScroll]);
 
-    // 兜底超时：10 秒后强制执行，防止任何情况下 spinner 永转
-    timeoutId = setTimeout(() => {
+  // 超时兜底：10 秒后强制执行
+  useEffect(() => {
+    if (!article) return;
+    const timeoutId = setTimeout(() => {
       if (!iframeLoadHandled.current) {
-        console.warn('[ArticlePane] iframe load timeout — forcing loaded state');
-        onLoad();
+        console.warn('[ArticlePane] iframe load timeout — forcing');
+        handleIframeOnLoad();
       }
     }, 10000);
+    return () => clearTimeout(timeoutId);
+  }, [article?.id, handleIframeOnLoad]);
 
+  // 清理滚动监听
+  useEffect(() => {
     return () => {
-      iframeLoadHandled.current = true;
-      clearTimeout(timeoutId);
-      iframe.removeEventListener('load', onLoad);
       try {
-        iframe.contentDocument?.removeEventListener('scroll', handleIframeScroll);
+        iframeRef.current?.contentDocument?.removeEventListener('scroll', handleIframeScroll);
       } catch {}
     };
-  }, [handleIframeLoad, handleIframeScroll]);
+  }, [handleIframeScroll]);
 
   if (!article) return null;
 
@@ -414,6 +422,7 @@ export default function ArticlePane({ article, onClose }: Props) {
               style={{ width: '100%', height: '100%', border: 'none' }}
               sandbox="allow-same-origin allow-popups"
               title={article.title}
+              onLoad={handleIframeOnLoad}
             />
           </div>
 
