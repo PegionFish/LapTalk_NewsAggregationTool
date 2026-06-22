@@ -17,6 +17,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPORTS_DIR = os.path.join(SCRIPT_DIR, 'hot_reports')
 
 sys.path.insert(0, SCRIPT_DIR)
+sys.path.insert(0, os.path.dirname(SCRIPT_DIR))  # backend/ — news_db 需要导入 utils
 sys.path.insert(0, os.path.join(os.path.dirname(SCRIPT_DIR), 'db'))  # 从 db/ 目录导入 news_db
 from news_db import NewsDB
 
