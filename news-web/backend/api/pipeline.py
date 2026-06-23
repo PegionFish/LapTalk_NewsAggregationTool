@@ -80,6 +80,23 @@ def _unlock(task_type: str):
     task_lock.release(task_type)
 
 
+def _force_reset(task_type: str, state: dict) -> dict:
+    """强制重置卡住的任务状态 — 清除内存状态、锁、DB 持久化。
+
+    用于任务线程已死亡但状态未清理的场景（进程崩溃恢复、未捕获异常等）。
+    返回操作结果信息。
+    """
+    import json
+    was_running = state.get("running", False)
+    state["running"] = False
+    state["current"] = "已强制重置"
+    state.setdefault("log", []).append(f"[{datetime.now().strftime('%H:%M:%S')}] ⚡ 管理员强制重置")
+    task_lock.release(task_type)
+    task_state.clear(task_type)
+    logger.warning(f"[ForceReset] Task '{task_type}' force-reset (was_running={was_running})")
+    return {"ok": True, "message": f"任务 '{task_type}' 已强制重置", "was_running": was_running}
+
+
 def _conn():
     """创建带超时配置的数据库连接，防止 WAL 并发写锁导致数据丢失。"""
     return get_db_connection(config.db_path)
@@ -569,6 +586,13 @@ def cancel_batch_translate():
     return {"ok": True, "message": "翻译任务已取消"}
 
 
+@router.post("/batch-translate/force-reset")
+def force_reset_batch_translate():
+    """强制重置卡住的翻译任务。"""
+    global _translate_state
+    return _force_reset('translate', _translate_state)
+
+
 @router.post("/batch-analyze")
 def start_batch_analyze():
     """启动批量分析 — 遍历所有有文本内容但未 AI 分析的文章。"""
@@ -623,6 +647,13 @@ def cancel_batch_analyze():
     _analyze_state["cancelled"] = True
     _log(_analyze_state, "🛑 收到取消请求 — 完成当前文章后停止")
     return {"ok": True, "message": "分析任务已取消"}
+
+
+@router.post("/batch-analyze/force-reset")
+def force_reset_batch_analyze():
+    """强制重置卡住的分析任务。"""
+    global _analyze_state
+    return _force_reset('analyze', _analyze_state)
 
 
 @router.get("/build-chains/status")
@@ -1461,6 +1492,13 @@ def cancel_batch_clean():
     return {"ok": True, "message": "清洗任务已取消"}
 
 
+@router.post("/batch-clean/force-reset")
+def force_reset_batch_clean():
+    """强制重置卡住的清洗任务 — 清除内存状态、锁、DB 持久化。"""
+    global _clean_state
+    return _force_reset('clean', _clean_state)
+
+
 # ═════════════════════════════════════════════════════════
 # 统一全流程 — 清洗 → 翻译 → 关键词 → 分类 → 评分 → 分析 → 聚类 → 摘要 → 链
 # ═════════════════════════════════════════════════════════
@@ -1549,6 +1587,25 @@ def cancel_batch_ai_full():
         st["cancelled"] = True
     _log(_full_state, "🛑 收到取消请求 — 完成当前步骤后停止")
     return {"ok": True, "message": "全流程任务已取消"}
+
+
+@router.post("/batch-ai-full/force-reset")
+def force_reset_batch_ai_full():
+    """强制重置卡住的全流程任务 — 传播到所有步骤。"""
+    global _full_state, _clean_state, _translate_state, _analyze_state
+    global _kw_state, _cls_state, _score_state, _recluster_state
+    global _evt_sum_state, _rank_state, _chain_state
+    # 重置所有子步骤
+    for task_type, st in [('clean', _clean_state), ('translate', _translate_state),
+                           ('analyze', _analyze_state), ('keywords', _kw_state),
+                           ('classify', _cls_state), ('score', _score_state),
+                           ('recluster', _recluster_state),
+                           ('summarize_events', _evt_sum_state),
+                           ('rank_events', _rank_state), ('build_chains', _chain_state)]:
+        _force_reset(task_type, st)
+    return _force_reset('ai_full', _full_state)
+
+
 
 
 @router.get("/batch-ai-full/status")

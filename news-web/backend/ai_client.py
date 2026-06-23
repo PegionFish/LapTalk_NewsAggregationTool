@@ -34,7 +34,7 @@ def get_client() -> OpenAI:
     return OpenAI(
         base_url=config.openai_base_url,
         api_key=config.openai_api_key or 'sk-placeholder',
-        timeout=300.0,
+        timeout=1800.0,  # 30 分钟 — 适配慢速模型 token 生成
     )
 
 
@@ -260,10 +260,11 @@ def clean_article_content(html: str) -> str:
 
     利用 DeepSeek V3.2 160K 上下文直接处理完整 HTML 结构，
     保留标题、段落、链接、图片、引用、列表等核心内容标签。
+    启用深度思考模式，充分利用慢速模型的高质量推理能力。
     返回仅含文章正文的 HTML 片段，不包含 <html>/<head>/<body>。
     """
     # 截断超长 HTML，为 prompt 和响应留出余量（160K tokens ≈ 480K chars）
-    # 先用更保守的限制，减少超时概率；在段落边界截断
+    # 80K chars ≈ 27K tokens，留足 130K+ 给响应和思维链
     MAX_HTML_CHARS = 80000
     if len(html) > MAX_HTML_CHARS:
         # 尝试在段落/标签边界截断，避免截断在标签中间
@@ -305,10 +306,11 @@ def clean_article_content(html: str) -> str:
     )
 
     return chat(
-        prompt,
+        _with_deep_thinking(prompt),
         system_prompt=system_prompt,
-        max_tokens=16384,       # 足够长的文章输出
+        max_tokens=32768,       # 大输出容纳长文 + 思维链，30 分钟超时兜底
         temperature=0.05,       # 低温度确保确定性提取
+        enable_thinking=True,   # 启用深度思考 — 提升清洗质量
     )
 
 
