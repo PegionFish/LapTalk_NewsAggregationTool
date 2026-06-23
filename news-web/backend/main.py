@@ -29,13 +29,13 @@ async def lifespan(app: FastAPI):
     if config.db_path:
         ensure_schema(config.db_path)
         task_state.set_db_path(config.db_path)
-    if not os.environ.get('NEWS_WEB_TESTING'):
+    if os.environ.get('NEWS_WEB_TESTING', '0') not in ('1', 'true', 'yes'):
         try:
             start_scheduler()
         except Exception as e:
             logger.exception(f"start_scheduler failed: {e}")
     yield
-    if not os.environ.get('NEWS_WEB_TESTING'):
+    if os.environ.get('NEWS_WEB_TESTING', '0') not in ('1', 'true', 'yes'):
         stop_scheduler()
 
 app = FastAPI(title="News Aggregation Web", lifespan=lifespan)
