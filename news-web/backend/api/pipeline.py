@@ -1376,15 +1376,12 @@ def _batch_clean():
 
             # 直接将原始 HTML 传给 AI — AI 的 system prompt 已明确要求移除
             # 脚本/广告/导航等非正文元素，本地预清理反而破坏结构、浪费算力
-            # 流式回调：输出进度到 log — content 正文 + thinking 思维链分开显示
-            def _stream_log(text: str, content_n: int, thinking_n: int) -> None:
-                parts = [f"{content_n//1024}KB"]
-                if thinking_n:
-                    parts.append(f"思考{thinking_n//1024}KB")
-                _log(_clean_state, f"#{aid} 📡 生成中... {' | '.join(parts)}")
-
+            # Nex-N2-Pro 不支持 SSE 流式，改用前后日志记录耗时
+            _log(_clean_state, f"#{aid} 📡 AI 清洗中... (HTML {len(html)//1024}KB)")
             try:
-                cleaned = clean_article_content(html, on_stream=_stream_log)
+                t0 = time.time()
+                cleaned = clean_article_content(html)
+                _log(_clean_state, f"#{aid} 📡 完成 ({time.time()-t0:.0f}s, 输出 {len(cleaned)//1024}KB)")
                 if cleaned and len(cleaned) > 100:
                     db2 = _conn()
                     db2.execute("UPDATE news_articles SET ai_cleaned_content=? WHERE id=?", (cleaned, aid))
