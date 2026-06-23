@@ -305,12 +305,14 @@ def clean_article_content(html: str) -> str:
         f"{html}"
     )
 
+    # 注意：清洗是结构性提取任务，不启用深度思考。
+    # 深度思考会增加大量推理 token（耗时 ×3~5），对提取质量提升微乎其微。
+    # 大 max_tokens 确保长文输出不被截断，160K 上下文中有充足余量。
     return chat(
-        _with_deep_thinking(prompt),
+        prompt,
         system_prompt=system_prompt,
-        max_tokens=32768,       # 大输出容纳长文 + 思维链，30 分钟超时兜底
+        max_tokens=65536,       # 充分利用 160K 上下文 — 长文清洗不截断
         temperature=0.05,       # 低温度确保确定性提取
-        enable_thinking=True,   # 启用深度思考 — 提升清洗质量
     )
 
 
