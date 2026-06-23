@@ -1210,6 +1210,9 @@ def _batch_clean():
 
         cache_dir = config.content_cache_path
 
+        retry_counts: dict[int, int] = {}
+        retry_queue: list[tuple[int, str, str]] = []
+
         for idx, (aid, title, local_path) in enumerate(rows, 1):
             _clean_state["current"] = f"#{aid} {title[:50]}"
             html_path = os.path.join(cache_dir, os.path.basename(local_path))
@@ -1258,12 +1261,48 @@ def _batch_clean():
                 else:
                     _log(_clean_state, f"#{aid} ⚠️ AI 返回空")
                     _clean_state["done"] += 1
+                    db2 = _conn()
+                    db2.execute("UPDATE news_articles SET ai_cleaned_content='[ERR:AI_EMPTY]' WHERE id=?", (aid,))
+                    db2.commit()
+                    db2.close()
             except Exception as e:
+                if _is_request_timeout_error(e) and _queue_timeout_retry(
+                    _clean_state, aid, retry_counts, task_type='clean'
+                ):
+                    retry_queue.append((aid, title, html))
+                    continue
                 _log(_clean_state, f"#{aid} ❌ {str(e)[:120]}")
                 _clean_state["failed"] += 1
 
             if idx < len(rows):
                 time.sleep(5)
+
+        # 重试队列：处理超时的文章
+        for aid, title, html in retry_queue:
+            _clean_state["current"] = f"#{aid} {title[:50]}"
+            _log(_clean_state, f"#{aid} 🔄 重试清洗...")
+            try:
+                cleaned = clean_article_content(html)
+                if cleaned and len(cleaned) > 100:
+                    cleaned = _sanitize_html(cleaned)
+                    db2 = _conn()
+                    db2.execute("UPDATE news_articles SET ai_cleaned_content=? WHERE id=?", (cleaned, aid))
+                    db2.commit()
+                    db2.close()
+                    _log(_clean_state, f"#{aid} ✅ {title[:40]} [{len(cleaned)//1024}KB]")
+                    _clean_state["done"] += 1
+                else:
+                    _log(_clean_state, f"#{aid} ⚠️ 重试后 AI 返回空")
+                    _clean_state["done"] += 1
+                    db2 = _conn()
+                    db2.execute("UPDATE news_articles SET ai_cleaned_content='[ERR:AI_EMPTY]' WHERE id=?", (aid,))
+                    db2.commit()
+                    db2.close()
+            except Exception as e:
+                _log(_clean_state, f"#{aid} ❌ 重试失败: {str(e)[:120]}")
+                _clean_state["failed"] += 1
+            time.sleep(3)  # 重试间短延迟
+
     except Exception as e:
         _log(_clean_state, f"清洗异常: {str(e)[:200]}")
     finally:

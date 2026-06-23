@@ -263,9 +263,22 @@ def clean_article_content(html: str) -> str:
     返回仅含文章正文的 HTML 片段，不包含 <html>/<head>/<body>。
     """
     # 截断超长 HTML，为 prompt 和响应留出余量（160K tokens ≈ 480K chars）
-    MAX_HTML_CHARS = 120000
+    # 先用更保守的限制，减少超时概率；在段落边界截断
+    MAX_HTML_CHARS = 80000
     if len(html) > MAX_HTML_CHARS:
-        html = html[:MAX_HTML_CHARS]
+        # 尝试在段落/标签边界截断，避免截断在标签中间
+        truncated = html[:MAX_HTML_CHARS]
+        # 找到最后一个完整的 > 标签闭合
+        last_close = truncated.rfind('>')
+        if last_close > MAX_HTML_CHARS * 0.8:
+            truncated = truncated[:last_close + 1]
+        # 找到最后一个段落/标题结尾
+        for tag in ('</p>', '</div>', '</section>', '</article>', '</h2>', '</h3>', '</li>'):
+            pos = truncated.rfind(tag)
+            if pos > MAX_HTML_CHARS * 0.7:
+                truncated = truncated[:pos + len(tag)]
+                break
+        html = truncated
 
     system_prompt = (
         "你是一个新闻文章内容提取专家。"
