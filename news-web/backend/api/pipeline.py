@@ -548,7 +548,8 @@ def get_batch_translate_status():
         """).fetchone()[0]
         db.close()
         return {"running": True, "total": total, "done": done, "failed": 0,
-                "current": _translate_state["current"], "log": _translate_state["log"]}
+                "current": _translate_state["current"], "log": _translate_state["log"],
+                "cancelled": _translate_state.get("cancelled", False)}
     return dict(_translate_state)
 
 
@@ -599,7 +600,8 @@ def get_batch_analyze_status():
         """).fetchone()[0]
         db.close()
         return {"running": True, "total": total, "done": done, "failed": 0,
-                "current": _analyze_state["current"], "log": _analyze_state["log"]}
+                "current": _analyze_state["current"], "log": _analyze_state["log"],
+                "cancelled": _analyze_state.get("cancelled", False)}
     return dict(_analyze_state)
 
 
@@ -1400,7 +1402,8 @@ def get_batch_clean_status():
         """).fetchone()[0]
         db.close()
         return {"running": True, "total": total + done, "done": done, "failed": 0,
-                "current": _clean_state["current"], "log": _clean_state["log"]}
+                "current": _clean_state["current"], "log": _clean_state["log"],
+                "cancelled": _clean_state.get("cancelled", False)}
     return dict(_clean_state)
 
 
