@@ -167,29 +167,44 @@ PUT  /api/settings/ai
 POST /api/settings/ai/test
 ```
 
-`POST /api/settings/ai/test` 请求体：
+`POST /api/settings/ai/test` 不区分 `test-ai` 和 `test-translation`，而是统一测试所有已配置且启用的 AI 入口。每个入口执行对应 API Call，并返回逐个入口的测试结果。
+
+返回示例：
 
 ```json
 {
-  "endpoint_key": "keyword_extraction",
-  "prompt": "返回 JSON：{\"ok\":true}",
-  "expected_json": true
+  "ok": false,
+  "summary": {
+    "total": 10,
+    "passed": 7,
+    "failed": 2,
+    "skipped": 1
+  },
+  "results": [
+    {
+      "endpoint_key": "keyword_extraction",
+      "ok": true,
+      "model": "Qwen/Qwen3.5-35B-A3B",
+      "response": "{\"ok\":true}",
+      "elapsed_ms": 1234
+    },
+    {
+      "endpoint_key": "translation",
+      "ok": false,
+      "error": "API 调用失败：401 Unauthorized",
+      "elapsed_ms": 980
+    },
+    {
+      "endpoint_key": "rss_prefilter",
+      "ok": null,
+      "skipped": true,
+      "reason": "入口未启用"
+    }
+  ]
 }
 ```
 
-返回：
-
-```json
-{
-  "ok": true,
-  "endpoint_key": "keyword_extraction",
-  "model": "Qwen/Qwen3.5-35B-A3B",
-  "response": "{\"ok\":true}",
-  "elapsed_ms": 1234
-}
-```
-
-如果入口未启用或 API Key 为空，应返回明确的不可测试原因，而不是调用空端点。
+如果某个入口未启用、API Key 为空或模型为空，不应调用空端点，而应标记为 skipped 或 failed，并在结果中说明原因。
 
 ### 3.4 前端职责
 
@@ -252,12 +267,12 @@ news-web/frontend/src/pages/settings/
 
 ### 4.3 测试连接
 
-1. 用户点击某个入口的“测试连接”。
-2. 前端调用 `POST /api/settings/ai/test`，传入入口 key。
-3. 后端读取该入口当前编辑态或已保存配置。
-4. 后端调用对应 OpenAI 兼容接口。
-5. 返回成功、响应摘要和耗时。
-6. 前端展示成功或失败原因。
+1. 用户在 AI 设置面板点击“测试所有 AI 入口”。
+2. 前端调用 `POST /api/settings/ai/test`。
+3. 后端读取所有入口当前编辑态或已保存配置。
+4. 后端逐个执行对应 OpenAI 兼容 API Call。
+5. 后端返回总体结果和每个入口的独立结果。
+6. 前端展示通过、失败、跳过的入口数量，并在卡片上标记具体失败原因。
 
 ### 4.4 导入配置
 
@@ -334,10 +349,13 @@ POST /api/settings/test-translation
 
 ### 6.3 连通性测试
 
-- 入口未启用：返回 `ok=false`，提示入口未启用。
-- API Key 为空：返回 `ok=false`，提示 API Key 未配置。
-- 请求失败：返回 `ok=false` 和简短错误。
-- 请求成功：返回 `ok=true`、模型名、响应摘要和耗时。
+统一测试接口返回总体结果和每个入口的独立结果：
+
+- 入口未启用：标记为 `skipped`，说明入口未启用。
+- API Key 为空：标记为 `skipped` 或 `failed`，说明 API Key 未配置。
+- 模型为空：标记为 `failed`，说明模型未配置。
+- 请求失败：该入口 `ok=false`，返回简短错误。
+- 请求成功：该入口 `ok=true`，返回模型名、响应摘要和耗时。
 
 ## 7. 测试计划
 
@@ -351,8 +369,10 @@ POST /api/settings/test-translation
 4. 保存 `***` 不覆盖真实 Key。
 5. 保存空字符串会清空 Key。
 6. 旧 `/api/settings` 仍可用。
-7. 入口注册表包含当前所有入口。
-8. 无效入口 key 返回 400 或明确错误。
+7. `POST /api/settings/ai/test` 统一测试所有启用入口。
+8. 测试接口返回通过、失败、跳过数量和每个入口的独立结果。
+9. 入口注册表包含当前所有入口。
+10. 无效入口 key 返回 400 或明确错误。
 
 ### 7.2 前端验证
 
@@ -368,6 +388,8 @@ cd news-web/frontend && npm run build
 - 每个入口卡片可编辑。
 - 高级参数可展开/收起。
 - 从其他入口导入配置不会立即保存。
+- “测试所有 AI 入口”按钮可触发统一测试。
+- 测试结果显示通过、失败、跳过数量和每个入口的独立结果。
 - 保存后状态刷新。
 - API Key 显示为 `***`。
 
@@ -408,6 +430,7 @@ cd news-web && python -m pytest tests/backend/test_api.py -v
 - 每个入口可独立配置 OpenAI 兼容 endpoint、API Key、model。
 - thinking、JSON 输出、目标语言等参数按入口显示和保存。
 - 可以从其他入口导入配置。
+- 统一测试入口会测试所有启用模块的 API Call，并反馈每个入口的问题。
 - API Key 掩码规则正确。
 - 旧设置接口仍可用。
 - 后端配置映射有测试覆盖。
