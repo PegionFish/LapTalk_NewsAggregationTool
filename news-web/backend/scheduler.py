@@ -143,6 +143,7 @@ async def _backup_db():
 
 def start_scheduler():
     """Start scheduler if any schedule is enabled in config."""
+    print(f"[SCHEDULER DEBUG] start_scheduler() called, running={scheduler.running}", flush=True)
     pipeline_enabled = config.pipeline_schedule_enabled
     ai_enabled = config.ai_cron_enabled
 
