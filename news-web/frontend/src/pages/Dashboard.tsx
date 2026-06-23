@@ -140,6 +140,36 @@ export default function Dashboard() {
 
   const handleClean  = startPoll(api.startBatchClean, pollClean, cleanTimer, setCleanRunning);
 
+  // ═══ 取消 & 强制重置处理 ═══
+  const makeCancelHandler = (cancelFn: () => Promise<any>, name: string) => async () => {
+    try {
+      const r = await cancelFn();
+      showToast(r?.message || `${name} 取消请求已发送`);
+    } catch { showToast(`${name} 取消失败`); }
+  };
+  const makeForceResetHandler = (
+    resetFn: () => Promise<any>,
+    setRunning: (v: boolean) => void,
+    timer: ReturnType<typeof useRef<ReturnType<typeof setInterval>>>,
+    name: string,
+  ) => async () => {
+    try {
+      const r = await resetFn();
+      setRunning(false);
+      clearInterval(timer.current);
+      showToast(r?.message || `${name} 已强制重置`);
+    } catch { showToast(`${name} 强制重置失败`); }
+  };
+
+  const handleCancelClean = makeCancelHandler(api.cancelBatchClean, '内容清洗');
+  const handleForceResetClean = makeForceResetHandler(api.forceResetBatchClean, setCleanRunning, cleanTimer, '内容清洗');
+  const handleCancelTranslate = makeCancelHandler(api.cancelBatchTranslate, '翻译');
+  const handleForceResetTranslate = makeForceResetHandler(api.forceResetBatchTranslate, setTranslating, transTimer, '翻译');
+  const handleCancelAnalyze = makeCancelHandler(api.cancelBatchAnalyze, '分析');
+  const handleForceResetAnalyze = makeForceResetHandler(api.forceResetBatchAnalyze, setAnalyzing, analyTimer, '分析');
+  const handleCancelFullAi = makeCancelHandler(api.cancelBatchAiFull, '全流程');
+  const handleForceResetFullAi = makeForceResetHandler(api.forceResetBatchAiFull, setFullRunning, fullTimer, '全流程');
+
   const progressPct = (done: number, total: number) => total > 0 ? Math.round((done / total) * 100) : 0;
 
   return (
@@ -203,14 +233,29 @@ export default function Dashboard() {
                 翻译 → 分析 → 关键词 → 分类 → 评分 → 聚类 → 摘要 → 构筑逻辑链
               </div>
             </div>
-            <Button
-              variant={fullRunning ? 'ghost' : 'primary'}
-              onClick={handleFullAi}
-              loading={fullRunning}
-              icon={fullRunning ? undefined : 'fa-play'}
-            >
-              {fullRunning ? '运行中...' : '启动全流程'}
-            </Button>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <Button
+                variant={fullRunning ? 'ghost' : 'primary'}
+                onClick={handleFullAi}
+                loading={fullRunning}
+                disabled={fullRunning}
+                icon={fullRunning ? undefined : 'fa-play'}
+              >
+                {fullRunning ? '运行中...' : '启动全流程'}
+              </Button>
+              {fullRunning && (
+                <>
+                  <Button variant="ghost" size="sm" icon="fa-stop" onClick={handleCancelFullAi}
+                    style={{ borderColor: 'var(--accent-orange)', color: 'var(--accent-orange)' }}>
+                    停止
+                  </Button>
+                  <Button variant="ghost" size="sm" icon="fa-bolt" onClick={handleForceResetFullAi}
+                    style={{ borderColor: 'var(--accent-red)', color: 'var(--accent-red)' }}>
+                    强制重置
+                  </Button>
+                </>
+              )}
+            </div>
           </div>
 
           {(fullRunning || fullState.total > 0) && (
@@ -272,15 +317,30 @@ export default function Dashboard() {
         <Card>
           <CardHeader icon="fa-magic" iconColor="var(--accent-blue)" title="AI 内容清洗" desc="LLM 提取纯净文章正文，去广告/导航/侧栏/弹窗" />
           <CardBody>
-            <Button
-              variant="ghost"
-              onClick={handleClean}
-              loading={cleanRunning}
-              icon="fa-play"
-              style={{ borderColor: 'var(--accent-blue)', color: 'var(--accent-blue)' }}
-            >
-              {cleanRunning ? '清洗中...' : '批量清洗所有已缓存文章'}
-            </Button>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <Button
+                variant="ghost"
+                onClick={handleClean}
+                loading={cleanRunning}
+                disabled={cleanRunning}
+                icon="fa-play"
+                style={{ borderColor: 'var(--accent-blue)', color: 'var(--accent-blue)' }}
+              >
+                {cleanRunning ? '清洗中...' : '批量清洗所有已缓存文章'}
+              </Button>
+              {cleanRunning && (
+                <>
+                  <Button variant="ghost" size="sm" icon="fa-stop" onClick={handleCancelClean}
+                    style={{ borderColor: 'var(--accent-orange)', color: 'var(--accent-orange)' }}>
+                    停止
+                  </Button>
+                  <Button variant="ghost" size="sm" icon="fa-bolt" onClick={handleForceResetClean}
+                    style={{ borderColor: 'var(--accent-red)', color: 'var(--accent-red)' }}>
+                    强制重置
+                  </Button>
+                </>
+              )}
+            </div>
             {cleanState.total > 0 && (
               <ProgressBar
                 done={cleanState.done}
@@ -298,14 +358,29 @@ export default function Dashboard() {
         <Card>
           <CardHeader icon="fa-language" iconColor="var(--accent-tertiary)" title="AI 批量翻译" desc="遍历英文文章 HTML，调用 API 翻译为中文" />
           <CardBody>
-            <Button
-              variant="green"
-              onClick={handleTranslate}
-              loading={translating}
-              icon="fa-play"
-            >
-              开始批量翻译
-            </Button>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <Button
+                variant="green"
+                onClick={handleTranslate}
+                loading={translating}
+                disabled={translating}
+                icon="fa-play"
+              >
+                开始批量翻译
+              </Button>
+              {translating && (
+                <>
+                  <Button variant="ghost" size="sm" icon="fa-stop" onClick={handleCancelTranslate}
+                    style={{ borderColor: 'var(--accent-orange)', color: 'var(--accent-orange)' }}>
+                    停止
+                  </Button>
+                  <Button variant="ghost" size="sm" icon="fa-bolt" onClick={handleForceResetTranslate}
+                    style={{ borderColor: 'var(--accent-red)', color: 'var(--accent-red)' }}>
+                    强制重置
+                  </Button>
+                </>
+              )}
+            </div>
             {transState.total > 0 && (
               <ProgressBar
                 done={transState.done}
@@ -323,14 +398,29 @@ export default function Dashboard() {
         <Card>
           <CardHeader icon="fa-brain" iconColor="var(--accent)" title="AI 批量分析" desc="遍历已提取文本的文章，生成结构化分析摘要" />
           <CardBody>
-            <Button
-              variant="primary"
-              onClick={handleAnalyze}
-              loading={analyzing}
-              icon="fa-play"
-            >
-              开始批量分析
-            </Button>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <Button
+                variant="primary"
+                onClick={handleAnalyze}
+                loading={analyzing}
+                disabled={analyzing}
+                icon="fa-play"
+              >
+                开始批量分析
+              </Button>
+              {analyzing && (
+                <>
+                  <Button variant="ghost" size="sm" icon="fa-stop" onClick={handleCancelAnalyze}
+                    style={{ borderColor: 'var(--accent-orange)', color: 'var(--accent-orange)' }}>
+                    停止
+                  </Button>
+                  <Button variant="ghost" size="sm" icon="fa-bolt" onClick={handleForceResetAnalyze}
+                    style={{ borderColor: 'var(--accent-red)', color: 'var(--accent-red)' }}>
+                    强制重置
+                  </Button>
+                </>
+              )}
+            </div>
             {analyState.total > 0 && (
               <ProgressBar
                 done={analyState.done}

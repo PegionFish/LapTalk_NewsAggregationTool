@@ -196,12 +196,18 @@ export const api = {
   // 批量 AI 处理
   startBatchTranslate: () => fetchJSON<{ ok: boolean; message: string; pending: number }>('/pipeline/batch-translate', { method: 'POST' }),
   getBatchTranslateStatus: () => fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string }>('/pipeline/batch-translate/status'),
+  cancelBatchTranslate: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/batch-translate/cancel', { method: 'POST' }),
+  forceResetBatchTranslate: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/batch-translate/force-reset', { method: 'POST' }),
 
   startBatchAnalyze: () => fetchJSON<{ ok: boolean; message: string; pending: number }>('/pipeline/batch-analyze', { method: 'POST' }),
   getBatchAnalyzeStatus: () => fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string }>('/pipeline/batch-analyze/status'),
+  cancelBatchAnalyze: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/batch-analyze/cancel', { method: 'POST' }),
+  forceResetBatchAnalyze: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/batch-analyze/force-reset', { method: 'POST' }),
 
   startBatchClean: () => fetchJSON<{ ok: boolean; message: string; pending: number }>('/pipeline/batch-clean', { method: 'POST' }),
   getBatchCleanStatus: () => fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string; log: string[] }>('/pipeline/batch-clean/status'),
+  cancelBatchClean: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/batch-clean/cancel', { method: 'POST' }),
+  forceResetBatchClean: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/batch-clean/force-reset', { method: 'POST' }),
 
   startBuildChains: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/build-chains', { method: 'POST' }),
   getBuildChainsStatus: () => fetchJSON<{ running: boolean; total_groups: number; chains_created: number; current: string }>('/pipeline/build-chains/status'),
@@ -222,6 +228,8 @@ export const api = {
 
   startBatchAiFull: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/batch-ai-full', { method: 'POST' }),
   getBatchAiFullStatus: () => fetchJSON<{ running: boolean; total: number; done: number; current: string; log: string[] }>('/pipeline/batch-ai-full/status'),
+  cancelBatchAiFull: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/batch-ai-full/cancel', { method: 'POST' }),
+  forceResetBatchAiFull: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/batch-ai-full/force-reset', { method: 'POST' }),
 
   startBatchAiFilter: () => fetchJSON<{ ok: boolean; message: string; pending: number }>('/pipeline/batch-ai-filter', { method: 'POST' }),
   getBatchAiFilterStatus: () => fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string; log: string[] }>('/pipeline/batch-ai-filter/status'),
