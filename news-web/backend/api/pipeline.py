@@ -38,14 +38,21 @@ def _sync_state(state: dict, task_type: str):
 def _is_request_timeout_error(exc: Exception) -> bool:
     return "request timed out" in str(exc).lower()
 
-def _queue_timeout_retry(state, item_id, retry_counts, max_retries=4, task_type=''):
+def _queue_retry(state, item_id, retry_counts, reason: str = '', max_retries: int = 4, task_type: str = '') -> bool:
+    """通用重试队列：超时、空返回、异常都回池子，最多重试 max_retries 次。"""
     count = retry_counts.get(item_id, 0) + 1
     retry_counts[item_id] = count
     if count <= max_retries:
-        _log(state, f"#{item_id} Request Timed Out, retry ({count}/{max_retries + 1})", task_type)
-        _log(state, f"#{item_id} 已排到队列末尾重试", task_type)
+        label = f"{reason}，" if reason else ""
+        _log(state, f"#{item_id} {label}排入重试队列 ({count}/{max_retries + 1})", task_type)
         return True
+    _log(state, f"#{item_id} 已达最大重试次数 ({count})，放弃", task_type)
     return False
+
+
+# 兼容旧名
+def _queue_timeout_retry(state, item_id, retry_counts, max_retries=4, task_type=''):
+    return _queue_retry(state, item_id, retry_counts, reason='Request Timed Out', max_retries=max_retries, task_type=task_type)
 
 def _new_state() -> dict:
     """创建后台任务进度状态。"""
@@ -1381,8 +1388,9 @@ def _batch_clean():
             try:
                 t0 = time.time()
                 cleaned = clean_article_content(html)
-                _log(_clean_state, f"#{aid} 📡 完成 ({time.time()-t0:.0f}s, 输出 {len(cleaned)//1024}KB)")
+                elapsed = time.time() - t0
                 if cleaned and len(cleaned) > 100:
+                    _log(_clean_state, f"#{aid} 📡 完成 ({elapsed:.0f}s, 输出 {len(cleaned)//1024}KB)")
                     db2 = _conn()
                     db2.execute("UPDATE news_articles SET ai_cleaned_content=? WHERE id=?", (cleaned, aid))
                     db2.commit()
@@ -1390,26 +1398,27 @@ def _batch_clean():
                     _log(_clean_state, f"#{aid} ✅ {title[:40]} [{len(cleaned)//1024}KB]")
                     _clean_state["done"] += 1
                 else:
-                    _log(_clean_state, f"#{aid} ⚠️ AI 返回空")
-                    _clean_state["done"] += 1
-                    db2 = _conn()
-                    db2.execute("UPDATE news_articles SET ai_cleaned_content='[ERR:AI_EMPTY]' WHERE id=?", (aid,))
-                    db2.commit()
-                    db2.close()
+                    _log(_clean_state, f"#{aid} ⚠️ AI 返回空 ({elapsed:.0f}s)")
+                    if _queue_retry(_clean_state, aid, retry_counts, reason='AI 返回空', task_type='clean'):
+                        retry_queue.append((aid, title, html))
+                    else:
+                        _clean_state["failed"] += 1
             except Exception as e:
-                if _is_request_timeout_error(e) and _queue_timeout_retry(
-                    _clean_state, aid, retry_counts, task_type='clean'
-                ):
+                reason = 'Request Timed Out' if _is_request_timeout_error(e) else type(e).__name__
+                if _queue_retry(_clean_state, aid, retry_counts, reason=reason, task_type='clean'):
                     retry_queue.append((aid, title, html))
-                    continue
-                _log(_clean_state, f"#{aid} ❌ {str(e)[:120]}")
-                _clean_state["failed"] += 1
+                else:
+                    _log(_clean_state, f"#{aid} ❌ {str(e)[:120]}")
+                    _clean_state["failed"] += 1
 
             if idx < len(rows):
                 time.sleep(5)
 
-        # 重试队列：处理超时的文章
-        for aid, title, html in retry_queue:
+        # 重试队列：超时 / 空返回 / 异常统一回池，while 循环支持重新入队
+        while retry_queue:
+            if _check_cancelled(_clean_state):
+                break
+            aid, title, html = retry_queue.pop(0)
             _clean_state["current"] = f"#{aid} {title[:50]}"
             _log(_clean_state, f"#{aid} 🔄 重试清洗...")
             try:
@@ -1422,16 +1431,18 @@ def _batch_clean():
                     _log(_clean_state, f"#{aid} ✅ {title[:40]} [{len(cleaned)//1024}KB]")
                     _clean_state["done"] += 1
                 else:
-                    _log(_clean_state, f"#{aid} ⚠️ 重试后 AI 返回空")
-                    _clean_state["done"] += 1
-                    db2 = _conn()
-                    db2.execute("UPDATE news_articles SET ai_cleaned_content='[ERR:AI_EMPTY]' WHERE id=?", (aid,))
-                    db2.commit()
-                    db2.close()
+                    if _queue_retry(_clean_state, aid, retry_counts, reason='重试后仍空', task_type='clean'):
+                        retry_queue.append((aid, title, html))
+                    else:
+                        _clean_state["failed"] += 1
             except Exception as e:
-                _log(_clean_state, f"#{aid} ❌ 重试失败: {str(e)[:120]}")
-                _clean_state["failed"] += 1
-            time.sleep(3)  # 重试间短延迟
+                reason = 'Request Timed Out' if _is_request_timeout_error(e) else type(e).__name__
+                if _queue_retry(_clean_state, aid, retry_counts, reason=reason, task_type='clean'):
+                    retry_queue.append((aid, title, html))
+                else:
+                    _log(_clean_state, f"#{aid} ❌ 重试耗尽: {str(e)[:120]}")
+                    _clean_state["failed"] += 1
+            time.sleep(5)
 
     except Exception as e:
         _log(_clean_state, f"清洗异常: {str(e)[:200]}")
