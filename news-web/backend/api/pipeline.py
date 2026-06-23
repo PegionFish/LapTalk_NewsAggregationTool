@@ -528,6 +528,10 @@ def start_batch_translate():
     db.close()
 
     task_state.init_state('translate', total=pending)
+    # 在启动线程前设置运行状态，避免前端轮询时拿到 running=false 提前停止轮询
+    _translate_state["running"] = True
+    _translate_state["total"] = pending
+    _translate_state["current"] = "启动中..."
     threading.Thread(target=_batch_translate, daemon=True).start()
     return {"ok": True, "message": f"启动批量翻译，预计 {pending} 篇", "pending": pending}
 
@@ -581,6 +585,9 @@ def start_batch_analyze():
     """).fetchone()[0]
     db.close()
     task_state.init_state('analyze', total=pending)
+    _analyze_state["running"] = True
+    _analyze_state["total"] = pending
+    _analyze_state["current"] = "启动中..."
     threading.Thread(target=_batch_analyze, daemon=True).start()
     return {"ok": True, "message": f"启动批量分析，预计 {pending} 篇", "pending": pending}
 
@@ -639,6 +646,8 @@ def start_build_chains():
     if not ok:
         return {"ok": False, "message": msg}
     task_state.init_state('build_chains')
+    _chain_state["running"] = True
+    _chain_state["current"] = "初始分组中..."
     threading.Thread(target=_build_logic_chains, daemon=True).start()
     return {"ok": True, "message": "开始构筑逻辑链"}
 
@@ -1123,6 +1132,9 @@ def start_batch_ai_filter():
     """).fetchone()[0]
     db.close()
     task_state.init_state('ai_filter', total=n)
+    _filter_state["running"] = True
+    _filter_state["total"] = n
+    _filter_state["current"] = "启动中..."
     threading.Thread(target=_batch_ai_filter, daemon=True).start()
     return {"ok": True, "message": f"启动 AI 预筛选，预计 {n} 篇", "pending": n}
 
@@ -1155,6 +1167,9 @@ def start_batch_keywords():
     if not ok: return {"ok": False, "message": msg}
     db = _conn(); n = db.execute("SELECT COUNT(*) FROM news_articles WHERE content_status IN ('fetched', 'translated') AND (ai_keywords IS NULL OR ai_keywords='')").fetchone()[0]; db.close()
     task_state.init_state('keywords', total=n)
+    _kw_state["running"] = True
+    _kw_state["total"] = n
+    _kw_state["current"] = "启动中..."
     threading.Thread(target=_batch_ai_keywords, daemon=True).start()
     return {"ok": True, "message": f"启动 AI 关键词提取，预计 {n} 篇", "pending": n}
 
@@ -1166,6 +1181,9 @@ def start_batch_classify():
     if not ok: return {"ok": False, "message": msg}
     db = _conn(); n = db.execute("SELECT COUNT(*) FROM news_articles WHERE content_status IN ('fetched', 'translated') AND (ai_category IS NULL OR ai_category='')").fetchone()[0]; db.close()
     task_state.init_state('classify', total=n)
+    _cls_state["running"] = True
+    _cls_state["total"] = n
+    _cls_state["current"] = "启动中..."
     threading.Thread(target=_batch_ai_classify, daemon=True).start()
     return {"ok": True, "message": f"启动 AI 分类，预计 {n} 篇", "pending": n}
 
@@ -1177,6 +1195,9 @@ def start_batch_score():
     if not ok: return {"ok": False, "message": msg}
     db = _conn(); n = db.execute("SELECT COUNT(*) FROM news_articles WHERE content_status IN ('fetched', 'translated') AND (ai_priority_score IS NULL OR ai_priority_score=0.0)").fetchone()[0]; db.close()
     task_state.init_state('score', total=n)
+    _score_state["running"] = True
+    _score_state["total"] = n
+    _score_state["current"] = "启动中..."
     threading.Thread(target=_batch_ai_score, daemon=True).start()
     return {"ok": True, "message": f"启动 AI 评分，预计 {n} 篇", "pending": n}
 
@@ -1188,6 +1209,9 @@ def start_batch_recluster():
     if not ok: return {"ok": False, "message": msg}
     db = _conn(); n = db.execute("SELECT COUNT(*) FROM news_articles a LEFT JOIN news_article_events ae ON a.id=ae.article_id WHERE ae.article_id IS NULL AND a.content_status IN ('fetched', 'translated')").fetchone()[0]; db.close()
     task_state.init_state('recluster', total=n)
+    _recluster_state["running"] = True
+    _recluster_state["total"] = n
+    _recluster_state["current"] = "启动中..."
     threading.Thread(target=_batch_ai_recluster, daemon=True).start()
     return {"ok": True, "message": f"启动智能重聚类，预计 {n} 篇", "pending": n}
 
@@ -1199,6 +1223,9 @@ def start_batch_summarize_events():
     if not ok: return {"ok": False, "message": msg}
     db = _conn(); n = db.execute("SELECT COUNT(*) FROM events WHERE article_count>=2 AND (ai_summary IS NULL OR ai_summary='')").fetchone()[0]; db.close()
     task_state.init_state('summarize_events', total=n)
+    _evt_sum_state["running"] = True
+    _evt_sum_state["total"] = n
+    _evt_sum_state["current"] = "启动中..."
     threading.Thread(target=_batch_ai_summarize_events, daemon=True).start()
     return {"ok": True, "message": f"启动事件摘要，预计 {n} 个事件", "pending": n}
 
@@ -1221,6 +1248,8 @@ def start_batch_rank_events():
     ok, msg = _check_and_lock('rank_events')
     if not ok: return {"ok": False, "message": msg}
     task_state.init_state('rank_events')
+    _rank_state["running"] = True
+    _rank_state["current"] = "启动中..."
     threading.Thread(target=_batch_ai_rank_events, daemon=True).start()
     return {"ok": True, "message": "启动全景图事件优先级排序"}
 
@@ -1383,6 +1412,9 @@ def start_batch_clean():
     """).fetchone()[0]
     db.close()
     task_state.init_state('clean', total=pending)
+    _clean_state["running"] = True
+    _clean_state["total"] = pending
+    _clean_state["current"] = "启动中..."
     threading.Thread(target=_batch_clean, daemon=True).start()
     return {"ok": True, "message": f"启动内容清洗，预计 {pending} 篇", "pending": pending}
 
@@ -1483,6 +1515,10 @@ def start_batch_ai_full():
     if not ok:
         return {"ok": False, "message": msg}
     task_state.init_state('ai_full', total=10)
+    # 在启动线程前设置运行状态，避免前端轮询时拿到 running=false 提前停止轮询
+    _full_state["running"] = True
+    _full_state["total"] = 10
+    _full_state["current"] = "启动中..."
     threading.Thread(target=_batch_ai_full, daemon=True).start()
     return {"ok": True, "message": "启动全流程 AI 处理 — 清洗→翻译→分析→关键词→分类→评分→聚类→摘要→链"}
 
