@@ -97,6 +97,15 @@ def _force_reset(task_type: str, state: dict) -> dict:
     return {"ok": True, "message": f"任务 '{task_type}' 已强制重置", "was_running": was_running}
 
 
+def _reset_state(state: dict, **extra) -> dict:
+    """就地重置任务状态 dict，保持引用不丢失（避免 _batch_ai_full 的 st 悬空）。"""
+    state.clear()
+    state.update({"running": True, "total": 0, "done": 0, "failed": 0, "current": "", "log": [],
+                  "cancelled": False})
+    if extra:
+        state.update(extra)
+    return state
+
 def _conn():
     """创建带超时配置的数据库连接，防止 WAL 并发写锁导致数据丢失。"""
     return get_db_connection(config.db_path)
@@ -108,7 +117,7 @@ def _conn():
 
 def _batch_translate():
     global _translate_state
-    _translate_state = {"running": True, "total": 0, "done": 0, "failed": 0, "current": "", "log": []}
+    _reset_state(_translate_state)
 
     try:
         cache_dir = config.content_cache_path
@@ -279,7 +288,7 @@ def _batch_translate():
 
 def _batch_analyze():
     global _analyze_state
-    _analyze_state = {"running": True, "total": 0, "done": 0, "failed": 0, "current": "", "log": []}
+    _reset_state(_analyze_state)
 
     try:
         db = _conn()
@@ -391,7 +400,7 @@ _rank_state  = _new_state()
 def _build_logic_chains():
     """基于全景图识别逻辑链分组，一次 API 调用替代逐组 Jaccard 聚类。"""
     global _chain_state
-    _chain_state = {"running": True, "total_groups": 0, "chains_created": 0, "current": "", "log": []}
+    _reset_state(_chain_state, total_groups=0, chains_created=0)
 
     try:
         db = _conn()
@@ -469,7 +478,7 @@ def _build_logic_chains():
 def _batch_ai_rank_events():
     """基于全景图对所有事件做全局优先级排序。"""
     global _rank_state
-    _rank_state = {"running": True, "total": 0, "done": 0, "failed": 0, "current": "", "log": []}
+    _reset_state(_rank_state)
     try:
         db = _conn()
         from ai_client import build_panoramic_context, rank_events_panoramic
@@ -701,7 +710,7 @@ _clean_state      = _new_state()
 
 def _batch_ai_keywords():
     global _kw_state
-    _kw_state = {"running": True, "total": 0, "done": 0, "failed": 0, "current": "", "log": []}
+    _reset_state(_kw_state)
     try:
         db = _conn()
         rows = db.execute("SELECT id, title, text_content, source FROM news_articles WHERE content_status IN ('fetched', 'translated') AND (ai_keywords IS NULL OR ai_keywords = '') ORDER BY id DESC").fetchall(); db.close()
@@ -767,7 +776,7 @@ def _batch_ai_keywords():
 
 def _batch_ai_classify():
     global _cls_state
-    _cls_state = {"running": True, "total": 0, "done": 0, "failed": 0, "current": "", "log": []}
+    _reset_state(_cls_state)
     try:
         db = _conn()
         rows = db.execute("SELECT id, title, text_content FROM news_articles WHERE content_status IN ('fetched', 'translated') AND (ai_category IS NULL OR ai_category = '') ORDER BY id DESC").fetchall(); db.close()
@@ -833,7 +842,7 @@ def _batch_ai_classify():
 
 def _batch_ai_score():
     global _score_state
-    _score_state = {"running": True, "total": 0, "done": 0, "failed": 0, "current": "", "log": []}
+    _reset_state(_score_state)
     try:
         db = _conn()
         rows = db.execute("SELECT id, title, text_content, source, fetched_at FROM news_articles WHERE content_status IN ('fetched', 'translated') AND (ai_priority_score IS NULL OR ai_priority_score = 0.0) ORDER BY id DESC").fetchall(); db.close()
@@ -907,7 +916,7 @@ def _batch_ai_score():
 
 def _batch_ai_recluster():
     global _recluster_state
-    _recluster_state = {"running": True, "total": 0, "done": 0, "failed": 0, "current": "", "log": []}
+    _reset_state(_recluster_state)
     try:
         db = _conn()
         unlinked = db.execute("SELECT a.id, a.title FROM news_articles a LEFT JOIN news_article_events ae ON a.id=ae.article_id WHERE ae.article_id IS NULL AND a.content_status IN ('fetched', 'translated')").fetchall()
@@ -1017,7 +1026,7 @@ def _batch_ai_recluster():
 
 def _batch_ai_summarize_events():
     global _evt_sum_state
-    _evt_sum_state = {"running": True, "total": 0, "done": 0, "failed": 0, "current": "", "log": []}
+    _reset_state(_evt_sum_state)
     try:
         db = _conn()
         events = db.execute("SELECT id, article_count FROM events WHERE article_count >= 2 AND (ai_summary IS NULL OR ai_summary = '')").fetchall(); db.close()
@@ -1093,7 +1102,7 @@ def _batch_ai_summarize_events():
 def _batch_ai_filter():
     """对未筛选的文章标题批量调用 AI，标记通过/拒绝。"""
     global _filter_state
-    _filter_state = {"running": True, "total": 0, "done": 0, "failed": 0, "current": "", "log": []}
+    _reset_state(_filter_state)
     try:
         db = _conn()
         rows = db.execute("""
@@ -1305,7 +1314,7 @@ def get_batch_rank_events_status(): return dict(_rank_state)
 def _batch_clean():
     """批量清洗所有已缓存文章，LLM 提取纯净正文（去广告/导航/侧栏）。"""
     global _clean_state
-    _clean_state = {"running": True, "total": 0, "done": 0, "failed": 0, "current": "", "log": []}
+    _reset_state(_clean_state)
     try:
         db = _conn()
         rows = db.execute("""
@@ -1508,7 +1517,7 @@ _full_state = _new_state()
 def _batch_ai_full():
     """顺序执行全部 AI 处理步骤。每步检查是否有待处理项，无则跳过。"""
     global _full_state
-    _full_state = {"running": True, "total": 0, "done": 0, "failed": 0, "current": "", "log": [], "steps": []}
+    _reset_state(_full_state)
     step_names = ["内容清洗", "翻译", "AI 分析", "关键词提取", "智能分类", "优先级评分", "事件重聚类", "事件摘要", "全景图排序", "构筑逻辑链"]
     steps = [
         ("内容清洗", _batch_clean, _clean_state, 'clean'),
@@ -1536,12 +1545,14 @@ def _batch_ai_full():
         if _full_state["steps"]:
             _full_state["steps"][idx - 1]["status"] = "running"
         try:
-            fn()
+            # 子任务在独立线程中运行，主线程监控取消信号
+            import threading as _th
+            sub_thread = _th.Thread(target=fn, daemon=True)
+            sub_thread.start()
             # 等待子任务完成，检测取消信号（全流程取消 或 子任务单独取消）
             # 15s 宽限：超时后强制跳过，后续步骤不受阻
             grace = 0
             while st.get("running"):
-                # 仅读原始标志，不调 _check_cancelled（它会改 running=False 导致状态错乱）
                 if _full_state.get("cancelled") or st.get("cancelled"):
                     st["cancelled"] = True  # 确保传播
                     grace += 2
@@ -1552,16 +1563,16 @@ def _batch_ai_full():
                             _full_state["steps"][idx - 1]["status"] = "skipped"
                         break
                 time.sleep(2)
-            else:
-                # 子任务停止（正常完成 或 被取消）
+            # 给子线程 5s 收尾（join 不阻塞管道）
+            sub_thread.join(timeout=5)
+            # 判断退出原因：force-reset (skipped) 还是正常完成
+            if _full_state["steps"] and _full_state["steps"][idx - 1]["status"] != "skipped":
                 if st.get("cancelled") or _full_state.get("cancelled"):
                     _log(_full_state, f"⏭️ {label} 已跳过")
-                    if _full_state["steps"]:
-                        _full_state["steps"][idx - 1]["status"] = "skipped"
+                    _full_state["steps"][idx - 1]["status"] = "skipped"
                 else:
                     _log(_full_state, f"✅ {label} 完成")
-                    if _full_state["steps"]:
-                        _full_state["steps"][idx - 1]["status"] = "done"
+                    _full_state["steps"][idx - 1]["status"] = "done"
         except Exception as e:
             _log(_full_state, f"❌ {label} 异常: {str(e)[:120]}")
             if _full_state["steps"]:
