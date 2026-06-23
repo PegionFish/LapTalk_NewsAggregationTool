@@ -6,9 +6,10 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from typing import Any
 
-from openai import OpenAI
+from openai import OpenAI, RateLimitError
 
 from config import config
 from utils.text import extract_text_from_html
@@ -108,13 +109,8 @@ def chat(
     on_stream_chunk: "Callable[[str, int, int], None] | None" = None,
     model: str | None = None,  # None=使用全局 openai_model
 ) -> str:
-    """发送单轮聊天请求并返回助手文本。"""
-    from utils.rate_limiter import ai_rate_limiter as _rl
+    """发送单轮聊天请求并返回助手文本。遇到 429 自动等待 60s 重试。"""
     from typing import Callable
-
-    # 估算 token 消耗（输入 + 输出上限）
-    estimated = _rl.estimate_tokens(prompt + system_prompt) + max_tokens // 3  # 实际输出通常远小于 max
-    _rl.wait_if_needed(estimated)
 
     client = get_client()
     options = _request_options(
@@ -130,48 +126,39 @@ def chat(
         model=model,
     )
 
-    if stream_log and on_stream_chunk:
-        options["stream"] = True
-        # SiliconFlow 流式: delta.content(正文) + delta.reasoning_content(思维链)
-        accumulated = ""
-        thinking_chars = 0
-        last_report = 0
+    # ── 429 重试：最多 3 次，每次等 60s ──
+    for attempt in range(3):
         try:
-            stream = client.chat.completions.create(**options)
-            for chunk in stream:
-                if not chunk.choices:
-                    continue
-                delta = chunk.choices[0].delta
-                # 思维链不计入正文，但单独追踪
-                # SF 扩展字段，openai SDK 未建模 — 用 getattr 安全访问
-                reasoning = getattr(delta, 'reasoning_content', None) or ''
-                if reasoning:
-                    thinking_chars += len(reasoning)
-                if delta.content:
-                    accumulated += delta.content
-                    n = len(accumulated)
-                    # 首 500 chars 或每 2K chars 通知
-                    if n - last_report >= 2000 or (n >= 500 and last_report == 0):
-                        on_stream_chunk(accumulated, n, thinking_chars)
-                        last_report = n
-            # 最终回调
-            if accumulated and last_report < len(accumulated):
-                on_stream_chunk(accumulated, len(accumulated), thinking_chars)
-            # 流式模式无 usage 返回，按估算记录
-            _rl.record(estimated + thinking_chars // 3)
-            return accumulated
-        except Exception:
-            _rl.record(estimated + thinking_chars // 3)
-            raise
-    else:
-        resp = client.chat.completions.create(**options)
-        try:
-            usage = resp.usage
-            actual = (usage.prompt_tokens or 0) + (usage.completion_tokens or 0)
-            _rl.record(actual)
-        except Exception:
-            _rl.record(estimated)
-        return resp.choices[0].message.content or ""
+            if stream_log and on_stream_chunk:
+                options["stream"] = True
+                accumulated = ""
+                thinking_chars = 0
+                last_report = 0
+                stream = client.chat.completions.create(**options)
+                for chunk in stream:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    reasoning = getattr(delta, 'reasoning_content', None) or ''
+                    if reasoning:
+                        thinking_chars += len(reasoning)
+                    if delta.content:
+                        accumulated += delta.content
+                        n = len(accumulated)
+                        if n - last_report >= 2000 or (n >= 500 and last_report == 0):
+                            on_stream_chunk(accumulated, n, thinking_chars)
+                            last_report = n
+                if accumulated and last_report < len(accumulated):
+                    on_stream_chunk(accumulated, len(accumulated), thinking_chars)
+                return accumulated
+            else:
+                resp = client.chat.completions.create(**options)
+                return resp.choices[0].message.content or ""
+        except RateLimitError:
+            if attempt < 2:
+                time.sleep(60)
+            else:
+                raise
 
 
 def _strip_json(raw: str) -> str:
@@ -193,43 +180,36 @@ def _ai_json(
     response_format: dict[str, Any] | None = None,
     model: str | None = None,
 ) -> dict | list | None:
-    """调用 AI 并解析 JSON 返回；失败时返回 None。"""
-    # 若未显式传入格式且全局开关开启，自动启用 JSON object 输出。
+    """调用 AI 并解析 JSON 返回；失败时返回 None。遇到 429 等 60s 重试。"""
     if response_format is None and config.ai_json_response_format:
         response_format = {"type": "json_object"}
-    try:
-        from utils.rate_limiter import ai_rate_limiter as _rl
 
-        estimated = _rl.estimate_tokens(prompt + system_prompt) + max_tokens // 3  # 实际输出通常远小于 max
-        _rl.wait_if_needed(estimated)
-
-        client = get_client()
-        resp = client.chat.completions.create(
-            **_request_options(
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": prompt},
-                ],
-                max_tokens=max_tokens,
-                temperature=temperature,
-                enable_thinking=enable_thinking,
-                thinking_budget=thinking_budget,
-                response_format=response_format,
-                model=model,
-            )
-        )
-        # 记录真实 token 消耗
+    for attempt in range(3):
         try:
-            usage = resp.usage
-            actual = (usage.prompt_tokens or 0) + (usage.completion_tokens or 0)
-            _rl.record(actual)
+            client = get_client()
+            resp = client.chat.completions.create(
+                **_request_options(
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": prompt},
+                    ],
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    enable_thinking=enable_thinking,
+                    thinking_budget=thinking_budget,
+                    response_format=response_format,
+                    model=model,
+                )
+            )
+            raw = (resp.choices[0].message.content or "").strip()
+            return json.loads(_strip_json(raw))
+        except RateLimitError:
+            if attempt < 2:
+                time.sleep(60)
+            else:
+                return None
         except Exception:
-            _rl.record(estimated)
-
-        raw = (resp.choices[0].message.content or "").strip()
-        return json.loads(_strip_json(raw))
-    except Exception:
-        return None
+            return None
 
 
 def _with_deep_thinking(prompt: str) -> str:

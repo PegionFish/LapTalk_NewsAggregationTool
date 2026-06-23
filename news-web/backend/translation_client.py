@@ -27,32 +27,27 @@ def get_client() -> OpenAI:
 
 
 def _call_translate(client: OpenAI, content: str, system_prompt: str) -> str:
-    """单次 API 调用（含速率限制）。"""
-    from utils.rate_limiter import ai_rate_limiter as _rl
+    """单次 API 调用。遇到 429 等 60s 重试，最多 3 次。"""
+    from openai import RateLimitError
 
-    # 翻译输出通常与输入等长或略短，保守估算为输入的 1.2 倍
-    estimated = _rl.estimate_tokens(content + system_prompt) + _rl.estimate_tokens(content)
-    _rl.wait_if_needed(estimated)
-
-    resp = client.chat.completions.create(
-        model=config.translation_model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": content},
-        ],
-        temperature=0.05,
-        max_tokens=65536,
-        top_p=0.95,
-    )
-    # 记录真实 token 消耗
-    try:
-        usage = resp.usage
-        actual = (usage.prompt_tokens or 0) + (usage.completion_tokens or 0)
-        _rl.record(actual)
-    except Exception:
-        _rl.record(estimated)
-
-    return resp.choices[0].message.content or ""
+    for attempt in range(3):
+        try:
+            resp = client.chat.completions.create(
+                model=config.translation_model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": content},
+                ],
+                temperature=0.05,
+                max_tokens=65536,
+                top_p=0.95,
+            )
+            return resp.choices[0].message.content or ""
+        except RateLimitError:
+            if attempt < 2:
+                time.sleep(60)
+            else:
+                raise
 
 
 _TRANSLATE_SYSTEM_PROMPT = (
