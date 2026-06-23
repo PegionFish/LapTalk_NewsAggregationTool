@@ -210,11 +210,12 @@ def _batch_translate():
 
             if lang != 'en':
                 db2 = _conn()
-                db2.execute("UPDATE news_articles SET text_content=?, content_lang=? WHERE id=?",
-                           (html, lang, aid))
+                # translated_content 也填入原文，避免下次循环重复扫描
+                db2.execute("UPDATE news_articles SET text_content=?, translated_content=?, content_lang=? WHERE id=?",
+                           (html, html, lang, aid))
                 safe_commit(db2)
                 db2.close()
-                _log(_translate_state, f"#{aid} ⏭️ 非英文，存入 HTML")
+                _log(_translate_state, f"#{aid} ⏭️ 非英文，标记已处理")
                 _translate_state["done"] += 1
                 continue
 
