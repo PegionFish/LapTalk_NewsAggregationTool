@@ -145,8 +145,10 @@ def chat(
                     continue
                 delta = chunk.choices[0].delta
                 # 思维链不计入正文，但单独追踪
-                if delta.reasoning_content:
-                    thinking_chars += len(delta.reasoning_content)
+                # SF 扩展字段，openai SDK 未建模 — 用 getattr 安全访问
+                reasoning = getattr(delta, 'reasoning_content', None) or ''
+                if reasoning:
+                    thinking_chars += len(reasoning)
                 if delta.content:
                     accumulated += delta.content
                     n = len(accumulated)
