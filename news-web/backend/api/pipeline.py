@@ -49,7 +49,17 @@ def _queue_timeout_retry(state, item_id, retry_counts, max_retries=4, task_type=
 
 def _new_state() -> dict:
     """创建后台任务进度状态。"""
-    return {"running": False, "total": 0, "done": 0, "failed": 0, "current": "", "log": []}
+    return {"running": False, "total": 0, "done": 0, "failed": 0, "current": "", "log": [],
+            "cancelled": False}
+
+
+def _check_cancelled(state: dict) -> bool:
+    """检查任务是否被取消，如已取消则更新状态。"""
+    if state.get("cancelled"):
+        state["running"] = False
+        state["current"] = "已取消"
+        return True
+    return False
 
 
 # 模块级状态初始化
@@ -114,6 +124,9 @@ def _batch_translate():
         retry_queue: list[tuple[int, str, str]] = []
 
         for idx, (aid, title, local_path) in enumerate(rows, 1):
+            if _check_cancelled(_translate_state):
+                _log(_translate_state, "🛑 翻译任务已取消")
+                break
             html_path = os.path.join(cache_dir, os.path.basename(local_path))
             if not os.path.isfile(html_path):
                 _log(_translate_state, f"#{aid} ⚠️ HTML 文件不存在")
@@ -275,6 +288,9 @@ def _batch_analyze():
         retry_queue: list[tuple[int, str, str]] = []
 
         for idx, (aid, title, text) in enumerate(rows, 1):
+            if _check_cancelled(_analyze_state):
+                _log(_analyze_state, "🛑 分析任务已取消")
+                break
             _analyze_state["current"] = f"#{aid} {title[:50]}"
             _log(_analyze_state, f"#{aid} 📡 发送分析请求... ({len(text)} 字，{len(text)/1024:.1f}KB 正文)")
 
@@ -536,6 +552,17 @@ def get_batch_translate_status():
     return dict(_translate_state)
 
 
+@router.post("/batch-translate/cancel")
+def cancel_batch_translate():
+    """取消正在运行的批量翻译任务。"""
+    global _translate_state
+    if not _translate_state.get("running"):
+        return {"ok": False, "message": "没有正在运行的翻译任务"}
+    _translate_state["cancelled"] = True
+    _log(_translate_state, "🛑 收到取消请求 — 完成当前文章后停止")
+    return {"ok": True, "message": "翻译任务已取消"}
+
+
 @router.post("/batch-analyze")
 def start_batch_analyze():
     """启动批量分析 — 遍历所有有文本内容但未 AI 分析的文章。"""
@@ -574,6 +601,17 @@ def get_batch_analyze_status():
         return {"running": True, "total": total, "done": done, "failed": 0,
                 "current": _analyze_state["current"], "log": _analyze_state["log"]}
     return dict(_analyze_state)
+
+
+@router.post("/batch-analyze/cancel")
+def cancel_batch_analyze():
+    """取消正在运行的批量分析任务。"""
+    global _analyze_state
+    if not _analyze_state.get("running"):
+        return {"ok": False, "message": "没有正在运行的分析任务"}
+    _analyze_state["cancelled"] = True
+    _log(_analyze_state, "🛑 收到取消请求 — 完成当前文章后停止")
+    return {"ok": True, "message": "分析任务已取消"}
 
 
 @router.get("/build-chains/status")
@@ -632,6 +670,9 @@ def _batch_ai_keywords():
         retry_queue: list[tuple[int, str, str, str]] = []
 
         for idx, (aid, title, text, source) in enumerate(rows, 1):
+            if _check_cancelled(_kw_state):
+                _log(_kw_state, "🛑 关键词提取已取消")
+                break
             _kw_state["current"] = f"#{aid} {title[:50]}"
             if _hp_check(aid): _log(_kw_state, f"#{aid} ⏭️ 人工已处理"); _kw_state["done"] += 1; continue
             try:
@@ -695,6 +736,9 @@ def _batch_ai_classify():
         retry_queue: list[tuple[int, str, str]] = []
 
         for idx, (aid, title, text) in enumerate(rows, 1):
+            if _check_cancelled(_cls_state):
+                _log(_cls_state, "🛑 分类任务已取消")
+                break
             _cls_state["current"] = f"#{aid} {title[:50]}"
             if _hp_check(aid): _log(_cls_state, f"#{aid} ⏭️ 人工已处理"); _cls_state["done"] += 1; continue
             try:
@@ -758,6 +802,9 @@ def _batch_ai_score():
         retry_queue: list[tuple[int, str, str, str, str]] = []
 
         for idx, (aid, title, text, source, fetched_at) in enumerate(rows, 1):
+            if _check_cancelled(_score_state):
+                _log(_score_state, "🛑 评分任务已取消")
+                break
             _score_state["current"] = f"#{aid} {title[:50]}"
             if _hp_check(aid): _log(_score_state, f"#{aid} ⏭️ 人工已处理"); _score_state["done"] += 1; continue
             try:
@@ -1214,6 +1261,9 @@ def _batch_clean():
         retry_queue: list[tuple[int, str, str]] = []
 
         for idx, (aid, title, local_path) in enumerate(rows, 1):
+            if _check_cancelled(_clean_state):
+                _log(_clean_state, "🛑 任务已取消")
+                break
             _clean_state["current"] = f"#{aid} {title[:50]}"
             html_path = os.path.join(cache_dir, os.path.basename(local_path))
             if not os.path.isfile(html_path):
@@ -1354,6 +1404,17 @@ def get_batch_clean_status():
     return dict(_clean_state)
 
 
+@router.post("/batch-clean/cancel")
+def cancel_batch_clean():
+    """取消正在运行的内容清洗任务。"""
+    global _clean_state
+    if not _clean_state.get("running"):
+        return {"ok": False, "message": "没有正在运行的清洗任务"}
+    _clean_state["cancelled"] = True
+    _log(_clean_state, "🛑 收到取消请求 — 完成当前文章后停止")
+    return {"ok": True, "message": "清洗任务已取消"}
+
+
 # ═════════════════════════════════════════════════════════
 # 统一全流程 — 清洗 → 翻译 → 关键词 → 分类 → 评分 → 分析 → 聚类 → 摘要 → 链
 # ═════════════════════════════════════════════════════════
@@ -1382,6 +1443,9 @@ def _batch_ai_full():
     _full_state["total"] = len(steps)
     _log(_full_state, f"🚀 启动全流程 AI 处理 — 共 {len(steps)} 步")
     for idx, (label, fn, st) in enumerate(steps, 1):
+        if _check_cancelled(_full_state):
+            _log(_full_state, "🛑 全流程已取消")
+            break
         _log(_full_state, f"━━━ 步骤 {idx}/{len(steps)}: {label} ━━━")
         _full_state["current"] = f"{label} — 执行中..."
         _full_state["done"] = idx - 1
@@ -1418,6 +1482,22 @@ def start_batch_ai_full():
     task_state.init_state('ai_full', total=10)
     threading.Thread(target=_batch_ai_full, daemon=True).start()
     return {"ok": True, "message": "启动全流程 AI 处理 — 清洗→翻译→分析→关键词→分类→评分→聚类→摘要→链"}
+
+
+@router.post("/batch-ai-full/cancel")
+def cancel_batch_ai_full():
+    """取消全流程 — 传播到当前步骤。"""
+    global _full_state, _clean_state, _translate_state, _analyze_state
+    if not _full_state.get("running"):
+        return {"ok": False, "message": "没有正在运行的全流程任务"}
+    _full_state["cancelled"] = True
+    # 传播到各步骤
+    for st in [_clean_state, _translate_state, _analyze_state,
+               _kw_state, _cls_state, _score_state, _recluster_state,
+               _evt_sum_state, _rank_state, _chain_state]:
+        st["cancelled"] = True
+    _log(_full_state, "🛑 收到取消请求 — 完成当前步骤后停止")
+    return {"ok": True, "message": "全流程任务已取消"}
 
 
 @router.get("/batch-ai-full/status")
