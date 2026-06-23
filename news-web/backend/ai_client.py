@@ -31,11 +31,20 @@ _DEEP_THINKING_INSTRUCTION = (
 
 
 def get_client() -> OpenAI:
-    """获取 AI 分析专用 OpenAI 兼容客户端。"""
+    """获取 AI 分析专用 OpenAI 兼容客户端（SiliconFlow）。"""
     return OpenAI(
         base_url=config.openai_base_url,
         api_key=config.openai_api_key or 'sk-placeholder',
         timeout=1800.0,  # 30 分钟 — 适配慢速模型 token 生成
+    )
+
+
+def get_clean_client() -> OpenAI:
+    """获取内容清洗专用客户端（支持独立 endpoint，如 OpenRouter 1M 上下文模型）。"""
+    return OpenAI(
+        base_url=config.clean_base_url,
+        api_key=config.clean_api_key or config.openai_api_key or 'sk-placeholder',
+        timeout=1800.0,
     )
 
 
@@ -107,12 +116,14 @@ def chat(
     response_format: dict[str, Any] | None = None,
     stream_log: bool = False,
     on_stream_chunk: "Callable[[str, int, int], None] | None" = None,
-    model: str | None = None,  # None=使用全局 openai_model
+    model: str | None = None,
+    client: OpenAI | None = None,  # 传入则使用指定客户端（清洗用 OpenRouter 等）
 ) -> str:
     """发送单轮聊天请求并返回助手文本。遇到 429 自动等待 60s 重试。"""
     from typing import Callable
 
-    client = get_client()
+    if client is None:
+        client = get_client()
     options = _request_options(
         messages=[
             {"role": "system", "content": system_prompt},
@@ -310,7 +321,7 @@ def clean_article_content(html: str, on_stream: "Callable[[str, int, int], None]
     # 注意：清洗是结构性提取任务，不启用深度思考。
     # 深度思考会增加大量推理 token（耗时 ×3~5），对提取质量提升微乎其微。
     # 大 max_tokens 确保长文输出不被截断，160K 上下文中有充足余量。
-    # 模型：使用 config.clean_model（独立于分析/分类等使用的 openai_model）
+    # 模型+endpoint：使用 config.clean_model + 独立 API（支持 OpenRouter 1M 上下文模型）
     return chat(
         prompt,
         system_prompt=system_prompt,
@@ -319,7 +330,8 @@ def clean_article_content(html: str, on_stream: "Callable[[str, int, int], None]
         enable_thinking=True,
         stream_log=on_stream is not None,
         on_stream_chunk=on_stream,
-        model=config.clean_model,  # 清洗专用模型（Nex-N2-Pro）
+        model=config.clean_model,
+        client=get_clean_client(),  # 独立 endpoint + API key
     )
 
 
