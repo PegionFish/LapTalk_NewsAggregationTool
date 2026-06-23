@@ -104,37 +104,66 @@ def chat(
     enable_thinking: bool | None = None,
     thinking_budget: int | None = None,
     response_format: dict[str, Any] | None = None,
+    stream_log: bool = False,  # 启用流式输出，每 2K chars 回调一次
+    on_stream_chunk: "Callable[[str, int], None] | None" = None,
 ) -> str:
-    """发送单轮聊天请求并返回助手文本。"""
+    """发送单轮聊天请求并返回助手文本。
+
+    当 stream_log=True 且提供 on_stream_chunk 时，使用 SSE 流式接收，
+    每积累约 2K 字符调用 on_stream_chunk(total_text, accumulated_chars)。
+    """
     from utils.rate_limiter import ai_rate_limiter as _rl
+    from typing import Callable
 
     # 估算 token 消耗（输入 + 输出上限）
     estimated = _rl.estimate_tokens(prompt + system_prompt) + max_tokens
     _rl.wait_if_needed(estimated)
 
     client = get_client()
-    resp = client.chat.completions.create(
-        **_request_options(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=max_tokens,
-            temperature=temperature,
-            enable_thinking=enable_thinking,
-            thinking_budget=thinking_budget,
-            response_format=response_format,
-        )
+    options = _request_options(
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ],
+        max_tokens=max_tokens,
+        temperature=temperature,
+        enable_thinking=enable_thinking,
+        thinking_budget=thinking_budget,
+        response_format=response_format,
     )
-    # 从响应中记录真实 token 消耗
-    try:
-        usage = resp.usage
-        actual = (usage.prompt_tokens or 0) + (usage.completion_tokens or 0)
-        _rl.record(actual)
-    except Exception:
-        _rl.record(estimated)
 
-    return resp.choices[0].message.content or ""
+    if stream_log and on_stream_chunk:
+        options["stream"] = True
+        accumulated = ""
+        last_report = 0
+        try:
+            stream = client.chat.completions.create(**options)
+            for chunk in stream:
+                delta = chunk.choices[0].delta if chunk.choices else None
+                if delta and delta.content:
+                    accumulated += delta.content
+                    # 每 2K chars 或首次到 500 chars 时通知
+                    if len(accumulated) - last_report >= 2000 or (len(accumulated) >= 500 and last_report == 0):
+                        on_stream_chunk(accumulated, len(accumulated))
+                        last_report = len(accumulated)
+            # 最终回调
+            if accumulated and last_report < len(accumulated):
+                on_stream_chunk(accumulated, len(accumulated))
+            # 流式模式下的 token 估算（无 usage 返回）
+            _rl.record(estimated)
+            return accumulated
+        except Exception:
+            _rl.record(estimated)
+            raise
+    else:
+        resp = client.chat.completions.create(**options)
+        try:
+            usage = resp.usage
+            actual = (usage.prompt_tokens or 0) + (usage.completion_tokens or 0)
+            _rl.record(actual)
+        except Exception:
+            _rl.record(estimated)
+        return resp.choices[0].message.content or ""
 
 
 def _strip_json(raw: str) -> str:
@@ -255,13 +284,14 @@ def analyze_article(title: str, text: str) -> str:
     )
 
 
-def clean_article_content(html: str) -> str:
+def clean_article_content(html: str, on_stream: "Callable[[str, int], None] | None" = None) -> str:
     """将文章 HTML 送入 LLM，提取纯净正文（去广告/导航/侧栏/弹窗/评论）。
 
     利用 DeepSeek V3.2 160K 上下文直接处理完整 HTML 结构，
     保留标题、段落、链接、图片、引用、列表等核心内容标签。
-    启用深度思考模式，充分利用慢速模型的高质量推理能力。
     返回仅含文章正文的 HTML 片段，不包含 <html>/<head>/<body>。
+
+    传入 on_stream 回调可启用 SSE 流式输出，每 2K chars 触发一次。
     """
     # 截断超长 HTML，为 prompt 和响应留出余量（160K tokens ≈ 480K chars）
     # 80K chars ≈ 27K tokens，留足 130K+ 给响应和思维链
@@ -313,6 +343,8 @@ def clean_article_content(html: str) -> str:
         system_prompt=system_prompt,
         max_tokens=65536,       # 充分利用 160K 上下文 — 长文清洗不截断
         temperature=0.05,       # 低温度确保确定性提取
+        stream_log=on_stream is not None,
+        on_stream_chunk=on_stream,
     )
 
 

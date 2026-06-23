@@ -1376,8 +1376,12 @@ def _batch_clean():
 
             # 直接将原始 HTML 传给 AI — AI 的 system prompt 已明确要求移除
             # 脚本/广告/导航等非正文元素，本地预清理反而破坏结构、浪费算力
+            # 流式回调：每 2K chars 输出进度到 log，解决等待焦虑
+            def _stream_log(text: str, n: int) -> None:
+                _log(_clean_state, f"#{aid} 📡 生成中... {n//1024}KB")
+
             try:
-                cleaned = clean_article_content(html)
+                cleaned = clean_article_content(html, on_stream=_stream_log)
                 if cleaned and len(cleaned) > 100:
                     db2 = _conn()
                     db2.execute("UPDATE news_articles SET ai_cleaned_content=? WHERE id=?", (cleaned, aid))
