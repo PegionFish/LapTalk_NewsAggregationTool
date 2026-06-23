@@ -151,7 +151,7 @@ article_comments
 
 | 任务 | 模型 | API endpoint | 上下文 |
 |------|------|-------------|--------|
-| 内容清洗 | `config.openai_model` | `config.openai_base_url` (SiliconFlow) | 160K（超大 HTML 自动拆分绕开限制） |
+| 内容清洗 | `config.clean_model` (nex-agi/Nex-N2-Pro) | `config.openai_base_url` (SiliconFlow) | 160K（超大 HTML 自动拆分绕开限制） |
 | 翻译 | `config.translation_model` | `config.translation_base_url` | 160K |
 | AI 分析 | `config.openai_model` | `config.openai_base_url` (硅基流动) | 160K |
 | 关键词提取 | `config.simple_model` | `config.openai_base_url` | 256K |
@@ -261,15 +261,15 @@ article_comments
 29. **Linux 生产部署** — systemd 服务单元（安全加固: NoNewPrivileges + ProtectSystem + 日志双输出）+ Cockpit Web 管理插件（服务控制/调度配置/实时日志）
 30. **调度热生效** — Cockpit 插件保存调度配置后自动调用 `reload_scheduler()`，无需重启后端
 31. **三轨并行 AI 管道** — Nex(清洗) ∥ DeepSeek(翻译/分析/聚类/链) ∥ Qwen(关键词/分类/评分)，独立速率限制互不阻塞
-32. **清洗切回 SiliconFlow** — `clean_article_content` 改用 `get_client()` + `config.openai_model` (DeepSeek V3.2)，大 HTML 自动拆分绕开 160K 限制
-33. **梯度模型分配** — 清洗/翻译/分析/逻辑链用 DeepSeek V3.2(硅基流动)，关键词/分类/评分用 Qwen 3.5 35B(硅基流动)
+32. **清洗切回 SiliconFlow** — `clean_article_content` 使用 `get_client()` + `config.clean_model` (nex-agi/Nex-N2-Pro)，大 HTML 自动拆分绕开 160K 限制
+33. **梯度模型分配** — 清洗用 Nex-N2-Pro(SiliconFlow)，翻译/分析/逻辑链用 DeepSeek V3.2(硅基流动)，关键词/分类/评分用 Qwen 3.5 35B(硅基流动)
 34. **`_request_options` 始终显式传 `enable_thinking`** — 防止模型默认启用思考导致 token 耗尽
 35. **空返回+异常统一回池重试** — `_queue_retry()` 支持最多 5 次重试，关键词/分类/评分/清洗全覆盖
 36. **AI 处理优先用清洗后正文** — 关键词/分类/评分查询用 `COALESCE(ai_cleaned_content, text_content)`，优先取清洗后的正文
 37. **速率限制改为 SF 429 重试** — 移除本地 `RateLimiter` 预分配，API 调用遇 429 自动 sleep 60s 重试最多 3 次
 38. **NEWS_WEB_TESTING 布尔解析** — `'0'` 在 Python 中是 truthy，改为 `not in ('1', 'true', 'yes')` 判断
 39. **AsyncIOScheduler → BackgroundScheduler** — 解决 sync 端点中 `no running event loop` 问题
-40. **清洗切回 SiliconFlow + 大 HTML 拆分** — `clean_article_content` 改用 `get_client()` + `config.openai_model` (DeepSeek V3.2)，移除 `get_clean_client()`。超大 HTML（>180K 字符）在块级元素边界自动拆分为多块分别清洗后合并，绕开 160K 上下文限制。
+40. **清洗切回 SiliconFlow + 大 HTML 拆分** — `clean_article_content` 使用 `get_client()` + `config.clean_model` (nex-agi/Nex-N2-Pro)，移除 `get_clean_client()`。超大 HTML（>180K 字符）在块级元素边界自动拆分为多块分别清洗后合并，绕开 160K 上下文限制。
 
 ### 已知设计约束
 

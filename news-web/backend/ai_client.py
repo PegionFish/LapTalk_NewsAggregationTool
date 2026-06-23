@@ -387,7 +387,8 @@ def clean_article_content(html: str, on_stream: "Callable[[str, int, int], None]
                     max_tokens=65536,
                     temperature=0.05,
                     enable_thinking=True,
-                    # 不传 client/model，使用默认 SiliconFlow (get_client + openai_model)
+                    model=config.clean_model,
+                    # client 默认 get_client() → SiliconFlow
                 )
                 if result and len(result.strip()) > 50:
                     cleaned_parts.append(result.strip())
@@ -429,7 +430,8 @@ def clean_article_content(html: str, on_stream: "Callable[[str, int, int], None]
         enable_thinking=True,
         stream_log=on_stream is not None,
         on_stream_chunk=on_stream,
-        # 不传 client/model，使用默认 SiliconFlow (get_client + openai_model)
+        model=config.clean_model,
+        # client 默认 get_client() → SiliconFlow
     )
 
 
