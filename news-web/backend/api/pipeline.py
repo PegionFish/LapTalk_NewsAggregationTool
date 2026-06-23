@@ -1376,9 +1376,12 @@ def _batch_clean():
 
             # 直接将原始 HTML 传给 AI — AI 的 system prompt 已明确要求移除
             # 脚本/广告/导航等非正文元素，本地预清理反而破坏结构、浪费算力
-            # 流式回调：每 2K chars 输出进度到 log，解决等待焦虑
-            def _stream_log(text: str, n: int) -> None:
-                _log(_clean_state, f"#{aid} 📡 生成中... {n//1024}KB")
+            # 流式回调：输出进度到 log — content 正文 + thinking 思维链分开显示
+            def _stream_log(text: str, content_n: int, thinking_n: int) -> None:
+                parts = [f"{content_n//1024}KB"]
+                if thinking_n:
+                    parts.append(f"思考{thinking_n//1024}KB")
+                _log(_clean_state, f"#{aid} 📡 生成中... {' | '.join(parts)}")
 
             try:
                 cleaned = clean_article_content(html, on_stream=_stream_log)

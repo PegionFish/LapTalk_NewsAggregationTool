@@ -105,7 +105,7 @@ def chat(
     thinking_budget: int | None = None,
     response_format: dict[str, Any] | None = None,
     stream_log: bool = False,  # 启用流式输出，每 2K chars 回调一次
-    on_stream_chunk: "Callable[[str, int], None] | None" = None,
+    on_stream_chunk: "Callable[[str, int, int], None] | None" = None,  # (text, content_chars, thinking_chars)
 ) -> str:
     """发送单轮聊天请求并返回助手文本。
 
@@ -134,26 +134,34 @@ def chat(
 
     if stream_log and on_stream_chunk:
         options["stream"] = True
+        # SiliconFlow 流式: delta.content(正文) + delta.reasoning_content(思维链)
         accumulated = ""
+        thinking_chars = 0
         last_report = 0
         try:
             stream = client.chat.completions.create(**options)
             for chunk in stream:
-                delta = chunk.choices[0].delta if chunk.choices else None
-                if delta and delta.content:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                # 思维链不计入正文，但单独追踪
+                if delta.reasoning_content:
+                    thinking_chars += len(delta.reasoning_content)
+                if delta.content:
                     accumulated += delta.content
-                    # 每 2K chars 或首次到 500 chars 时通知
-                    if len(accumulated) - last_report >= 2000 or (len(accumulated) >= 500 and last_report == 0):
-                        on_stream_chunk(accumulated, len(accumulated))
-                        last_report = len(accumulated)
+                    n = len(accumulated)
+                    # 首 500 chars 或每 2K chars 通知
+                    if n - last_report >= 2000 or (n >= 500 and last_report == 0):
+                        on_stream_chunk(accumulated, n, thinking_chars)
+                        last_report = n
             # 最终回调
             if accumulated and last_report < len(accumulated):
-                on_stream_chunk(accumulated, len(accumulated))
-            # 流式模式下的 token 估算（无 usage 返回）
-            _rl.record(estimated)
+                on_stream_chunk(accumulated, len(accumulated), thinking_chars)
+            # 流式模式无 usage 返回，按估算记录
+            _rl.record(estimated + thinking_chars // 3)
             return accumulated
         except Exception:
-            _rl.record(estimated)
+            _rl.record(estimated + thinking_chars // 3)
             raise
     else:
         resp = client.chat.completions.create(**options)
@@ -284,14 +292,14 @@ def analyze_article(title: str, text: str) -> str:
     )
 
 
-def clean_article_content(html: str, on_stream: "Callable[[str, int], None] | None" = None) -> str:
+def clean_article_content(html: str, on_stream: "Callable[[str, int, int], None] | None" = None) -> str:
     """将文章 HTML 送入 LLM，提取纯净正文（去广告/导航/侧栏/弹窗/评论）。
 
     利用 DeepSeek V3.2 160K 上下文直接处理完整 HTML 结构，
     保留标题、段落、链接、图片、引用、列表等核心内容标签。
     返回仅含文章正文的 HTML 片段，不包含 <html>/<head>/<body>。
 
-    传入 on_stream 回调可启用 SSE 流式输出，每 2K chars 触发一次。
+    传入 on_stream(text, content_chars, thinking_chars) 回调启用 SSE 流式。
     """
     # 截断超长 HTML，为 prompt 和响应留出余量（160K tokens ≈ 480K chars）
     # 80K chars ≈ 27K tokens，留足 130K+ 给响应和思维链
