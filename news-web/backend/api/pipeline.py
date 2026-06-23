@@ -717,7 +717,15 @@ def _batch_ai_keywords():
     _reset_state(_kw_state)
     try:
         db = _conn()
-        rows = db.execute("SELECT id, title, text_content, source FROM news_articles WHERE content_status IN ('fetched', 'translated') AND (ai_keywords IS NULL OR ai_keywords = '') ORDER BY id DESC").fetchall(); db.close()
+        rows = db.execute("""
+            SELECT id, title,
+                   COALESCE(NULLIF(ai_cleaned_content, ''), text_content) as content,
+                   source
+            FROM news_articles
+            WHERE content_status IN ('fetched', 'translated')
+              AND (ai_keywords IS NULL OR ai_keywords = '')
+            ORDER BY id DESC
+        """).fetchall(); db.close()
         if not rows: _kw_state["running"] = False; return
         _kw_state["total"] = len(rows)
         _log(_kw_state, f"待提取关键词 {len(rows)} 篇")
@@ -789,7 +797,14 @@ def _batch_ai_classify():
     _reset_state(_cls_state)
     try:
         db = _conn()
-        rows = db.execute("SELECT id, title, text_content FROM news_articles WHERE content_status IN ('fetched', 'translated') AND (ai_category IS NULL OR ai_category = '') ORDER BY id DESC").fetchall(); db.close()
+        rows = db.execute("""
+            SELECT id, title,
+                   COALESCE(NULLIF(ai_cleaned_content, ''), text_content) as content
+            FROM news_articles
+            WHERE content_status IN ('fetched', 'translated')
+              AND (ai_category IS NULL OR ai_category = '')
+            ORDER BY id DESC
+        """).fetchall(); db.close()
         if not rows: _cls_state["running"] = False; return
         _cls_state["total"] = len(rows)
         _log(_cls_state, f"待分类 {len(rows)} 篇")
@@ -861,7 +876,15 @@ def _batch_ai_score():
     _reset_state(_score_state)
     try:
         db = _conn()
-        rows = db.execute("SELECT id, title, text_content, source, fetched_at FROM news_articles WHERE content_status IN ('fetched', 'translated') AND (ai_priority_score IS NULL OR ai_priority_score = 0.0) ORDER BY id DESC").fetchall(); db.close()
+        rows = db.execute("""
+            SELECT id, title,
+                   COALESCE(NULLIF(ai_cleaned_content, ''), text_content) as content,
+                   source, fetched_at
+            FROM news_articles
+            WHERE content_status IN ('fetched', 'translated')
+              AND (ai_priority_score IS NULL OR ai_priority_score = 0.0)
+            ORDER BY id DESC
+        """).fetchall(); db.close()
         if not rows: _score_state["running"] = False; return
         _score_state["total"] = len(rows)
         _log(_score_state, f"待评分 {len(rows)} 篇")
