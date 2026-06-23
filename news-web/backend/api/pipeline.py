@@ -573,12 +573,10 @@ def get_batch_translate_status():
             WHERE content_status IN ('fetched', 'translated')
               AND (translated_content IS NULL OR translated_content = '')
         """).fetchone()[0]
-        done = db.execute("""
-            SELECT COUNT(*) FROM news_articles
-            WHERE translated_content != ''
-        """).fetchone()[0]
         db.close()
-        return {"running": True, "total": total, "done": done, "failed": 0,
+        return {"running": True, "total": total,
+                "done": _translate_state.get("done", 0),
+                "failed": _translate_state.get("failed", 0),
                 "current": _translate_state["current"], "log": _translate_state["log"],
                 "cancelled": _translate_state.get("cancelled", False)}
     return dict(_translate_state)
@@ -637,11 +635,10 @@ def get_batch_analyze_status():
             WHERE content_status IN ('fetched', 'translated')
               AND (ai_analyzed IS NULL OR ai_analyzed = 0 OR ai_summary IS NULL OR ai_summary = '')
         """).fetchone()[0]
-        done = db.execute("""
-            SELECT COUNT(*) FROM news_articles WHERE ai_analyzed = 1 AND ai_summary != ''
-        """).fetchone()[0]
         db.close()
-        return {"running": True, "total": total, "done": done, "failed": 0,
+        return {"running": True, "total": total,
+                "done": _analyze_state.get("done", 0),
+                "failed": _analyze_state.get("failed", 0),
                 "current": _analyze_state["current"], "log": _analyze_state["log"],
                 "cancelled": _analyze_state.get("cancelled", False)}
     return dict(_analyze_state)
@@ -1479,12 +1476,10 @@ def get_batch_clean_status():
             WHERE content_status IN ('fetched', 'translated')
             AND (ai_cleaned_content IS NULL OR ai_cleaned_content = '')
         """).fetchone()[0]
-        done = db.execute("""
-            SELECT COUNT(*) FROM news_articles
-            WHERE ai_cleaned_content != '' AND ai_cleaned_content IS NOT NULL
-        """).fetchone()[0]
         db.close()
-        return {"running": True, "total": total + done, "done": done, "failed": 0,
+        return {"running": True, "total": total,
+                "done": _clean_state.get("done", 0),
+                "failed": _clean_state.get("failed", 0),
                 "current": _clean_state["current"], "log": _clean_state["log"],
                 "cancelled": _clean_state.get("cancelled", False)}
     return dict(_clean_state)
