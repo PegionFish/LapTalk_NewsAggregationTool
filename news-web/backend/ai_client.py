@@ -82,12 +82,11 @@ def _request_options(
     enabled = _thinking_enabled(enable_thinking)
     budget = _thinking_budget(thinking_budget)
     extra_body: dict[str, Any] = {}
-    if enabled:
-        extra_body["enable_thinking"] = True
-        if budget is not None:
-            extra_body["thinking_budget"] = budget
-    if extra_body:
-        options["extra_body"] = extra_body
+    # 始终显式设置 enable_thinking，避免模型默认行为与预期不符
+    extra_body["enable_thinking"] = enabled
+    if enabled and budget is not None:
+        extra_body["thinking_budget"] = budget
+    options["extra_body"] = extra_body
 
     # 仅当调用方显式传入 response_format 时才施加 JSON 格式；
     # chat() 不传此参数，回归纯文本输出，避免分析摘要等被强制 JSON 化。
@@ -377,13 +376,13 @@ def extract_keywords_ai(title: str, text: str = "", source: str = "", model: str
         user_prompt += "\n"
     user_prompt += "提取 5-15 个技术关键词，返回 JSON 数组。关键词应覆盖：产品名、公司名、技术名、核心概念。"
     result = _ai_json(
-        user_prompt,  # 关键词提取不需要深度思考模板
+        user_prompt,
         "你是科技新闻关键词提取引擎。基于标题+正文提取技术关键词。"
         "只输出 JSON 数组，如 [\"GPU\",\"NVIDIA\",\"Blackwell\",\"AI训练\"]。"
         "技术名词、产品名、公司名保留英文原文。关键词按重要性排序。",
-        max_tokens=1024,          # Qwen 256K 上下文，充分利用正文
+        max_tokens=4096,          # Qwen 会自然停，不用抠 token
         temperature=0.05,
-        enable_thinking=False,    # 简单提取任务，思考浪费 token
+        enable_thinking=False,
         model=model,
     )
     if isinstance(result, list) and len(result) > 0:
@@ -407,7 +406,7 @@ def classify_article_ai(title: str, text: str, model: str | None = None) -> dict
         '"tags":["标签1","标签2","标签3","标签4","标签5"],'
         '"score":0.1-1.0（综合重要性评估）}',
         "你是科技新闻分类引擎。只输出 JSON。技术名词保留英文原文。",
-        max_tokens=1024,
+        max_tokens=4096,
         temperature=0.05,
         enable_thinking=False,
         model=model,
