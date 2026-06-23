@@ -1549,31 +1549,43 @@ def _batch_ai_full():
 
     import threading as _th
 
-    # ── 辅助：运行顺序步骤列表 ───────────────────────────────
+    # ── 辅助：运行顺序步骤列表，清洗产出新数据后循环补入 ───────
     def _run_seq(label_prefix: str, seq: list, base_idx: int):
-        for i, (label, fn, st, lock_name) in enumerate(seq):
-            si = base_idx + i
-            if _check_cancelled(_full_state):
-                break
-            _log(_full_state, f"┣ [{label_prefix}] {label} — 执行中...")
-            if _full_state["steps"]:
-                _full_state["steps"][si]["status"] = "running"
-            try:
-                fn()
-                while st.get("running"):
-                    if _full_state.get("cancelled") or st.get("cancelled"):
-                        st["cancelled"] = True; break
-                    time.sleep(3)
-                status = "skipped" if st.get("cancelled") else "done"
-                _log(_full_state, f"┣ [{label_prefix}] {label} — {'⏭️' if status=='skipped' else '✅'}")
+        idle_rounds = 0  # 连续无工作的轮数
+        while not _full_state.get("cancelled") and idle_rounds < 3:
+            had_work = False
+            for i, (label, fn, st, lock_name) in enumerate(seq):
+                si = base_idx + i
+                if _check_cancelled(_full_state):
+                    return
+                # 执行步骤（_batch_* 无待处理项时瞬间返回）
                 if _full_state["steps"]:
-                    _full_state["steps"][si]["status"] = status
-            except Exception as e:
-                _log(_full_state, f"┣ [{label_prefix}] {label} ❌ {str(e)[:120]}")
-                if _full_state["steps"]:
-                    _full_state["steps"][si]["status"] = "failed"
-                try: _force_reset(lock_name, st)
-                except: pass
+                    _full_state["steps"][si]["status"] = "running"
+                try:
+                    prev_done = st.get("done", 0)
+                    fn()
+                    while st.get("running"):
+                        if _full_state.get("cancelled") or st.get("cancelled"):
+                            st["cancelled"] = True; break
+                        time.sleep(3)
+                    if st.get("done", 0) > prev_done:
+                        had_work = True
+                    status = "skipped" if st.get("cancelled") else "done"
+                    if _full_state["steps"]:
+                        _full_state["steps"][si]["status"] = status
+                except Exception as e:
+                    _log(_full_state, f"┣ [{label_prefix}] {label} ❌ {str(e)[:120]}")
+                    if _full_state["steps"]:
+                        _full_state["steps"][si]["status"] = "failed"
+                    try: _force_reset(lock_name, st)
+                    except: pass
+            # 本轮无新工作 → 等待 30s 让清洗产出新数据
+            if not had_work:
+                idle_rounds += 1
+                if idle_rounds < 3:
+                    time.sleep(30)
+            else:
+                idle_rounds = 0
 
     # ── 轨道 1: 清洗 (Nex) ───────────────────────────────────
     _full_state["steps"][0]["status"] = "running"
