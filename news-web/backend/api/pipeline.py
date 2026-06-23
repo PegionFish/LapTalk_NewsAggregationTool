@@ -1330,7 +1330,6 @@ def _batch_clean():
 
         from ai_client import clean_article_content
         from config import config
-        from api.news import _sanitize_html
         import os, time
 
         cache_dir = config.content_cache_path
@@ -1375,11 +1374,11 @@ def _batch_clean():
                 db2.close()
                 continue
 
-            html = _sanitize_html(html)
+            # 直接将原始 HTML 传给 AI — AI 的 system prompt 已明确要求移除
+            # 脚本/广告/导航等非正文元素，本地预清理反而破坏结构、浪费算力
             try:
                 cleaned = clean_article_content(html)
                 if cleaned and len(cleaned) > 100:
-                    cleaned = _sanitize_html(cleaned)
                     db2 = _conn()
                     db2.execute("UPDATE news_articles SET ai_cleaned_content=? WHERE id=?", (cleaned, aid))
                     db2.commit()
@@ -1412,7 +1411,6 @@ def _batch_clean():
             try:
                 cleaned = clean_article_content(html)
                 if cleaned and len(cleaned) > 100:
-                    cleaned = _sanitize_html(cleaned)
                     db2 = _conn()
                     db2.execute("UPDATE news_articles SET ai_cleaned_content=? WHERE id=?", (cleaned, aid))
                     db2.commit()
