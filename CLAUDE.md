@@ -16,7 +16,7 @@
 | 层 | 技术 | 关键文件 |
 |----|------|---------|
 | 后端 | Python 3.14, FastAPI, SQLite (WAL), APScheduler (BackgroundScheduler) | `news-web/backend/main.py` |
-| AI | OpenAI 兼容 API — DeepSeek V3.2 @ 硅基流动 / Nemotron 3 Ultra (OpenRouter 1M 上下文) | `news-web/backend/ai_client.py` |
+| AI | OpenAI 兼容 API — DeepSeek V3.2 @ 硅基流动 (160K, 大文件自动拆分) | `news-web/backend/ai_client.py` |
 | 翻译 | OpenAI 兼容 API — 独立配置，分段翻译 | `news-web/backend/translation_client.py` |
 | 鉴权 | bcrypt + PyJWT (72h 令牌) | `news-web/backend/auth/auth.py` |
 | 浏览器渲染 | Playwright + playwright-stealth（反爬降级） | `news-web/backend/pipeline/browser_capture.py` |
@@ -34,7 +34,7 @@ news-web/
 ├── backend/
 │   ├── main.py              # 入口: 生命周期 + 路由注册 + 静态托管 :8081
 │   ├── scheduler.py         # 定时抓取 10:00/17:00 + AI 全流程 15:00/22:00 + 备份 03:00 (BackgroundScheduler)
-│   ├── ai_client.py         # AI 客户端: chat(), get_client(), get_clean_client(), _ai_json(), analyze_article(), clean_article_content(), extract_keywords_ai(), classify_article_ai(), score_priority_ai(), rank_events_panoramic(), build_chains_panoramic()
+│   ├── ai_client.py         # AI 客户端: chat(), get_client(), _ai_json(), analyze_article(), clean_article_content(), extract_keywords_ai(), classify_article_ai(), score_priority_ai(), rank_events_panoramic(), build_chains_panoramic()
 │   ├── translation_client.py # translate_to_chinese() — HTML 直传 LLM 翻译
 │   ├── auth/auth.py         # hash_password, verify_password, create_token, get_current_user
 │   ├── api/                 # 14 个模块: settings, stats, news, trending, events, chains, relations,
@@ -151,7 +151,7 @@ article_comments
 
 | 任务 | 模型 | API endpoint | 上下文 |
 |------|------|-------------|--------|
-| 内容清洗 | `config.clean_model` | `config.clean_base_url` (OpenRouter) | 1M tokens |
+| 内容清洗 | `config.openai_model` | `config.openai_base_url` (SiliconFlow) | 160K（超大 HTML 自动拆分绕开限制） |
 | 翻译 | `config.translation_model` | `config.translation_base_url` | 160K |
 | AI 分析 | `config.openai_model` | `config.openai_base_url` (硅基流动) | 160K |
 | 关键词提取 | `config.simple_model` | `config.openai_base_url` | 256K |
@@ -159,10 +159,10 @@ article_comments
 | 优先级评分 | `config.simple_model` | `config.openai_base_url` | 256K |
 | 事件重聚类/摘要/排序/逻辑链 | `config.openai_model` | `config.openai_base_url` | 160K |
 
-- `get_client()` → SiliconFlow (DeepSeek V3.2 / Qwen 3.5 35B)
-- `get_clean_client()` → OpenRouter (Nemotron 3 Ultra 1M)
+- `get_client()` → SiliconFlow (DeepSeek V3.2)
 - `config.clean_api_key` 为空时自动复用 `config.openai_api_key`
 - `config.clean_base_url` 默认回退到 `config.openai_base_url`
+- 内容清洗已切回 SiliconFlow（`config.openai_model`），`get_clean_client()` 已移除
 - 翻译 `translation_base_url` 和 `translation_api_key` 独立配置
 - `chat()` 接受可选 `client` 参数切换 endpoint
 
@@ -182,7 +182,7 @@ article_comments
 | `POST /api/pipeline/batch-clean/cancel` | 优雅取消 |
 | `POST /api/pipeline/batch-clean/force-reset` | 强制重置 |
 | `GET /api/pipeline/batch-clean/status` | 进度: running/total/done/log[] |
-| `POST /api/pipeline/batch-ai-full` | 全自动 AI 流程 — 三轨并行: Nex ∥ DeepSeek ∥ Qwen |
+| `POST /api/pipeline/batch-ai-full` | 全自动 AI 流程 — 三轨并行: 清洗 ∥ 翻译/分析/链 ∥ 关键词/分类/评分（均走 SiliconFlow） |
 | `POST /api/pipeline/batch-ai-full/cancel` | 优雅取消（传播到所有子步骤） |
 | `POST /api/pipeline/batch-ai-full/force-reset` | 强制重置（清除所有子步骤状态） |
 | `GET /api/pipeline/batch-ai-full/status` | 进度: running/total/done/steps[]/log[] |
@@ -261,14 +261,15 @@ article_comments
 29. **Linux 生产部署** — systemd 服务单元（安全加固: NoNewPrivileges + ProtectSystem + 日志双输出）+ Cockpit Web 管理插件（服务控制/调度配置/实时日志）
 30. **调度热生效** — Cockpit 插件保存调度配置后自动调用 `reload_scheduler()`，无需重启后端
 31. **三轨并行 AI 管道** — Nex(清洗) ∥ DeepSeek(翻译/分析/聚类/链) ∥ Qwen(关键词/分类/评分)，独立速率限制互不阻塞
-32. **清洗独立 endpoint** — `clean_article_content` 使用 `config.clean_base_url` + `config.clean_api_key`，可指向 OpenRouter 等独立 API
-33. **梯度模型分配** — 清洗用 Nemotron 1M(OpenRouter)，翻译/分析/逻辑链用 DeepSeek V3.2(硅基流动)，关键词/分类/评分用 Qwen 3.5 35B(硅基流动)
+32. **清洗切回 SiliconFlow** — `clean_article_content` 改用 `get_client()` + `config.openai_model` (DeepSeek V3.2)，大 HTML 自动拆分绕开 160K 限制
+33. **梯度模型分配** — 清洗/翻译/分析/逻辑链用 DeepSeek V3.2(硅基流动)，关键词/分类/评分用 Qwen 3.5 35B(硅基流动)
 34. **`_request_options` 始终显式传 `enable_thinking`** — 防止模型默认启用思考导致 token 耗尽
 35. **空返回+异常统一回池重试** — `_queue_retry()` 支持最多 5 次重试，关键词/分类/评分/清洗全覆盖
 36. **AI 处理优先用清洗后正文** — 关键词/分类/评分查询用 `COALESCE(ai_cleaned_content, text_content)`，优先取清洗后的正文
 37. **速率限制改为 SF 429 重试** — 移除本地 `RateLimiter` 预分配，API 调用遇 429 自动 sleep 60s 重试最多 3 次
 38. **NEWS_WEB_TESTING 布尔解析** — `'0'` 在 Python 中是 truthy，改为 `not in ('1', 'true', 'yes')` 判断
 39. **AsyncIOScheduler → BackgroundScheduler** — 解决 sync 端点中 `no running event loop` 问题
+40. **清洗切回 SiliconFlow + 大 HTML 拆分** — `clean_article_content` 改用 `get_client()` + `config.openai_model` (DeepSeek V3.2)，移除 `get_clean_client()`。超大 HTML（>180K 字符）在块级元素边界自动拆分为多块分别清洗后合并，绕开 160K 上下文限制。
 
 ### 已知设计约束
 
@@ -282,7 +283,7 @@ article_comments
 - **死链恢复速率限制：** DuckDuckGo 搜索间隔 4~8 秒随机延迟，避免被限流。
 - **GameSpot 等源受 Cloudflare 拦截**：HTTP/Playwright 均返回 403，需代理或手动处理。
 - **Socks5 代理仅用于 RSS 下载**：AI/翻译 API 调用不走代理。
-- **OpenRouter free 层对超 1MB 请求偶发 JSONDecodeError**：重试队列兜底，非代码问题。
+- **大 HTML 自动拆分绕上下文限制**：清洗 >180K 字符的 HTML 时自动在块级元素边界拆分为多块分别清洗后合并，适配 160K 上下文窗口。
 - **`_run_seq` 循环机制**：DS/Qwen 轨道完成后重新扫描数据库，30s × 3 轮无新工作后退出，支持清洗产出新数据后自动补入处理。
 
 ## 核心交互原则

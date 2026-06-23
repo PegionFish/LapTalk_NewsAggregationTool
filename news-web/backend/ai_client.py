@@ -1,6 +1,7 @@
 """
 OpenAI 兼容 API 客户端封装。
-当前默认面向 SiliconFlow DeepSeek V3.2，支持 160K 上下文、深度思考与结构化 JSON 输出。
+面向 SiliconFlow DeepSeek V3.2，支持 160K 上下文、深度思考与结构化 JSON 输出。
+内容清洗已切回 SiliconFlow，大 HTML 自动拆分绕开上下文限制。
 """
 from __future__ import annotations
 
@@ -36,15 +37,6 @@ def get_client() -> OpenAI:
         base_url=config.openai_base_url,
         api_key=config.openai_api_key or 'sk-placeholder',
         timeout=1800.0,  # 30 分钟 — 适配慢速模型 token 生成
-    )
-
-
-def get_clean_client() -> OpenAI:
-    """获取内容清洗专用客户端（支持独立 endpoint，如 OpenRouter 1M 上下文模型）。"""
-    return OpenAI(
-        base_url=config.clean_base_url,
-        api_key=config.clean_api_key or config.openai_api_key or 'sk-placeholder',
-        timeout=1800.0,
     )
 
 
@@ -285,14 +277,76 @@ def analyze_article(title: str, text: str) -> str:
     )
 
 
+# ══════════════════════════════════════════════════════════════
+# HTML 拆分 — 绕开 160K 上下文限制
+# ══════════════════════════════════════════════════════════════
+
+_HTML_CHARS_PER_TOKEN = 2.0        # 英文 HTML 约 2 字符/token（保守估计）
+_HTML_MAX_CHUNK_CHARS = 180_000    # 每块约 90K tokens，为系统提示+输出预留 70K
+
+
+def _split_html_at_blocks(html: str, max_chars: int = _HTML_MAX_CHUNK_CHARS) -> list[str]:
+    """在块级元素边界安全拆分 HTML，确保每块不超过 max_chars 字符。
+
+    拆分策略：
+    1. 在所有块级起始标签（div/section/article/p/h1-h6 等）处寻找候选切割点
+    2. 每块尽可能接近 max_chars，但总是在块级元素起始处切割，不割裂标签
+    3. 单一块级元素超过 max_chars 时回退到强制字符切割（极少见，如巨型 <pre>）
+    """
+    if len(html) <= max_chars:
+        return [html]
+
+    # 块级元素起始标签模式 — 在这些标签之前切割
+    _block_start_pat = re.compile(
+        r'<(div|section|article|main|aside|header|footer|nav|'
+        r'table|tbody|thead|tfoot|figure|figcaption|'
+        r'blockquote|p|h[1-6]|ul|ol|dl|form|'
+        r'fieldset|details|summary|pre|hr|br)[\s>]',
+        re.IGNORECASE,
+    )
+
+    # 收集所有切割候选点（文档开头 + 每个块级起始标签位置）
+    cut_points = [0]
+    for m in _block_start_pat.finditer(html):
+        cut_points.append(m.start())
+    cut_points = sorted(set(cut_points))
+
+    chunks: list[str] = []
+    chunk_start = 0
+
+    for i in range(1, len(cut_points)):
+        cp = cut_points[i]
+        if cp - chunk_start > max_chars:
+            # 在前一个块级元素起始处切割
+            prev_cp = cut_points[i - 1]
+            if prev_cp > chunk_start:
+                chunks.append(html[chunk_start:prev_cp])
+                chunk_start = prev_cp
+            else:
+                # 单一块超过限制（如巨型 <pre>），强制字符切割
+                chunks.append(html[chunk_start:chunk_start + max_chars])
+                chunk_start += max_chars
+
+    # 处理剩余尾部
+    remaining = html[chunk_start:]
+    if remaining:
+        if len(remaining) > max_chars:
+            for j in range(0, len(remaining), max_chars):
+                chunks.append(remaining[j:j + max_chars])
+        else:
+            chunks.append(remaining)
+
+    return chunks
+
+
 def clean_article_content(html: str, on_stream: "Callable[[str, int, int], None] | None" = None) -> str:
     """将文章 HTML 送入 LLM，提取纯净正文（去广告/导航/侧栏/弹窗/评论）。
 
-    利用 DeepSeek V3.2 160K 上下文直接处理完整 HTML 结构，
-    保留标题、段落、链接、图片、引用、列表等核心内容标签。
-    返回仅含文章正文的 HTML 片段，不包含 <html>/<head>/<body>。
+    使用 SiliconFlow DeepSeek V3.2 (160K 上下文)。对于超大 HTML（>180K 字符），
+    自动在块级元素边界拆分为多块分别清洗后合并，绕开上下文窗口限制。
 
-    传入 on_stream(text, content_chars, thinking_chars) 回调启用 SSE 流式。
+    返回仅含文章正文的 HTML 片段，不包含 <html>/<head>/<body>。
+    传入 on_stream(text, content_chars, thinking_chars) 回调启用 SSE 流式（小文件）。
     """
     system_prompt = (
         "你是一个新闻文章内容提取专家。"
@@ -307,6 +361,53 @@ def clean_article_content(html: str, on_stream: "Callable[[str, int, int], None]
         "不要添加解释说明。不要包含 <html>/<head>/<body> 标签。"
     )
 
+    # ── 大文件拆分清洗 ──
+    if len(html) > _HTML_MAX_CHUNK_CHARS:
+        chunks = _split_html_at_blocks(html)
+        if on_stream:
+            on_stream(f"[拆分清洗] 总 {len(chunks)} 块，逐块处理中...", 0, 0)
+
+        cleaned_parts: list[str] = []
+        for idx, chunk in enumerate(chunks):
+            chunk_prompt = (
+                f"以下是 HTML 文档的第 {idx + 1}/{len(chunks)} 部分。"
+                f"从中提取文章正文内容。\n"
+                f"保留的 HTML 标签：标题 (h1-h6)、段落 (p)、带 href 的链接 (a)、"
+                f"带有效 src 和 alt 的图片 (img)、引用块 (blockquote)、"
+                f"有序/无序列表 (ul/ol/li)、行内格式 (strong/b, em/i, code)、"
+                f"代码块 (pre/code)、图表及其标题 (figure/figcaption)、"
+                f"表格 (table/thead/tbody/tr/td/th) 如果包含正文数据。\n"
+                f"如果文章包含作者和日期信息，保留它们。\n\n"
+                f"{chunk}"
+            )
+            try:
+                result = chat(
+                    chunk_prompt,
+                    system_prompt=system_prompt,
+                    max_tokens=65536,
+                    temperature=0.05,
+                    enable_thinking=True,
+                    # 不传 client/model，使用默认 SiliconFlow (get_client + openai_model)
+                )
+                if result and len(result.strip()) > 50:
+                    cleaned_parts.append(result.strip())
+                if on_stream:
+                    on_stream(
+                        f"[拆分清洗] {idx + 1}/{len(chunks)} 完成",
+                        idx + 1, len(chunks),
+                    )
+            except Exception as e:
+                if on_stream:
+                    on_stream(
+                        f"[拆分清洗] 第 {idx + 1} 块异常: {e}",
+                        idx + 1, len(chunks),
+                    )
+                # 失败时保留原始 HTML 片段，避免整篇丢失
+                cleaned_parts.append(chunk)
+
+        return "\n".join(cleaned_parts)
+
+    # ── 小文件直接清洗（原逻辑）──
     prompt = (
         "从以下 HTML 页面中提取文章正文内容。\n"
         "保留的 HTML 标签：标题 (h1-h6)、段落 (p)、带 href 的链接 (a)、"
@@ -318,10 +419,8 @@ def clean_article_content(html: str, on_stream: "Callable[[str, int, int], None]
         f"{html}"
     )
 
-    # 注意：清洗是结构性提取任务，不启用深度思考。
-    # 深度思考会增加大量推理 token（耗时 ×3~5），对提取质量提升微乎其微。
-    # 大 max_tokens 确保长文输出不被截断，160K 上下文中有充足余量。
-    # 模型+endpoint：使用 config.clean_model + 独立 API（支持 OpenRouter 1M 上下文模型）
+    # 清洗是结构性提取任务，深度思考对质量提升微乎其微但大幅增加推理 token。
+    # 模型已切回 SiliconFlow DeepSeek V3.2（160K），大文件走上方拆分路径。
     return chat(
         prompt,
         system_prompt=system_prompt,
@@ -330,8 +429,7 @@ def clean_article_content(html: str, on_stream: "Callable[[str, int, int], None]
         enable_thinking=True,
         stream_log=on_stream is not None,
         on_stream_chunk=on_stream,
-        model=config.clean_model,
-        client=get_clean_client(),  # 独立 endpoint + API key
+        # 不传 client/model，使用默认 SiliconFlow (get_client + openai_model)
     )
 
 

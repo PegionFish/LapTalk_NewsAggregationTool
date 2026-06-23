@@ -10,8 +10,8 @@ DEFAULT_CONFIG = {
     'openai_api_key': '',
     'openai_model': 'deepseek-ai/DeepSeek-V3.2',
     'simple_model': 'Qwen/Qwen3.5-35B-A3B',       # 关键词/分类/评分等轻量任务
-    'clean_model': 'nex-agi/Nex-N2-Pro',            # 内容清洗专用
-    'clean_base_url': 'https://api.siliconflow.cn/v1',  # 清洗 API 地址（可指向 OpenRouter 等）
+    'clean_model': 'deepseek-ai/DeepSeek-V3.2',     # 内容清洗专用（与主模型共用 SiliconFlow）
+    'clean_base_url': 'https://api.siliconflow.cn/v1',  # 清洗 API 地址（已切回 SiliconFlow）
     'clean_api_key': '',                                 # 清洗 API 密钥（空=复用 openai_api_key）
     'pipeline_model': 'deepseek-ai/DeepSeek-V3.1-Terminus',  # 分析/分类/评分等线性管道
     'ai_enable_thinking': True,
