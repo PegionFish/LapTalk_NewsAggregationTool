@@ -1523,81 +1523,86 @@ def force_reset_batch_clean():
 _full_state = _new_state()
 
 def _batch_ai_full():
-    """混合并行管道 — 清洗(Nex) 与 后续线性管道(DSv3.2+Qwen) 并发运行。"""
+    """三轨并行管道 — Nex(清洗) ∥ Qwen(关键/分类/评分) ∥ DeepSeek(翻译/分析/聚类/摘要/排序/链)。"""
     global _full_state
     _reset_state(_full_state, steps=[])
 
-    # ── 步骤定义 ──────────────────────────────────────────────
-    # 清洗独立线程，线性管道余下步骤顺序执行
-    clean_step = ("内容清洗", _batch_clean, _clean_state, 'clean')
-    linear_steps = [
-        ("翻译",          _batch_translate,           _translate_state,  'translate'),
-        ("AI 分析",       _batch_analyze,             _analyze_state,    'analyze'),
+    # ── 三轨定义 ──────────────────────────────────────────────
+    # 各轨独立速率限制，互不阻塞
+    qwen_steps = [
         ("关键词提取",    _batch_ai_keywords,         _kw_state,         'keywords'),
         ("智能分类",      _batch_ai_classify,         _cls_state,        'classify'),
         ("优先级评分",    _batch_ai_score,            _score_state,      'score'),
+    ]
+    deepseek_steps = [
+        ("翻译",          _batch_translate,           _translate_state,  'translate'),
+        ("AI 分析",       _batch_analyze,             _analyze_state,    'analyze'),
         ("事件重聚类",    _batch_ai_recluster,        _recluster_state,  'recluster'),
         ("事件摘要",      _batch_ai_summarize_events, _evt_sum_state,    'summarize_events'),
         ("全景图排序",    _batch_ai_rank_events,      _rank_state,       'rank_events'),
         ("构筑逻辑链",    _build_logic_chains,        _chain_state,      'build_chains'),
     ]
-    step_names = ["内容清洗"] + [nm for nm, _, _, _ in linear_steps]
+    step_names = ["内容清洗"] + [nm for nm, _, _, _ in deepseek_steps] + [nm for nm, _, _, _ in qwen_steps]
     _full_state["steps"] = [{"name": nm, "status": "pending"} for nm in step_names]
     _full_state["total"] = len(step_names)
-    _log(_full_state, f"🚀 启动全流程 — 清洗(Nex) ∥ 管道(DSv3.2+Qwen)")
+    _log(_full_state, f"🚀 三轨并行 — Nex(清洗) ∥ DSv3.2(翻译+分析+链) ∥ Qwen(关键词+分类+评分)")
 
     import threading as _th
-    threads: list[tuple[str, _th.Thread, dict, str, int]] = []
 
-    # ── 启动清洗线程（Nex-N2-Pro，独立速率限制）───────────────
+    # ── 辅助：运行顺序步骤列表 ───────────────────────────────
+    def _run_seq(label_prefix: str, seq: list, base_idx: int):
+        for i, (label, fn, st, lock_name) in enumerate(seq):
+            si = base_idx + i
+            if _check_cancelled(_full_state):
+                break
+            _log(_full_state, f"┣ [{label_prefix}] {label} — 执行中...")
+            if _full_state["steps"]:
+                _full_state["steps"][si]["status"] = "running"
+            try:
+                fn()
+                while st.get("running"):
+                    if _full_state.get("cancelled") or st.get("cancelled"):
+                        st["cancelled"] = True; break
+                    time.sleep(3)
+                status = "skipped" if st.get("cancelled") else "done"
+                _log(_full_state, f"┣ [{label_prefix}] {label} — {'⏭️' if status=='skipped' else '✅'}")
+                if _full_state["steps"]:
+                    _full_state["steps"][si]["status"] = status
+            except Exception as e:
+                _log(_full_state, f"┣ [{label_prefix}] {label} ❌ {str(e)[:120]}")
+                if _full_state["steps"]:
+                    _full_state["steps"][si]["status"] = "failed"
+                try: _force_reset(lock_name, st)
+                except: pass
+
+    # ── 轨道 1: 清洗 (Nex) ───────────────────────────────────
     _full_state["steps"][0]["status"] = "running"
     ct = _th.Thread(target=_batch_clean, daemon=True)
     ct.start()
-    threads.append(("内容清洗", ct, _clean_state, 'clean', 0))
-    _log(_full_state, "┣ 清洗 (Nex-N2-Pro) — 已启动")
+    _log(_full_state, "┣ [Nex] 内容清洗 — 已启动")
 
-    # ── 启动线性管道线程（DeepSeek+Qwen 交替）─────────────────
-    def _run_linear():
-        for idx, (label, fn, st, lock_name) in enumerate(linear_steps, 1):
-            step_idx = idx  # 0=clean, 1+=linear
-            if _check_cancelled(_full_state):
-                break
-            _log(_full_state, f"┣ {label} — 执行中...")
-            _full_state["current"] = f"{label} — 执行中..."
-            if _full_state["steps"]:
-                _full_state["steps"][step_idx]["status"] = "running"
-            try:
-                fn()
-                # 等待完成
-                while st.get("running"):
-                    if _full_state.get("cancelled") or st.get("cancelled"):
-                        st["cancelled"] = True
-                        break
-                    time.sleep(3)
-                status = "skipped" if st.get("cancelled") else "done"
-                _log(_full_state, f"┣ {label} — {'⏭️ 跳过' if status == 'skipped' else '✅ 完成'}")
-                if _full_state["steps"]:
-                    _full_state["steps"][step_idx]["status"] = status
-            except Exception as e:
-                _log(_full_state, f"┣ {label} ❌ {str(e)[:120]}")
-                if _full_state["steps"]:
-                    _full_state["steps"][step_idx]["status"] = "failed"
-                try: _force_reset(lock_name, st)
-                except: pass
-            _full_state["done"] = step_idx + 1
+    # ── 轨道 2: DeepSeek (翻译→分析→聚类→摘要→排序→链) ─────
+    ds_idx = 1  # after clean
+    dt = _th.Thread(target=_run_seq, args=("DS", deepseek_steps, ds_idx), daemon=True)
+    dt.start()
+    _log(_full_state, "┣ [DS] 翻译+分析+聚类+摘要+排序+链 — 已启动")
 
-    lt = _th.Thread(target=_run_linear, daemon=True)
-    lt.start()
+    # ── 轨道 3: Qwen (关键词→分类→评分) ─────────────────────
+    qw_idx = ds_idx + len(deepseek_steps)
+    qt = _th.Thread(target=_run_seq, args=("Qwen", qwen_steps, qw_idx), daemon=True)
+    qt.start()
+    _log(_full_state, "┣ [Qwen] 关键词+分类+评分 — 已启动")
 
-    # ── 等待清洗线程（最长）──────────────────────────────────
+    # ── 等待所有轨道完成 ─────────────────────────────────────
     ct.join()
     if _full_state["steps"]:
         _full_state["steps"][0]["status"] = "skipped" if _clean_state.get("cancelled") else "done"
-    _full_state["done"] = max(_full_state["done"], 1)
-    _log(_full_state, "┣ 清洗 (Nex) — 完成，等待管道...")
+    _log(_full_state, "┣ [Nex] 清洗完成")
+    dt.join()
+    _log(_full_state, "┣ [DS] DeepSeek 管道完成")
+    qt.join()
+    _log(_full_state, "┣ [Qwen] Qwen 管道完成")
 
-    # ── 等待线性管道完成 ──────────────────────────────────────
-    lt.join()
     _full_state["running"] = False
     _full_state["current"] = "全部完成"
     _full_state["done"] = len(step_names)
