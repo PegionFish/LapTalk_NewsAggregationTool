@@ -157,4 +157,4 @@ class RateLimiter:
 
 
 # 全局单例 — 所有 AI 调用共享此限制器
-ai_rate_limiter = RateLimiter(rpm=100, tpm=100_000)
+ai_rate_limiter = RateLimiter(rpm=100, tpm=300_000)  # 三轨并行: 清洗~100K + 翻译~50K + 关键词~5K

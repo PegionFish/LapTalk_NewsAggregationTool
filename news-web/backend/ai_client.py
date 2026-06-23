@@ -113,7 +113,7 @@ def chat(
     from typing import Callable
 
     # 估算 token 消耗（输入 + 输出上限）
-    estimated = _rl.estimate_tokens(prompt + system_prompt) + max_tokens
+    estimated = _rl.estimate_tokens(prompt + system_prompt) + max_tokens // 3  # 实际输出通常远小于 max
     _rl.wait_if_needed(estimated)
 
     client = get_client()
@@ -200,7 +200,7 @@ def _ai_json(
     try:
         from utils.rate_limiter import ai_rate_limiter as _rl
 
-        estimated = _rl.estimate_tokens(prompt + system_prompt) + max_tokens
+        estimated = _rl.estimate_tokens(prompt + system_prompt) + max_tokens // 3  # 实际输出通常远小于 max
         _rl.wait_if_needed(estimated)
 
         client = get_client()
