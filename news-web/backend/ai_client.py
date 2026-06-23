@@ -353,7 +353,7 @@ def clean_article_content(html: str, on_stream: "Callable[[str, int, int], None]
         system_prompt=system_prompt,
         max_tokens=65536,       # 充分利用 160K 上下文 — 长文清洗不截断
         temperature=0.05,       # 低温度确保确定性提取
-        enable_thinking=False,  # 清洗是提取任务，不需要思维链（省 token + 提速）
+        enable_thinking=True,   # 思维链提升提取精度，预算充足可接受
         stream_log=on_stream is not None,
         on_stream_chunk=on_stream,
     )
