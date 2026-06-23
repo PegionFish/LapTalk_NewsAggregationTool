@@ -377,11 +377,13 @@ def extract_keywords_ai(title: str, text: str = "", source: str = "", model: str
         user_prompt += "\n"
     user_prompt += "提取 5-15 个技术关键词，返回 JSON 数组。关键词应覆盖：产品名、公司名、技术名、核心概念。"
     result = _ai_json(
-        _with_deep_thinking(user_prompt),
-        "你是科技新闻关键词提取引擎。只输出 JSON 数组，如 [\"GPU\",\"NVIDIA\",\"Blackwell\",\"AI训练\"]。"
+        user_prompt,  # 关键词提取不需要深度思考模板
+        "你是科技新闻关键词提取引擎。基于标题+正文提取技术关键词。"
+        "只输出 JSON 数组，如 [\"GPU\",\"NVIDIA\",\"Blackwell\",\"AI训练\"]。"
         "技术名词、产品名、公司名保留英文原文。关键词按重要性排序。",
-        max_tokens=512,
+        max_tokens=1024,          # Qwen 256K 上下文，充分利用正文
         temperature=0.05,
+        enable_thinking=False,    # 简单提取任务，思考浪费 token
         model=model,
     )
     if isinstance(result, list) and len(result) > 0:
@@ -399,16 +401,15 @@ def classify_article_ai(title: str, text: str, model: str | None = None) -> dict
     """AI 分类文章主题。HTML 提取纯文本后传入 160K 上下文。model=None 使用全局 openai_model。"""
     content = _prepare_content(text)
     result = _ai_json(
-        _with_deep_thinking(
-            f"标题：{title}\n正文：{content}\n\n"
-            "请输出 JSON："
-            '{"category":"细分领域（AI/LLM, PC/Hardware, Mobile, Gaming, Security, Semiconductors, Enterprise, Automotive, Space, Chip/Wafer, OpenSource, Regulation, Other）",'
-            '"tags":["标签1","标签2","标签3","标签4","标签5"],'
-            '"score":0.1-1.0（综合重要性评估，考虑技术突破性、行业影响、时效性）}'
-        ),
-        "你是科技新闻分类引擎。只输出 JSON，不输出其他内容。技术名词保留英文原文。",
-        max_tokens=512,
+        f"标题：{title}\n正文：{content}\n\n"
+        "请输出 JSON："
+        '{"category":"细分领域（AI/LLM, PC/Hardware, Mobile, Gaming, Security, Semiconductors, Enterprise, Automotive, Space, Chip/Wafer, OpenSource, Regulation, Other）",'
+        '"tags":["标签1","标签2","标签3","标签4","标签5"],'
+        '"score":0.1-1.0（综合重要性评估）}',
+        "你是科技新闻分类引擎。只输出 JSON。技术名词保留英文原文。",
+        max_tokens=1024,
         temperature=0.05,
+        enable_thinking=False,
         model=model,
     )
     if isinstance(result, dict) and "category" in result:
@@ -420,16 +421,15 @@ def score_priority_ai(title: str, text: str, source: str, days_old: int = 0, mod
     """AI 评估文章优先级（百分制 0~100）。HTML 提取纯文本后传入 160K 上下文。model=None 使用全局 openai_model。"""
     content = _prepare_content(text)
     result = _ai_json(
-        _with_deep_thinking(
-            f"标题：{title}\n来源：{source}\n发布天数：{days_old}\n正文：{content}\n\n"
-            f"请输出 JSON：{{"
-            f'"score":0-100 的整数（百分制综合评分：来源权威性30% + 内容重要性40% + 时效性30%），'
-            f'"label":"high/medium/low（高/中/低优先级。high:>=70, medium:35-69, low:<35）",'
-            f'"reason":"30字以内理由，说明核心判断依据"}}'
-        ),
+        f"标题：{title}\n来源：{source}\n发布天数：{days_old}\n正文：{content}\n\n"
+        f"请输出 JSON：{{"
+        f'"score":0-100 的整数（百分制综合评分：来源权威性30% + 内容重要性40% + 时效性30%），'
+        f'"label":"high/medium/low（high:>=70, medium:35-69, low:<35）",'
+        f'"reason":"30字以内理由"}}',
         "你是科技新闻优先级评估引擎。考虑技术突破性、行业影响范围、信息稀缺性。只输出 JSON。",
-        max_tokens=512,
+        max_tokens=1024,
         temperature=0.05,
+        enable_thinking=False,
     )
     if isinstance(result, dict) and "score" in result:
         return result
