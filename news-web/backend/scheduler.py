@@ -5,7 +5,7 @@ Can be toggled on/off and schedule changed via config/API.
 """
 import os, sqlite3, logging, glob, time, asyncio
 from datetime import datetime
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from config import config
@@ -16,7 +16,7 @@ from utils.task_state import task_state
 
 logger = logging.getLogger(__name__)
 
-scheduler = AsyncIOScheduler()
+scheduler = BackgroundScheduler()
 
 # ── Pipeline status tracking ─────────────────────────────
 _pipeline_state = {
@@ -196,13 +196,13 @@ def stop_scheduler():
 def reload_scheduler():
     """动态重载调度器 — 停止旧任务，根据新配置重新添加。"""
     global scheduler
+    import asyncio
 
     if scheduler.running:
         scheduler.shutdown(wait=False)
         logger.info("Scheduler stopped for reload")
 
-    # 重新创建 scheduler 实例（APScheduler shutdown 后需重新实例化）
-    scheduler = AsyncIOScheduler()
+    scheduler = BackgroundScheduler()
 
     pipeline_enabled = config.pipeline_schedule_enabled
     ai_enabled = config.ai_cron_enabled
@@ -221,6 +221,7 @@ def reload_scheduler():
         for trigger in ai_triggers:
             scheduler.add_job(_run_ai_full_job, trigger)
     scheduler.add_job(_backup_db, CronTrigger(hour=3, minute=0))
+
     scheduler.start()
 
     parts = []
