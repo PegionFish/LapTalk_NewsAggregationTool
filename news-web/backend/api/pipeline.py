@@ -532,6 +532,7 @@ def start_batch_translate():
     _translate_state["running"] = True
     _translate_state["total"] = pending
     _translate_state["current"] = "启动中..."
+    _translate_state["running"] = True
     threading.Thread(target=_batch_translate, daemon=True).start()
     return {"ok": True, "message": f"启动批量翻译，预计 {pending} 篇", "pending": pending}
 
@@ -588,6 +589,7 @@ def start_batch_analyze():
     _analyze_state["running"] = True
     _analyze_state["total"] = pending
     _analyze_state["current"] = "启动中..."
+    _analyze_state["running"] = True
     threading.Thread(target=_batch_analyze, daemon=True).start()
     return {"ok": True, "message": f"启动批量分析，预计 {pending} 篇", "pending": pending}
 
@@ -648,6 +650,7 @@ def start_build_chains():
     task_state.init_state('build_chains')
     _chain_state["running"] = True
     _chain_state["current"] = "初始分组中..."
+    _chain_state["running"] = True
     threading.Thread(target=_build_logic_chains, daemon=True).start()
     return {"ok": True, "message": "开始构筑逻辑链"}
 
@@ -1135,6 +1138,7 @@ def start_batch_ai_filter():
     _filter_state["running"] = True
     _filter_state["total"] = n
     _filter_state["current"] = "启动中..."
+    _af_state["running"] = True
     threading.Thread(target=_batch_ai_filter, daemon=True).start()
     return {"ok": True, "message": f"启动 AI 预筛选，预计 {n} 篇", "pending": n}
 
@@ -1170,6 +1174,7 @@ def start_batch_keywords():
     _kw_state["running"] = True
     _kw_state["total"] = n
     _kw_state["current"] = "启动中..."
+    _kw_state["running"] = True
     threading.Thread(target=_batch_ai_keywords, daemon=True).start()
     return {"ok": True, "message": f"启动 AI 关键词提取，预计 {n} 篇", "pending": n}
 
@@ -1184,6 +1189,7 @@ def start_batch_classify():
     _cls_state["running"] = True
     _cls_state["total"] = n
     _cls_state["current"] = "启动中..."
+    _cls_state["running"] = True
     threading.Thread(target=_batch_ai_classify, daemon=True).start()
     return {"ok": True, "message": f"启动 AI 分类，预计 {n} 篇", "pending": n}
 
@@ -1198,6 +1204,7 @@ def start_batch_score():
     _score_state["running"] = True
     _score_state["total"] = n
     _score_state["current"] = "启动中..."
+    _score_state["running"] = True
     threading.Thread(target=_batch_ai_score, daemon=True).start()
     return {"ok": True, "message": f"启动 AI 评分，预计 {n} 篇", "pending": n}
 
@@ -1212,6 +1219,7 @@ def start_batch_recluster():
     _recluster_state["running"] = True
     _recluster_state["total"] = n
     _recluster_state["current"] = "启动中..."
+    _recluster_state["running"] = True
     threading.Thread(target=_batch_ai_recluster, daemon=True).start()
     return {"ok": True, "message": f"启动智能重聚类，预计 {n} 篇", "pending": n}
 
@@ -1226,6 +1234,7 @@ def start_batch_summarize_events():
     _evt_sum_state["running"] = True
     _evt_sum_state["total"] = n
     _evt_sum_state["current"] = "启动中..."
+    _evt_sum_state["running"] = True
     threading.Thread(target=_batch_ai_summarize_events, daemon=True).start()
     return {"ok": True, "message": f"启动事件摘要，预计 {n} 个事件", "pending": n}
 
@@ -1250,6 +1259,7 @@ def start_batch_rank_events():
     task_state.init_state('rank_events')
     _rank_state["running"] = True
     _rank_state["current"] = "启动中..."
+    _rank_state["running"] = True
     threading.Thread(target=_batch_ai_rank_events, daemon=True).start()
     return {"ok": True, "message": "启动全景图事件优先级排序"}
 
@@ -1415,6 +1425,7 @@ def start_batch_clean():
     _clean_state["running"] = True
     _clean_state["total"] = pending
     _clean_state["current"] = "启动中..."
+    _clean_state["running"] = True
     threading.Thread(target=_batch_clean, daemon=True).start()
     return {"ok": True, "message": f"启动内容清洗，预计 {pending} 篇", "pending": pending}
 
@@ -1519,6 +1530,7 @@ def start_batch_ai_full():
     _full_state["running"] = True
     _full_state["total"] = 10
     _full_state["current"] = "启动中..."
+    _full_state["running"] = True
     threading.Thread(target=_batch_ai_full, daemon=True).start()
     return {"ok": True, "message": "启动全流程 AI 处理 — 清洗→翻译→分析→关键词→分类→评分→聚类→摘要→链"}
 
