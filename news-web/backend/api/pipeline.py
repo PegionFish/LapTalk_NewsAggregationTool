@@ -748,9 +748,12 @@ def _batch_ai_keywords():
                 safe_commit(db2); db2.close()
                 _log(_kw_state, f"#{aid} ✅ {len(kws)} 个关键词: {', '.join(kws[:5])}")
             else:
-                _log(_kw_state, f"#{aid} ⚠️ AI 返回空"); _kw_state["failed"] += 1
+                if _queue_retry(_kw_state, aid, retry_counts, reason='AI 返回空', task_type='keywords'):
+                    retry_queue.append((aid, title, text, source or ""))
+                else:
+                    _kw_state["failed"] += 1
             _kw_state["done"] += 1
-            time.sleep(0.1) if idx < len(rows) else None  # 速率限制由 RateLimiter 统一管理
+            time.sleep(0.1) if idx < len(rows) else None
 
         for aid, title, text, source in retry_queue:
             _kw_state["current"] = f"#{aid} {title[:50]}"
@@ -763,7 +766,10 @@ def _batch_ai_keywords():
                     safe_commit(db2); db2.close()
                     _log(_kw_state, f"#{aid} ✅ {len(kws)} 个关键词: {', '.join(kws[:5])}")
                 else:
-                    _log(_kw_state, f"#{aid} ⚠️ AI 返回空"); _kw_state["failed"] += 1
+                    if _queue_retry(_kw_state, aid, retry_counts, reason='重试后仍空', task_type='keywords'):
+                        retry_queue.append((aid, title, text, source or ""))
+                    else:
+                        _kw_state["failed"] += 1
             except Exception as e:
                 if _is_request_timeout_error(e):
                     _log(_kw_state, f"#{aid} ❌ API 调用失败: Request Timed Out（重试后仍超时）")
@@ -814,9 +820,12 @@ def _batch_ai_classify():
                 safe_commit(db2); db2.close()
                 _log(_cls_state, f"#{aid} ✅ {r.get('category','?')} — {', '.join(r.get('tags',[])[:3])}")
             else:
-                _log(_cls_state, f"#{aid} ⚠️ AI 返回空"); _cls_state["failed"] += 1
+                if _queue_retry(_cls_state, aid, retry_counts, reason='AI 返回空', task_type='classify'):
+                    retry_queue.append((aid, title, text))
+                else:
+                    _cls_state["failed"] += 1
             _cls_state["done"] += 1
-            time.sleep(0.1) if idx < len(rows) else None  # 速率限制由 RateLimiter 统一管理
+            time.sleep(0.1) if idx < len(rows) else None
 
         for aid, title, text in retry_queue:
             _cls_state["current"] = f"#{aid} {title[:50]}"
@@ -829,7 +838,10 @@ def _batch_ai_classify():
                     safe_commit(db2); db2.close()
                     _log(_cls_state, f"#{aid} ✅ {r.get('category','?')} — {', '.join(r.get('tags',[])[:3])}")
                 else:
-                    _log(_cls_state, f"#{aid} ⚠️ AI 返回空"); _cls_state["failed"] += 1
+                    if _queue_retry(_cls_state, aid, retry_counts, reason='重试后仍空', task_type='classify'):
+                        retry_queue.append((aid, title, text))
+                    else:
+                        _cls_state["failed"] += 1
             except Exception as e:
                 if _is_request_timeout_error(e):
                     _log(_cls_state, f"#{aid} ❌ API 调用失败: Request Timed Out（重试后仍超时）")
@@ -884,9 +896,12 @@ def _batch_ai_score():
                 safe_commit(db2); db2.close()
                 _log(_score_state, f"#{aid} ✅ {r.get('label','medium')}({r['score']:.0f}) — {r.get('reason','')}")
             else:
-                _log(_score_state, f"#{aid} ⚠️ AI 返回空"); _score_state["failed"] += 1
+                if _queue_retry(_score_state, aid, retry_counts, reason='AI 返回空', task_type='score'):
+                    retry_queue.append((aid, title, text, source or "Unknown", fetched_at or ""))
+                else:
+                    _score_state["failed"] += 1
             _score_state["done"] += 1
-            time.sleep(0.1) if idx < len(rows) else None  # 速率限制由 RateLimiter 统一管理
+            time.sleep(0.1) if idx < len(rows) else None
 
         for aid, title, text, source, fetched_at in retry_queue:
             _score_state["current"] = f"#{aid} {title[:50]}"
@@ -903,7 +918,10 @@ def _batch_ai_score():
                     safe_commit(db2); db2.close()
                     _log(_score_state, f"#{aid} ✅ {r.get('label','medium')}({r['score']:.0f}) — {r.get('reason','')}")
                 else:
-                    _log(_score_state, f"#{aid} ⚠️ AI 返回空"); _score_state["failed"] += 1
+                    if _queue_retry(_score_state, aid, retry_counts, reason='重试后仍空', task_type='score'):
+                        retry_queue.append((aid, title, text, source, fetched_at))
+                    else:
+                        _score_state["failed"] += 1
             except Exception as e:
                 if _is_request_timeout_error(e):
                     _log(_score_state, f"#{aid} ❌ API 调用失败: Request Timed Out（重试后仍超时）")
