@@ -592,13 +592,15 @@ def get_batch_translate_status():
 
 @router.post("/batch-translate/cancel")
 def cancel_batch_translate():
-    """取消正在运行的批量翻译任务。"""
+    """取消正在运行的批量翻译任务 — 立即中断 AI 连接。"""
     global _translate_state
     if not _translate_state.get("running"):
         return {"ok": False, "message": "没有正在运行的翻译任务"}
     _translate_state["cancelled"] = True
-    _log(_translate_state, "🛑 收到取消请求 — 完成当前文章后停止")
-    return {"ok": True, "message": "翻译任务已取消"}
+    _log(_translate_state, "🛑 收到取消请求 — 正在中断 AI 连接")
+    from ai_client import close_active_client
+    close_active_client()
+    return {"ok": True, "message": "翻译任务已取消 — AI 连接已中断"}
 
 
 @router.post("/batch-translate/force-reset")
@@ -654,13 +656,15 @@ def get_batch_analyze_status():
 
 @router.post("/batch-analyze/cancel")
 def cancel_batch_analyze():
-    """取消正在运行的批量分析任务。"""
+    """取消正在运行的批量分析任务 — 立即中断 AI 连接。"""
     global _analyze_state
     if not _analyze_state.get("running"):
         return {"ok": False, "message": "没有正在运行的分析任务"}
     _analyze_state["cancelled"] = True
-    _log(_analyze_state, "🛑 收到取消请求 — 完成当前文章后停止")
-    return {"ok": True, "message": "分析任务已取消"}
+    _log(_analyze_state, "🛑 收到取消请求 — 正在中断 AI 连接")
+    from ai_client import close_active_client
+    close_active_client()
+    return {"ok": True, "message": "分析任务已取消 — AI 连接已中断"}
 
 
 @router.post("/batch-analyze/force-reset")
@@ -1542,13 +1546,18 @@ def get_batch_clean_status():
 
 @router.post("/batch-clean/cancel")
 def cancel_batch_clean():
-    """取消正在运行的内容清洗任务。"""
+    """取消正在运行的内容清洗任务 — 立即中断 AI 连接。"""
     global _clean_state
     if not _clean_state.get("running"):
         return {"ok": False, "message": "没有正在运行的清洗任务"}
     _clean_state["cancelled"] = True
-    _log(_clean_state, "🛑 收到取消请求 — 完成当前文章后停止")
-    return {"ok": True, "message": "清洗任务已取消"}
+    _log(_clean_state, "🛑 收到取消请求 — 正在中断 AI 连接")
+
+    # 关闭底层 HTTP 连接，让阻塞的 API 调用立即抛出异常
+    from ai_client import close_active_client
+    close_active_client()
+
+    return {"ok": True, "message": "清洗任务已取消 — AI 连接已中断"}
 
 
 @router.post("/batch-clean/force-reset")
@@ -1685,7 +1694,7 @@ def start_batch_ai_full():
 
 @router.post("/batch-ai-full/cancel")
 def cancel_batch_ai_full():
-    """取消全流程 — 传播到当前步骤。"""
+    """取消全流程 — 传播到所有步骤并立即中断 AI 连接。"""
     global _full_state, _clean_state, _translate_state, _analyze_state
     if not _full_state.get("running"):
         return {"ok": False, "message": "没有正在运行的全流程任务"}
@@ -1695,8 +1704,10 @@ def cancel_batch_ai_full():
                _kw_state, _cls_state, _score_state, _recluster_state,
                _evt_sum_state, _rank_state, _chain_state]:
         st["cancelled"] = True
-    _log(_full_state, "🛑 收到取消请求 — 完成当前步骤后停止")
-    return {"ok": True, "message": "全流程任务已取消"}
+    _log(_full_state, "🛑 收到取消请求 — 正在中断 AI 连接")
+    from ai_client import close_active_client
+    close_active_client()
+    return {"ok": True, "message": "全流程任务已取消 — AI 连接已中断"}
 
 
 @router.post("/batch-ai-full/force-reset")

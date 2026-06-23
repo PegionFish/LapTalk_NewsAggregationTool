@@ -33,11 +33,33 @@ _DEEP_THINKING_INSTRUCTION = (
 
 def get_client() -> OpenAI:
     """获取 AI 分析专用 OpenAI 兼容客户端（SiliconFlow）。"""
-    return OpenAI(
+    global _active_client
+    client = OpenAI(
         base_url=config.openai_base_url,
         api_key=config.openai_api_key or 'sk-placeholder',
         timeout=1800.0,  # 30 分钟 — 适配慢速模型 token 生成
     )
+    _active_client = client
+    return client
+
+
+_active_client: OpenAI | None = None
+
+
+def close_active_client() -> None:
+    """关闭当前活跃的 AI 客户端底层 HTTP 连接，立即中断正在进行的 API 调用。
+
+    取消批量任务时调用此函数，可让阻塞在 chat() 中的线程立即抛出
+    APIConnectionError，从而在秒级内响应取消请求。
+    """
+    global _active_client
+    if _active_client is not None:
+        try:
+            _active_client.close()
+        except Exception:
+            pass
+        finally:
+            _active_client = None
 
 
 def _thinking_enabled(enable_thinking: bool | None) -> bool:
