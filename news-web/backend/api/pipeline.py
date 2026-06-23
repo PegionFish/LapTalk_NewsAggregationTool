@@ -1511,22 +1511,22 @@ def _batch_ai_full():
     _full_state = {"running": True, "total": 0, "done": 0, "failed": 0, "current": "", "log": [], "steps": []}
     step_names = ["内容清洗", "翻译", "AI 分析", "关键词提取", "智能分类", "优先级评分", "事件重聚类", "事件摘要", "全景图排序", "构筑逻辑链"]
     steps = [
-        ("内容清洗", _batch_clean, _clean_state),
-        ("翻译", _batch_translate, _translate_state),
-        ("AI 分析", _batch_analyze, _analyze_state),
-        ("关键词提取", _batch_ai_keywords, _kw_state),
-        ("智能分类", _batch_ai_classify, _cls_state),
-        ("优先级评分", _batch_ai_score, _score_state),
-        ("事件重聚类", _batch_ai_recluster, _recluster_state),
-        ("事件摘要", _batch_ai_summarize_events, _evt_sum_state),
-        ("全景图排序", _batch_ai_rank_events, _rank_state),
-        ("构筑逻辑链", _build_logic_chains, _chain_state),
+        ("内容清洗", _batch_clean, _clean_state, 'clean'),
+        ("翻译", _batch_translate, _translate_state, 'translate'),
+        ("AI 分析", _batch_analyze, _analyze_state, 'analyze'),
+        ("关键词提取", _batch_ai_keywords, _kw_state, 'keywords'),
+        ("智能分类", _batch_ai_classify, _cls_state, 'classify'),
+        ("优先级评分", _batch_ai_score, _score_state, 'score'),
+        ("事件重聚类", _batch_ai_recluster, _recluster_state, 'recluster'),
+        ("事件摘要", _batch_ai_summarize_events, _evt_sum_state, 'summarize_events'),
+        ("全景图排序", _batch_ai_rank_events, _rank_state, 'rank_events'),
+        ("构筑逻辑链", _build_logic_chains, _chain_state, 'build_chains'),
     ]
     # 初始化所有步骤状态
     _full_state["steps"] = [{"name": nm, "status": "pending"} for nm in step_names]
     _full_state["total"] = len(steps)
     _log(_full_state, f"🚀 启动全流程 AI 处理 — 共 {len(steps)} 步")
-    for idx, (label, fn, st) in enumerate(steps, 1):
+    for idx, (label, fn, st, lock_name) in enumerate(steps, 1):
         if _check_cancelled(_full_state):
             _log(_full_state, "🛑 全流程已取消")
             break
@@ -1537,16 +1537,38 @@ def _batch_ai_full():
             _full_state["steps"][idx - 1]["status"] = "running"
         try:
             fn()
-            # 等待子任务完成（子任务的 running 为 False 即完成）
+            # 等待子任务完成，检测取消信号（全流程取消 或 子任务单独取消）
+            # 15s 宽限：超时后强制跳过，后续步骤不受阻
+            grace = 0
             while st.get("running"):
-                time.sleep(5)
-            _log(_full_state, f"✅ {label} 完成")
-            if _full_state["steps"]:
-                _full_state["steps"][idx - 1]["status"] = "done"
+                # 仅读原始标志，不调 _check_cancelled（它会改 running=False 导致状态错乱）
+                if _full_state.get("cancelled") or st.get("cancelled"):
+                    st["cancelled"] = True  # 确保传播
+                    grace += 2
+                    if grace >= 15:
+                        _log(_full_state, f"⚡ {label} 超时未停止 — 强制跳过")
+                        _force_reset(lock_name, st)
+                        if _full_state["steps"]:
+                            _full_state["steps"][idx - 1]["status"] = "skipped"
+                        break
+                time.sleep(2)
+            else:
+                # 子任务停止（正常完成 或 被取消）
+                if st.get("cancelled") or _full_state.get("cancelled"):
+                    _log(_full_state, f"⏭️ {label} 已跳过")
+                    if _full_state["steps"]:
+                        _full_state["steps"][idx - 1]["status"] = "skipped"
+                else:
+                    _log(_full_state, f"✅ {label} 完成")
+                    if _full_state["steps"]:
+                        _full_state["steps"][idx - 1]["status"] = "done"
         except Exception as e:
-            _log(_full_state, f"❌ {label} 失败: {str(e)[:100]}")
+            _log(_full_state, f"❌ {label} 异常: {str(e)[:120]}")
             if _full_state["steps"]:
                 _full_state["steps"][idx - 1]["status"] = "failed"
+            # 清理残留锁，后续步骤不受阻
+            try: _force_reset(lock_name, st)
+            except: pass
         _full_state["done"] = idx
     _full_state["running"] = False
     _full_state["current"] = "全部完成"
