@@ -734,7 +734,7 @@ def _batch_ai_keywords():
             _kw_state["current"] = f"#{aid} {title[:50]}"
             if _hp_check(aid): _log(_kw_state, f"#{aid} ⏭️ 人工已处理"); _kw_state["done"] += 1; continue
             try:
-                kws = extract_keywords_ai(title, text, source or "")
+                kws = extract_keywords_ai(title, text, source or "", model=config.simple_model)
             except Exception as e:
                 if _is_request_timeout_error(e) and _queue_timeout_retry(_kw_state, aid, retry_counts):
                     retry_queue.append((aid, title, text, source or ""))
@@ -756,7 +756,7 @@ def _batch_ai_keywords():
             _kw_state["current"] = f"#{aid} {title[:50]}"
             _log(_kw_state, f"#{aid} 🔄 重试关键词提取...")
             try:
-                kws = extract_keywords_ai(title, text, source)
+                kws = extract_keywords_ai(title, text, source, model=config.simple_model)
                 if kws:
                     db2 = _conn()
                     db2.execute("UPDATE news_articles SET keywords=?, ai_keywords=? WHERE id=?", (_json.dumps(kws, ensure_ascii=False), _json.dumps(kws, ensure_ascii=False), aid))
@@ -800,7 +800,7 @@ def _batch_ai_classify():
             _cls_state["current"] = f"#{aid} {title[:50]}"
             if _hp_check(aid): _log(_cls_state, f"#{aid} ⏭️ 人工已处理"); _cls_state["done"] += 1; continue
             try:
-                r = classify_article_ai(title, text)
+                r = classify_article_ai(title, text, model=config.simple_model)
             except Exception as e:
                 if _is_request_timeout_error(e) and _queue_timeout_retry(_cls_state, aid, retry_counts):
                     retry_queue.append((aid, title, text))
@@ -822,7 +822,7 @@ def _batch_ai_classify():
             _cls_state["current"] = f"#{aid} {title[:50]}"
             _log(_cls_state, f"#{aid} 🔄 重试分类...")
             try:
-                r = classify_article_ai(title, text)
+                r = classify_article_ai(title, text, model=config.simple_model)
                 if r:
                     db2 = _conn()
                     db2.execute("UPDATE news_articles SET ai_category=?, ai_tags=? WHERE id=?", (r.get("category",""), _json.dumps(r.get("tags",[]), ensure_ascii=False), aid))
@@ -870,7 +870,7 @@ def _batch_ai_score():
             except Exception:
                 days = 0
             try:
-                r = score_priority_ai(title, text, source or "Unknown", days)
+                r = score_priority_ai(title, text, source or "Unknown", days, model=config.simple_model)
             except Exception as e:
                 if _is_request_timeout_error(e) and _queue_timeout_retry(_score_state, aid, retry_counts):
                     retry_queue.append((aid, title, text, source or "Unknown", fetched_at or ""))
@@ -896,7 +896,7 @@ def _batch_ai_score():
             except Exception:
                 days = 0
             try:
-                r = score_priority_ai(title, text, source, days)
+                r = score_priority_ai(title, text, source, days, model=config.simple_model)
                 if r:
                     db2 = _conn()
                     db2.execute("UPDATE news_articles SET priority_score=?, priority_label=?, ai_priority_score=? WHERE id=?", (r["score"], r.get("label","medium"), r["score"], aid))
@@ -1523,74 +1523,84 @@ def force_reset_batch_clean():
 _full_state = _new_state()
 
 def _batch_ai_full():
-    """顺序执行全部 AI 处理步骤。每步检查是否有待处理项，无则跳过。"""
+    """混合并行管道 — 清洗(Nex) 与 后续线性管道(DSv3.2+Qwen) 并发运行。"""
     global _full_state
-    _reset_state(_full_state)
-    step_names = ["内容清洗", "翻译", "AI 分析", "关键词提取", "智能分类", "优先级评分", "事件重聚类", "事件摘要", "全景图排序", "构筑逻辑链"]
-    steps = [
-        ("内容清洗", _batch_clean, _clean_state, 'clean'),
-        ("翻译", _batch_translate, _translate_state, 'translate'),
-        ("AI 分析", _batch_analyze, _analyze_state, 'analyze'),
-        ("关键词提取", _batch_ai_keywords, _kw_state, 'keywords'),
-        ("智能分类", _batch_ai_classify, _cls_state, 'classify'),
-        ("优先级评分", _batch_ai_score, _score_state, 'score'),
-        ("事件重聚类", _batch_ai_recluster, _recluster_state, 'recluster'),
-        ("事件摘要", _batch_ai_summarize_events, _evt_sum_state, 'summarize_events'),
-        ("全景图排序", _batch_ai_rank_events, _rank_state, 'rank_events'),
-        ("构筑逻辑链", _build_logic_chains, _chain_state, 'build_chains'),
+    _reset_state(_full_state, steps=[])
+
+    # ── 步骤定义 ──────────────────────────────────────────────
+    # 清洗独立线程，线性管道余下步骤顺序执行
+    clean_step = ("内容清洗", _batch_clean, _clean_state, 'clean')
+    linear_steps = [
+        ("翻译",          _batch_translate,           _translate_state,  'translate'),
+        ("AI 分析",       _batch_analyze,             _analyze_state,    'analyze'),
+        ("关键词提取",    _batch_ai_keywords,         _kw_state,         'keywords'),
+        ("智能分类",      _batch_ai_classify,         _cls_state,        'classify'),
+        ("优先级评分",    _batch_ai_score,            _score_state,      'score'),
+        ("事件重聚类",    _batch_ai_recluster,        _recluster_state,  'recluster'),
+        ("事件摘要",      _batch_ai_summarize_events, _evt_sum_state,    'summarize_events'),
+        ("全景图排序",    _batch_ai_rank_events,      _rank_state,       'rank_events'),
+        ("构筑逻辑链",    _build_logic_chains,        _chain_state,      'build_chains'),
     ]
-    # 初始化所有步骤状态
+    step_names = ["内容清洗"] + [nm for nm, _, _, _ in linear_steps]
     _full_state["steps"] = [{"name": nm, "status": "pending"} for nm in step_names]
-    _full_state["total"] = len(steps)
-    _log(_full_state, f"🚀 启动全流程 AI 处理 — 共 {len(steps)} 步")
-    for idx, (label, fn, st, lock_name) in enumerate(steps, 1):
-        if _check_cancelled(_full_state):
-            _log(_full_state, "🛑 全流程已取消")
-            break
-        _log(_full_state, f"━━━ 步骤 {idx}/{len(steps)}: {label} ━━━")
-        _full_state["current"] = f"{label} — 执行中..."
-        _full_state["done"] = idx - 1
-        if _full_state["steps"]:
-            _full_state["steps"][idx - 1]["status"] = "running"
-        try:
-            # 子任务在独立线程中运行，主线程监控取消信号
-            import threading as _th
-            sub_thread = _th.Thread(target=fn, daemon=True)
-            sub_thread.start()
-            # 等待子任务完成，检测取消信号（全流程取消 或 子任务单独取消）
-            # 15s 宽限：超时后强制跳过，后续步骤不受阻
-            grace = 0
-            while st.get("running"):
-                if _full_state.get("cancelled") or st.get("cancelled"):
-                    st["cancelled"] = True  # 确保传播
-                    grace += 2
-                    if grace >= 15:
-                        _log(_full_state, f"⚡ {label} 超时未停止 — 强制跳过")
-                        _force_reset(lock_name, st)
-                        if _full_state["steps"]:
-                            _full_state["steps"][idx - 1]["status"] = "skipped"
-                        break
-                time.sleep(2)
-            # 给子线程 5s 收尾（join 不阻塞管道）
-            sub_thread.join(timeout=5)
-            # 判断退出原因：force-reset (skipped) 还是正常完成
-            if _full_state["steps"] and _full_state["steps"][idx - 1]["status"] != "skipped":
-                if st.get("cancelled") or _full_state.get("cancelled"):
-                    _log(_full_state, f"⏭️ {label} 已跳过")
-                    _full_state["steps"][idx - 1]["status"] = "skipped"
-                else:
-                    _log(_full_state, f"✅ {label} 完成")
-                    _full_state["steps"][idx - 1]["status"] = "done"
-        except Exception as e:
-            _log(_full_state, f"❌ {label} 异常: {str(e)[:120]}")
+    _full_state["total"] = len(step_names)
+    _log(_full_state, f"🚀 启动全流程 — 清洗(Nex) ∥ 管道(DSv3.2+Qwen)")
+
+    import threading as _th
+    threads: list[tuple[str, _th.Thread, dict, str, int]] = []
+
+    # ── 启动清洗线程（Nex-N2-Pro，独立速率限制）───────────────
+    _full_state["steps"][0]["status"] = "running"
+    ct = _th.Thread(target=_batch_clean, daemon=True)
+    ct.start()
+    threads.append(("内容清洗", ct, _clean_state, 'clean', 0))
+    _log(_full_state, "┣ 清洗 (Nex-N2-Pro) — 已启动")
+
+    # ── 启动线性管道线程（DeepSeek+Qwen 交替）─────────────────
+    def _run_linear():
+        for idx, (label, fn, st, lock_name) in enumerate(linear_steps, 1):
+            step_idx = idx  # 0=clean, 1+=linear
+            if _check_cancelled(_full_state):
+                break
+            _log(_full_state, f"┣ {label} — 执行中...")
+            _full_state["current"] = f"{label} — 执行中..."
             if _full_state["steps"]:
-                _full_state["steps"][idx - 1]["status"] = "failed"
-            # 清理残留锁，后续步骤不受阻
-            try: _force_reset(lock_name, st)
-            except: pass
-        _full_state["done"] = idx
+                _full_state["steps"][step_idx]["status"] = "running"
+            try:
+                fn()
+                # 等待完成
+                while st.get("running"):
+                    if _full_state.get("cancelled") or st.get("cancelled"):
+                        st["cancelled"] = True
+                        break
+                    time.sleep(3)
+                status = "skipped" if st.get("cancelled") else "done"
+                _log(_full_state, f"┣ {label} — {'⏭️ 跳过' if status == 'skipped' else '✅ 完成'}")
+                if _full_state["steps"]:
+                    _full_state["steps"][step_idx]["status"] = status
+            except Exception as e:
+                _log(_full_state, f"┣ {label} ❌ {str(e)[:120]}")
+                if _full_state["steps"]:
+                    _full_state["steps"][step_idx]["status"] = "failed"
+                try: _force_reset(lock_name, st)
+                except: pass
+            _full_state["done"] = step_idx + 1
+
+    lt = _th.Thread(target=_run_linear, daemon=True)
+    lt.start()
+
+    # ── 等待清洗线程（最长）──────────────────────────────────
+    ct.join()
+    if _full_state["steps"]:
+        _full_state["steps"][0]["status"] = "skipped" if _clean_state.get("cancelled") else "done"
+    _full_state["done"] = max(_full_state["done"], 1)
+    _log(_full_state, "┣ 清洗 (Nex) — 完成，等待管道...")
+
+    # ── 等待线性管道完成 ──────────────────────────────────────
+    lt.join()
     _full_state["running"] = False
     _full_state["current"] = "全部完成"
+    _full_state["done"] = len(step_names)
     _unlock('ai_full')
     task_state.finish('ai_full', success=True)
 

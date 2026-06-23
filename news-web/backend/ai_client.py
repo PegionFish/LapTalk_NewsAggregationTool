@@ -69,10 +69,11 @@ def _request_options(
     enable_thinking: bool | None,
     thinking_budget: int | None,
     response_format: dict[str, Any] | None,
+    model: str | None = None,  # 覆写模型，None 使用全局 openai_model
 ) -> dict[str, Any]:
     """组装 Chat Completions 请求参数。"""
     options: dict[str, Any] = {
-        "model": config.openai_model,
+        "model": model or config.openai_model,
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
@@ -104,14 +105,11 @@ def chat(
     enable_thinking: bool | None = None,
     thinking_budget: int | None = None,
     response_format: dict[str, Any] | None = None,
-    stream_log: bool = False,  # 启用流式输出，每 2K chars 回调一次
-    on_stream_chunk: "Callable[[str, int, int], None] | None" = None,  # (text, content_chars, thinking_chars)
+    stream_log: bool = False,
+    on_stream_chunk: "Callable[[str, int, int], None] | None" = None,
+    model: str | None = None,  # None=使用全局 openai_model
 ) -> str:
-    """发送单轮聊天请求并返回助手文本。
-
-    当 stream_log=True 且提供 on_stream_chunk 时，使用 SSE 流式接收，
-    每积累约 2K 字符调用 on_stream_chunk(total_text, accumulated_chars)。
-    """
+    """发送单轮聊天请求并返回助手文本。"""
     from utils.rate_limiter import ai_rate_limiter as _rl
     from typing import Callable
 
@@ -130,6 +128,7 @@ def chat(
         enable_thinking=enable_thinking,
         thinking_budget=thinking_budget,
         response_format=response_format,
+        model=model,
     )
 
     if stream_log and on_stream_chunk:
@@ -193,6 +192,7 @@ def _ai_json(
     enable_thinking: bool | None = None,
     thinking_budget: int | None = None,
     response_format: dict[str, Any] | None = None,
+    model: str | None = None,
 ) -> dict | list | None:
     """调用 AI 并解析 JSON 返回；失败时返回 None。"""
     # 若未显式传入格式且全局开关开启，自动启用 JSON object 输出。
@@ -216,6 +216,7 @@ def _ai_json(
                 enable_thinking=enable_thinking,
                 thinking_budget=thinking_budget,
                 response_format=response_format,
+                model=model,
             )
         )
         # 记录真实 token 消耗
@@ -348,14 +349,16 @@ def clean_article_content(html: str, on_stream: "Callable[[str, int, int], None]
     # 注意：清洗是结构性提取任务，不启用深度思考。
     # 深度思考会增加大量推理 token（耗时 ×3~5），对提取质量提升微乎其微。
     # 大 max_tokens 确保长文输出不被截断，160K 上下文中有充足余量。
+    # 模型：使用 config.clean_model（独立于分析/分类等使用的 openai_model）
     return chat(
         prompt,
         system_prompt=system_prompt,
-        max_tokens=65536,       # 充分利用 160K 上下文 — 长文清洗不截断
-        temperature=0.05,       # 低温度确保确定性提取
-        enable_thinking=True,   # 思维链提升提取精度，预算充足可接受
+        max_tokens=65536,
+        temperature=0.05,
+        enable_thinking=True,
         stream_log=on_stream is not None,
         on_stream_chunk=on_stream,
+        model=config.clean_model,  # 清洗专用模型（Nex-N2-Pro）
     )
 
 
@@ -364,8 +367,8 @@ def clean_article_content(html: str, on_stream: "Callable[[str, int, int], None]
 # ══════════════════════════════════════════════════════════════
 
 
-def extract_keywords_ai(title: str, text: str = "", source: str = "") -> list[str]:
-    """AI 从标题+正文中提取技术关键词。text 为空时仅用标题。"""
+def extract_keywords_ai(title: str, text: str = "", source: str = "", model: str | None = None) -> list[str]:
+    """AI 从标题+正文中提取技术关键词。text 为空时仅用标题。model=None 使用全局 openai_model。"""
     content = _prepare_content(text)
     user_prompt = f"标题：{title}\n来源：{source}\n"
     if content:
@@ -379,6 +382,7 @@ def extract_keywords_ai(title: str, text: str = "", source: str = "") -> list[st
         "技术名词、产品名、公司名保留英文原文。关键词按重要性排序。",
         max_tokens=512,
         temperature=0.05,
+        model=model,
     )
     if isinstance(result, list) and len(result) > 0:
         return [str(k) for k in result if isinstance(k, str)]
@@ -391,8 +395,8 @@ def extract_keywords_ai(title: str, text: str = "", source: str = "") -> list[st
     return None
 
 
-def classify_article_ai(title: str, text: str) -> dict | None:
-    """AI 分类文章主题。HTML 提取纯文本后传入 160K 上下文。"""
+def classify_article_ai(title: str, text: str, model: str | None = None) -> dict | None:
+    """AI 分类文章主题。HTML 提取纯文本后传入 160K 上下文。model=None 使用全局 openai_model。"""
     content = _prepare_content(text)
     result = _ai_json(
         _with_deep_thinking(
@@ -405,14 +409,15 @@ def classify_article_ai(title: str, text: str) -> dict | None:
         "你是科技新闻分类引擎。只输出 JSON，不输出其他内容。技术名词保留英文原文。",
         max_tokens=512,
         temperature=0.05,
+        model=model,
     )
     if isinstance(result, dict) and "category" in result:
         return result
     return None
 
 
-def score_priority_ai(title: str, text: str, source: str, days_old: int = 0) -> dict | None:
-    """AI 评估文章优先级（百分制 0~100）。HTML 提取纯文本后传入 160K 上下文。"""
+def score_priority_ai(title: str, text: str, source: str, days_old: int = 0, model: str | None = None) -> dict | None:
+    """AI 评估文章优先级（百分制 0~100）。HTML 提取纯文本后传入 160K 上下文。model=None 使用全局 openai_model。"""
     content = _prepare_content(text)
     result = _ai_json(
         _with_deep_thinking(

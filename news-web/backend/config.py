@@ -9,6 +9,10 @@ DEFAULT_CONFIG = {
     'openai_base_url': 'https://api.siliconflow.cn/v1',
     'openai_api_key': '',
     'openai_model': 'deepseek-ai/DeepSeek-V3.2',
+    'simple_model': 'Qwen/Qwen3.5-35B-A3B',       # 关键词/分类/评分等轻量任务
+    'clean_model': 'nex-agi/Nex-N2-Pro',            # 内容清洗专用
+    'clean_model': 'nex-agi/Nex-N2-Pro',                # 内容清洗专用
+    'pipeline_model': 'deepseek-ai/DeepSeek-V3.1-Terminus',  # 分析/分类/评分等线性管道
     'ai_enable_thinking': True,
     'ai_thinking_budget': 32768,
     'ai_deep_thinking_max_tokens': 8192,
@@ -99,6 +103,24 @@ class AppConfig:
     @openai_model.setter
     def openai_model(self, val: str):
         self._data['openai_model'] = val
+        self.save()
+
+    @property
+    def clean_model(self) -> str:
+        return self._data.get('clean_model', self.openai_model)
+
+    @clean_model.setter
+    def clean_model(self, val: str):
+        self._data['clean_model'] = val
+        self.save()
+
+    @property
+    def simple_model(self) -> str:
+        return self._data.get('simple_model', self.openai_model)
+
+    @simple_model.setter
+    def simple_model(self, val: str):
+        self._data['simple_model'] = val
         self.save()
 
     @property
