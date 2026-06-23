@@ -303,24 +303,6 @@ def clean_article_content(html: str, on_stream: "Callable[[str, int, int], None]
 
     传入 on_stream(text, content_chars, thinking_chars) 回调启用 SSE 流式。
     """
-    # 截断超长 HTML，为 prompt 和响应留出余量（160K tokens ≈ 480K chars）
-    # 80K chars ≈ 27K tokens，留足 130K+ 给响应和思维链
-    MAX_HTML_CHARS = 80000
-    if len(html) > MAX_HTML_CHARS:
-        # 尝试在段落/标签边界截断，避免截断在标签中间
-        truncated = html[:MAX_HTML_CHARS]
-        # 找到最后一个完整的 > 标签闭合
-        last_close = truncated.rfind('>')
-        if last_close > MAX_HTML_CHARS * 0.8:
-            truncated = truncated[:last_close + 1]
-        # 找到最后一个段落/标题结尾
-        for tag in ('</p>', '</div>', '</section>', '</article>', '</h2>', '</h3>', '</li>'):
-            pos = truncated.rfind(tag)
-            if pos > MAX_HTML_CHARS * 0.7:
-                truncated = truncated[:pos + len(tag)]
-                break
-        html = truncated
-
     system_prompt = (
         "你是一个新闻文章内容提取专家。"
         "从提供的 HTML 中仅提取文章正文主体。"
