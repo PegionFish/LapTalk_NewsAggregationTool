@@ -41,6 +41,18 @@ export default function Dashboard() {
       setStats({ articles: d.articles, events: d.events, active_events: d.events, human_verified: 0, cache_cached: d.cached, cache_text: 0, cache_translated: 0, cache_failed: d.failed, cache_pending: d.pending, by_category: {}, by_source: {} });
     });
 
+    es.addEventListener('article_state', (e) => {
+      const d = JSON.parse(e.data);
+      setArticleRunning(true);
+      setArticleState({ running: true, total: d.total, done: d.done, failed: d.failed, current: d.current || '' });
+    });
+
+    es.addEventListener('event_state', (e) => {
+      const d = JSON.parse(e.data);
+      setEventRunning(true);
+      setEventState({ running: true, total: d.steps?.length || 0, done: 0, failed: 0, current: '', steps: d.steps || [] });
+    });
+
     es.addEventListener('article_batch_start', (e) => {
       const d = JSON.parse(e.data);
       setArticleRunning(true);

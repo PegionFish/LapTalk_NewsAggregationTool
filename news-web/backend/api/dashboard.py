@@ -118,8 +118,23 @@ async def dashboard_stream(request: Request):
     async def event_generator():
         q = DashboardStream.subscribe()
         try:
+            # 初始快照：stats + 当前管线状态
             stats = _get_stats_snapshot()
             yield f"event: stats\ndata: {json.dumps(stats, ensure_ascii=False)}\n\n"
+            # 推送当前文章管线状态（懒导入避免循环引用）
+            try:
+                from api.pipeline_article import _article_state
+                if _article_state.get("running"):
+                    yield f"event: article_state\ndata: {json.dumps({'running': True, 'total': _article_state.get('total', 0), 'done': _article_state.get('done', 0), 'failed': _article_state.get('failed', 0), 'current': _article_state.get('current', '')}, ensure_ascii=False)}\n\n"
+            except Exception:
+                pass
+            # 推送当前事件管线状态（懒导入避免循环引用）
+            try:
+                from api.pipeline_event import _event_state
+                if _event_state.get("running"):
+                    yield f"event: event_state\ndata: {json.dumps({'running': True, 'steps': _event_state.get('steps', [])}, ensure_ascii=False)}\n\n"
+            except Exception:
+                pass
             last_stats = datetime.now()
             while True:
                 if await request.is_disconnected():
