@@ -76,6 +76,10 @@ export default function Dashboard() {
       const d = JSON.parse(e.data);
       setArticleState(prev => ({ ...prev, failed: (prev.failed || 0) + 1 }));
       setRecentFailed(prev => [{ id: d.id, title: d.title || '', error: d.error || '' }, ...prev].slice(0, 10));
+      // 关键错误立即告警
+      if (d.error && /balance|insufficient|403|30001|额度|余额/i.test(d.error)) {
+        showToast(`⚠️ API 账户余额不足！处理已中断: ${d.error}`);
+      }
     });
 
     es.addEventListener('article_batch_done', (e) => {

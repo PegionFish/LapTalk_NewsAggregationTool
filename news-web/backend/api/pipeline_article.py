@@ -100,12 +100,17 @@ def _run_batch():
                     pending_updates.append((aid, updates))
                 if r["ok"]:
                     done += 1
+                    DashboardStream.publish("article_done", {"id": aid, "ok": True, "steps": r.get("steps", {})})
                 else:
                     failed += 1
-                    _article_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] #{aid} ❌ {r.get('error', '')[:100]}")
+                    err = r.get('error', '')[:100]
+                    _article_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] #{aid} ❌ {err}")
+                    DashboardStream.publish("article_failed", {"id": aid, "error": err, "step": "unknown"})
             except Exception as e:
                 failed += 1
-                _article_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] #{aid} ❌ 线程异常: {e}")
+                err = str(e)[:100]
+                _article_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] #{aid} ❌ 线程异常: {err}")
+                DashboardStream.publish("article_failed", {"id": aid, "error": err, "step": "thread"})
             _article_state["done"] = done
             _article_state["failed"] = failed
             _article_state["current"] = f"{done+failed}/{total}"

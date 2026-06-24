@@ -46,9 +46,11 @@ def rotate_audit_log():
         logger.warning(f"审计日志轮转失败: {e}")
 
 
+import queue as _queue_mod
+
 class DashboardStream:
-    """SSE 广播单例。管线函数通过 publish() 推送事件到所有连接的客户端。"""
-    _queues: list[asyncio.Queue] = []
+    """SSE 广播单例。使用线程安全队列，支持从子线程 publish。"""
+    _queues: list[_queue_mod.Queue] = []
 
     @classmethod
     def publish(cls, event: str, data: dict):
@@ -56,18 +58,18 @@ class DashboardStream:
         for q in cls._queues:
             try:
                 q.put_nowait(payload)
-            except asyncio.QueueFull:
+            except _queue_mod.Full:
                 pass
         _audit_log(event, data)
 
     @classmethod
-    def subscribe(cls) -> asyncio.Queue:
-        q = asyncio.Queue(maxsize=256)
+    def subscribe(cls) -> _queue_mod.Queue:
+        q = _queue_mod.Queue(maxsize=256)
         cls._queues.append(q)
         return q
 
     @classmethod
-    def unsubscribe(cls, q: asyncio.Queue):
+    def unsubscribe(cls, q: _queue_mod.Queue):
         try:
             cls._queues.remove(q)
         except ValueError:
@@ -136,11 +138,13 @@ async def dashboard_stream(request: Request):
             except Exception:
                 pass
             last_stats = datetime.now()
+            loop = asyncio.get_event_loop()
             while True:
                 if await request.is_disconnected():
                     break
                 try:
-                    event, data = await asyncio.wait_for(q.get(), timeout=5)
+                    event, data = await asyncio.wait_for(
+                        loop.run_in_executor(None, q.get), timeout=5)
                     yield f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
                 except asyncio.TimeoutError:
                     now = datetime.now()

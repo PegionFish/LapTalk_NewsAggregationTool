@@ -283,11 +283,15 @@ def process_article_collect(article_id: int) -> dict:
                 if cleaned and len(cleaned.strip()) > 50:
                     updates["ai_cleaned_content"] = cleaned
                     result["steps"]["cleaned"] = f"{len(cleaned)} chars"
+                    from api.dashboard import DashboardStream
+                    DashboardStream.publish("article_progress", {"id": aid, "title": title, "step": "cleaning", "done": 0, "total": 0, "current": f"#{aid} 清洗完成"})
                 else:
                     result["steps"]["cleaned"] = "empty"
             except Exception as e:
                 result["steps"]["cleaned"] = f"error: {e}"
                 logger.warning(f"#{aid} 清洗失败: {e}")
+                from api.dashboard import DashboardStream
+                DashboardStream.publish("article_failed", {"id": aid, "title": title, "error": f"清洗: {e}", "step": "cleaning"})
 
         # ── Step 3: 翻译 ──
         if _is_not_empty(existing_translated) and len(existing_translated.strip()) > 50:
@@ -355,6 +359,8 @@ def process_article_collect(article_id: int) -> dict:
                         updates["priority_label"] = kcs.get("label", "medium")
                         updates["ai_priority_score"] = kcs["score"]
                     result["steps"]["kcs"] = f"{kcs.get('category','?')} {kcs.get('label','medium')}({kcs.get('score',0):.0f})"
+                    from api.dashboard import DashboardStream
+                    DashboardStream.publish("article_progress", {"id": aid, "title": title, "step": "kcs", "done": 0, "total": 0, "current": f"#{aid} KCS完成"})
                 else:
                     result["steps"]["kcs"] = "empty"
             except Exception as e:
