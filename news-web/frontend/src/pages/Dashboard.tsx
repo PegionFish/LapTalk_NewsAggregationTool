@@ -175,47 +175,47 @@ export default function Dashboard() {
 
       <DashboardCards stats={stats} loading={loading} />
 
-      {/* Pipeline Cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: 16, marginTop: 16 }}>
+      {/* Pipeline Cards — 运行时全宽展开 */}
+      <div style={{ display: 'grid', gridTemplateColumns: (articleRunning || eventRunning) ? '1fr' : 'repeat(auto-fit, minmax(400px, 1fr))', gap: 16, marginTop: 16 }}>
 
         {/* Article Processing Card */}
-        <Card>
-          <CardHeader icon="fa-newspaper" iconColor="var(--accent-blue)" title="📰 文章处理" desc="缓存→清洗→翻译→分析+KCS" />
+        <Card style={articleRunning ? { borderColor: 'var(--accent-blue)', borderWidth: 2 } : undefined}>
+          <CardHeader icon="fa-newspaper" iconColor="var(--accent-blue)" title="📰 文章处理" desc={articleRunning ? `${articleState.done}/${articleState.total} 已完成 · ${articleState.failed} 失败` : '缓存→清洗→翻译→分析+KCS'} />
           <CardBody>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
               <Button variant={articleRunning ? 'ghost' : 'primary'} onClick={handleArticleBatch}
-                      icon={articleRunning ? 'fa-stop' : 'fa-play'} disabled={articleRunning}>
-                {articleRunning ? '运行中...' : '一键处理全部'}
+                      icon={articleRunning ? 'fa-spinner fa-spin' : 'fa-play'} disabled={articleRunning}>
+                {articleRunning ? `处理中 ${articleState.done}/${articleState.total}` : '一键处理全部'}
               </Button>
               {articleRunning && batchETA && <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>ETA: {batchETA}</span>}
             </div>
 
             {articleRunning && (
-              <>
+              <div style={{ marginBottom: 12 }}>
                 <ProgressBar done={articleState.done} total={articleState.total} color="var(--accent-blue)" />
                 <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
-                  {articleState.done}/{articleState.total} {articleState.current && `— ${articleState.current}`}
+                  {articleState.current}
                 </div>
-              </>
+              </div>
             )}
 
             {recentDone.length > 0 && (
-              <div style={{ marginTop: 12 }}>
-                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 4 }}>最近完成:</div>
+              <div style={{ marginTop: 12, maxHeight: articleRunning ? 200 : 120, overflow: 'auto' }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 4 }}>最近完成 ({recentDone.length}):</div>
                 {recentDone.map((item, i) => (
-                  <div key={i} style={{ fontSize: 11, color: 'var(--accent-green)', padding: '2px 0' }}>
-                    ✅ #{item.id} {item.title?.slice(0, 60)} — {JSON.stringify(item.steps).slice(0, 80)}
+                  <div key={i} style={{ fontSize: 11, color: 'var(--accent-green)', padding: '2px 0', fontFamily: 'monospace' }}>
+                    ✅ #{item.id} {item.title?.slice(0, 80)} — {JSON.stringify(item.steps).slice(0, 80)}
                   </div>
                 ))}
               </div>
             )}
 
             {recentFailed.length > 0 && (
-              <div style={{ marginTop: 8 }}>
-                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--accent-red)', marginBottom: 4 }}>失败:</div>
+              <div style={{ marginTop: 8, maxHeight: articleRunning ? 200 : 100, overflow: 'auto' }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--accent-red)', marginBottom: 4 }}>失败 ({recentFailed.length}):</div>
                 {recentFailed.map((item, i) => (
-                  <div key={i} style={{ fontSize: 11, color: 'var(--accent-red)', padding: '2px 0' }}>
-                    ❌ #{item.id} {item.title?.slice(0, 60)} — {item.error}
+                  <div key={i} style={{ fontSize: 11, color: 'var(--accent-red)', padding: '2px 0', fontFamily: 'monospace' }}>
+                    ❌ #{item.id} {item.title?.slice(0, 80)} — {item.error}
                   </div>
                 ))}
               </div>
@@ -228,12 +228,12 @@ export default function Dashboard() {
         </Card>
 
         {/* Event Pipeline Card */}
-        <Card>
-          <CardHeader icon="fa-link" iconColor="var(--accent)" title="🔗 事件管线" desc="聚类→摘要→逻辑链 · 凌晨1:00自动执行" />
+        <Card style={eventRunning ? { borderColor: 'var(--accent)', borderWidth: 2 } : undefined}>
+          <CardHeader icon="fa-link" iconColor="var(--accent)" title="🔗 事件管线" desc={eventRunning ? '聚类→摘要→逻辑链 进行中' : '聚类→摘要→逻辑链 · 凌晨1:00自动执行'} />
           <CardBody>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12 }}>
               <Button variant={eventRunning ? 'ghost' : 'primary'} onClick={handleEventNightly}
-                      icon={eventRunning ? 'fa-stop' : 'fa-play'} disabled={eventRunning}>
+                      icon={eventRunning ? 'fa-spinner fa-spin' : 'fa-play'} disabled={eventRunning}>
                 {eventRunning ? '运行中...' : '启动事件管线'}
               </Button>
               <Button variant="ghost" onClick={handleRecluster} disabled={eventRunning}>重聚类</Button>
