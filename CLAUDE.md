@@ -271,6 +271,10 @@ AI 配置从前端可控，分为三组（`/api/settings/ai`）：
 33. **NEWS_WEB_TESTING 布尔解析** — `'0'` 在 Python 中是 truthy，用 `in` 判断
 34. **AsyncIOScheduler → BackgroundScheduler** — 解决 sync 端点中 `no running event loop` 问题
 35. **超大 HTML 拆分** — >1.8M 字符在块级元素边界自动拆分后分别清洗
+36. **AI 语义事件匹配替代 bigram** — 事件聚类在 process_article() KCS 后完成，不再使用 bigram Jaccard
+37. **事件管线两步化** — nightly 从三步（recluster→summarize→chains）简化为两步（summarize→chains）
+38. **全景图过滤** — build_panoramic_context() 仅取 ≥2 篇实际关联的活跃事件
+39. **pending_cluster 机制** — 单篇文章标记 pending_cluster，每日 02:30 批处理重新尝试匹配
 
 ### 已知设计约束
 
