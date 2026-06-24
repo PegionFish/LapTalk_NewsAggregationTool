@@ -78,12 +78,33 @@ def _get_stats_snapshot() -> dict:
     """获取当前统计快照。"""
     try:
         db = get_db_connection(config.db_path)
-        articles = db.execute("SELECT COUNT(*) FROM news_articles").fetchone()[0]
-        events = db.execute("SELECT COUNT(*) FROM events WHERE status='active'").fetchone()[0]
+        articles = db.execute(
+            "SELECT COUNT(*) FROM news_articles"
+            " WHERE (ai_filtered IS NULL OR ai_filtered != -1)"
+            " AND (content_status IS NULL OR content_status != 'dead')"
+        ).fetchone()[0]
+        events = db.execute("""
+            SELECT COUNT(DISTINCT ae.event_id) FROM news_article_events ae
+            JOIN news_articles a ON a.id = ae.article_id
+            WHERE (a.ai_filtered IS NULL OR a.ai_filtered != -1)
+            AND (a.content_status IS NULL OR a.content_status != 'dead')
+        """).fetchone()[0]
         chains = db.execute("SELECT COUNT(*) FROM logic_chains").fetchone()[0]
-        cached = db.execute("SELECT COUNT(*) FROM news_articles WHERE local_path != '' AND local_path NOT LIKE '[ERR:%'").fetchone()[0]
-        pending = db.execute("SELECT COUNT(*) FROM news_articles WHERE content_status='pending'").fetchone()[0]
-        failed = db.execute("SELECT COUNT(*) FROM news_articles WHERE local_path LIKE '[ERR:%'").fetchone()[0]
+        cached = db.execute(
+            "SELECT COUNT(*) FROM news_articles"
+            " WHERE local_path != '' AND local_path NOT LIKE '[ERR:%'"
+            " AND (ai_filtered IS NULL OR ai_filtered != -1)"
+        ).fetchone()[0]
+        pending = db.execute(
+            "SELECT COUNT(*) FROM news_articles"
+            " WHERE content_status='pending'"
+            " AND (ai_filtered IS NULL OR ai_filtered != -1)"
+        ).fetchone()[0]
+        failed = db.execute(
+            "SELECT COUNT(*) FROM news_articles"
+            " WHERE local_path LIKE '[ERR:%'"
+            " AND (ai_filtered IS NULL OR ai_filtered != -1)"
+        ).fetchone()[0]
         db.close()
         return {"articles": articles, "events": events, "chains": chains,
                 "cached": cached, "pending": pending, "failed": failed}
