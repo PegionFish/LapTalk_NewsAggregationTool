@@ -1,5 +1,6 @@
 """文章级管线 API — 缓存→清洗→翻译→分析+KCS"""
 import threading, logging, time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from fastapi import APIRouter
 
@@ -80,20 +81,27 @@ def _run_batch():
         task_state.finish('article', success=True)
         return
 
+    # 8 线程并行处理（AI API 调用是 IO 密集型）
     done = 0
     failed = 0
-    for (aid,) in rows:
-        _article_state["current"] = f"#{aid}"
-        r = process_article(aid)
-        if r["ok"]:
-            done += 1
+    MAX_WORKERS = 50
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        future_to_aid = {executor.submit(process_article, aid): aid for (aid,) in rows}
+        for future in as_completed(future_to_aid):
+            aid = future_to_aid[future]
+            try:
+                r = future.result()
+                if r["ok"]:
+                    done += 1
+                else:
+                    failed += 1
+                    _article_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] #{aid} ❌ {r.get('error', '')[:100]}")
+            except Exception as e:
+                failed += 1
+                _article_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] #{aid} ❌ 线程异常: {e}")
             _article_state["done"] = done
-            _article_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] #{aid} ✅")
-        else:
-            failed += 1
             _article_state["failed"] = failed
-            _article_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] #{aid} ❌ {r.get('error', '')[:100]}")
-        time.sleep(0.3)
+            _article_state["current"] = f"{done+failed}/{total}"
 
     _article_state["current"] = "完成"
     DashboardStream.publish("article_batch_done", {"done": done, "failed": failed})
