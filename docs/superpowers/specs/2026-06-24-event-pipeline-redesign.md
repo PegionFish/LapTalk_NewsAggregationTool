@@ -111,12 +111,20 @@ bigram 相似度实测：
 
 ## 3. 实现步骤
 
-### Step 1: 清理垃圾数据
+### Step 1: 全量清空事件相关数据
 
-- 删除 `news_article_events` 关联数为 0 的事件 (~2,131 个)
-- 将 `article_count=1` 的事件标记为 `status='orphan'` (~3,292 个)
-- 对应文章的 `content_status` 设为 `'pending_cluster'`
-- 清理后预计剩余 ~319 个有效事件 (2+ 篇)
+当前所有事件数据均由 bigram 聚类产生，不可信任。全部清空，从零重建：
+
+```sql
+DELETE FROM chain_relations;
+DELETE FROM chain_events;
+DELETE FROM logic_chains;
+DELETE FROM event_relations;
+DELETE FROM news_article_events;
+DELETE FROM events;
+```
+
+将已处理文章的 `content_status` 设为 `'pending_cluster'`，首次全量重建时逐篇进行 AI 语义匹配。
 
 ### Step 2: 重写事件聚类 — AI 语义匹配
 
@@ -183,16 +191,19 @@ events = conn.execute("""
 
 | 维度 | 变更 |
 |------|------|
-| 事件数 | 3866 → ~319 (减少 92%) |
-| 全景图大小 | 926K → ~80K (减少 91%) |
+| 事件数 | 3866 → 0 (清空) → 重建为有效事件 (预估 300-500) |
+| 全景图大小 | 926K → 清空后 0 → 重建后 ~80K |
 | 文章处理耗时 | +1 次 AI 调用/篇 (match_article_to_events_ai) |
-| 事件管线耗时 | 大幅减少 (移除聚类步骤，全量上下文变小) |
-| API 端点 | `/recluster` 保留但降级为手动触发；`/nightly` 从三步变两步 |
+| 事件管线耗时 | 大幅减少 (移除聚类步骤 + 无垃圾数据) |
+| API 端点 | `/recluster` 改为手动触发；`/nightly` 三步变两步 |
+| 数据 | events / news_article_events / event_relations / logic_chains 全清 |
 
 ---
 
 ## 5. 待确认
 
-- [ ] `pending_cluster` 文章的定时批处理频率 (建议: 每天 1 次，在新文章处理完成后)
-- [ ] 单篇"事件"是否完全删除还是保留为 orphan 状态
-- [ ] `match_article_to_events_ai()` 候选事件数上限 (当前 50)
+- [x] `pending_cluster` 文章的定时批处理频率 → 每天 1 次，新文章处理完成后
+- [x] 单篇"事件"处理 → 标记 `status='orphan'`，后续新 RSS 文章进入时尝试聚合
+- [x] 数据清理策略 → 彻底清空所有事件数据（events / news_article_events / event_relations / logic_chains 全部 DELETE），从零开始用 AI 语义匹配重建
+- [x] `match_article_to_events_ai()` 候选事件数上限 → 保持 50
+- [ ] 首次全量重建：清空数据后，对 2,341 篇文章逐篇运行新的事件匹配逻辑，一次性重建事件
