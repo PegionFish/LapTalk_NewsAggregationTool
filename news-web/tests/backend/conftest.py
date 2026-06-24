@@ -146,9 +146,15 @@ def news_db(test_db_path):
         {'title': 'Intel Nova Lake CPU details', 'source': 'Wccftech', 'url': 'https://test.com/2', 'metadata': {}},
         {'title': 'AMD RDNA 4 architecture', 'source': 'TechPowerUp', 'url': 'https://test.com/3', 'metadata': {}},
     ])
-    # 标记为已抓取，使 link_articles_to_events 能关联到事件
+    # 标记为已抓取并直接创建测试事件（link_articles_to_events 已于 2026-06-24 废弃）
     with db._conn() as conn:
-        conn.execute("UPDATE news_articles SET content_status='fetched' WHERE content_status='pending' OR content_status IS NULL")
+        conn.execute("UPDATE news_articles SET content_status='fetched', ai_keywords='[]' WHERE content_status='pending' OR content_status IS NULL")
         conn.commit()
-    db.link_articles_to_events()
+        # 直接创建事件和文章-事件关联，替代废弃的 bigram 聚类
+        conn.execute("INSERT INTO events (id, title, first_seen, last_seen, article_count, status) VALUES (1, 'Intel Nova Lake series', '2026-06-10', '2026-06-12', 2, 'active')")
+        conn.execute("INSERT INTO events (id, title, first_seen, last_seen, article_count, status) VALUES (2, 'AMD RDNA 4 architecture', '2026-06-11', '2026-06-11', 1, 'active')")
+        conn.execute("INSERT INTO news_article_events (article_id, event_id) VALUES (1, 1)")
+        conn.execute("INSERT INTO news_article_events (article_id, event_id) VALUES (2, 1)")
+        conn.execute("INSERT INTO news_article_events (article_id, event_id) VALUES (3, 2)")
+        conn.commit()
     yield db
