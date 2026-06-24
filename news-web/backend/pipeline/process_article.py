@@ -172,6 +172,9 @@ def process_article(article_id: int) -> dict:
         db.execute("UPDATE news_articles SET content_status=? WHERE id=?", (final_status, aid))
         safe_commit(db)
     except Exception as e:
+        from ai_client import BalanceInsufficientError
+        if isinstance(e, BalanceInsufficientError):
+            raise  # 余额不足，穿透到批处理层暂停管线
         result["ok"] = False; result["error"] = str(e)
         logger.error(f"process_article #{article_id}: {e}")
     finally:

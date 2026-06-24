@@ -89,6 +89,12 @@ def _run_batch():
                     _article_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] #{aid} ❌ {err}")
                     DashboardStream.publish("article_failed", {"id": aid, "error": err, "step": "unknown"})
             except Exception as e:
+                from ai_client import BalanceInsufficientError
+                if isinstance(e, BalanceInsufficientError):
+                    _article_state["current"] = "余额不足，已暂停"
+                    _article_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] ⏸️ 余额不足，管线暂停")
+                    DashboardStream.publish("article_paused", {"error": str(e)})
+                    break  # 停止提交新任务，已提交的会自然完成
                 failed += 1
                 err = str(e)[:100]
                 _article_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] #{aid} ❌ {err}")
