@@ -253,7 +253,16 @@ export const api = {
   updateNotifPrefs: (data: Record<string, string | boolean>) =>
     fetchJSON<{ ok: boolean }>('/notifications/prefs', { method: 'PUT', body: JSON.stringify(data) }),
 
-  // AI API 连通性测试
+  // AI 入口级配置
+  getAiConfig: () => fetchJSON<import('../types').AiConfig>('/settings/ai'),
+  updateAiConfig: (data: Record<string, unknown>) =>
+    fetchJSON<import('../types').AiConfig>('/settings/ai', { method: 'PUT', body: JSON.stringify(data) }),
+  testAiConfig: (targets: string[]) =>
+    fetchJSON<import('../types').AiTestResponse>('/settings/ai/test', {
+      method: 'POST', body: JSON.stringify({ targets }),
+    }),
+
+  // AI API 连通性测试（旧接口保留兼容）
   testAi: () => fetchJSON<{ ok: boolean; response?: string; error?: string; model?: string }>('/settings/test-ai', { method: 'POST' }),
 
   testTranslation: () => fetchJSON<{ ok: boolean; original?: string; translation?: string; error?: string; model?: string }>('/settings/test-translation', { method: 'POST' }),

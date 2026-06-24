@@ -337,6 +337,115 @@
 .save-message.success { color: var(--accent-tertiary); }
 .save-message.error { color: var(--accent-red); }
 
+/* ── AI 入口级配置卡片 ────────────────────────────────── */
+.ai-config-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+
+.ai-config-import {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px 16px;
+  margin-bottom: 12px;
+}
+
+.ai-config-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  margin-bottom: 8px;
+  transition: var(--transition-fast);
+}
+.ai-config-card:hover { border-color: var(--border-hover); }
+
+.ai-config-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s;
+}
+.ai-config-card-header:hover { background: rgba(255, 255, 255, 0.03); }
+
+.ai-config-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ai-config-card-title h3 {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.ai-config-model-badge {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  padding: 2px 8px;
+  color: var(--text-muted);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-config-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ai-config-provider-name {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.ai-config-card-desc {
+  padding: 0 14px 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.ai-config-card-body {
+  padding: 12px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.ai-config-key-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.ai-config-key-row .form-control { flex: 1; }
+
+.ai-config-test-result {
+  margin: 0 14px 10px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ai-config-test-result.success {
+  background: rgba(52, 211, 153, 0.08);
+  color: var(--accent-tertiary);
+}
+.ai-config-test-result.error {
+  background: rgba(248, 113, 113, 0.08);
+  color: var(--accent-red);
+}
+
 /* ── 响应式 ─────────────────────────────────────────── */
 @media (max-width: 768px) {
   .settings-layout { flex-direction: column; }
@@ -348,4 +457,6 @@
   .sidebar-item { padding: 6px 14px; font-size: 11px; white-space: nowrap; }
   .settings-content { padding: 14px; }
   .form-grid.two { grid-template-columns: 1fr; }
+  .ai-config-card-title { flex-wrap: wrap; }
+  .ai-config-model-badge { max-width: 120px; }
 }

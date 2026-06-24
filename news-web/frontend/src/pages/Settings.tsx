@@ -171,6 +171,10 @@ export default function Settings() {
           thinkingBudget={aiThinkingBudget} setThinkingBudget={setAiThinkingBudget}
           deepThinkingMaxTokens={aiDeepThinkingMaxTokens} setDeepThinkingMaxTokens={setAiDeepThinkingMaxTokens}
           jsonResponseFormat={aiJsonResponseFormat} setJsonResponseFormat={setAiJsonResponseFormat}
+          translationEnabled={translationEnabled} setTranslationEnabled={setTranslationEnabled}
+          translationBaseUrl={translationBaseUrl} setTranslationBaseUrl={setTranslationBaseUrl}
+          translationApiKey={translationApiKey} setTranslationApiKey={setTranslationApiKey}
+          translationModel={translationModel} setTranslationModel={setTranslationModel}
         />;
       case 'translation':
         return <TranslationSettings

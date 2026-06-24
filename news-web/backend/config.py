@@ -143,6 +143,15 @@ class AppConfig:
         self.save()
 
     @property
+    def pipeline_model(self) -> str:
+        return self._data.get('pipeline_model', DEFAULT_CONFIG['pipeline_model'])
+
+    @pipeline_model.setter
+    def pipeline_model(self, val: str):
+        self._data['pipeline_model'] = val
+        self.save()
+
+    @property
     def ai_enable_thinking(self) -> bool:
         return self._data.get('ai_enable_thinking', True) is True
 
@@ -360,6 +369,8 @@ class AppConfig:
             d['openai_api_key'] = '***'
         if d.get('translation_api_key'):
             d['translation_api_key'] = '***'
+        if d.get('clean_api_key'):
+            d['clean_api_key'] = '***'
         d['pipeline_cron_hours'] = self.pipeline_cron_hours
         d['pipeline_cron_minutes'] = self.pipeline_cron_minutes
         d['ai_cron_hours'] = self.ai_cron_hours

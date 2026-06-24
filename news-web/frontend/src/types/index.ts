@@ -314,3 +314,53 @@ export interface TrendingPlatform {
   types: Record<string, number>;
   last_fetch: string;
 }
+
+// ── AI 入口级配置 ──────────────────────────────────────────
+
+export interface AiProvider {
+  id: string;
+  name: string;
+  base_url: string;
+  api_key: string;
+  api_key_masked: string;
+  status: 'unknown' | 'ok' | 'error';
+  models: Record<string, string>;
+}
+
+export interface AiEndpointProfile {
+  id: string;
+  name: string;
+  description: string;
+  provider_id: string;
+  model_id: string;
+  enabled?: boolean;
+}
+
+export interface AiConfig {
+  providers: Record<string, AiProvider>;
+  profiles: AiEndpointProfile[];
+  settings: {
+    enable_thinking: boolean;
+    thinking_budget: number;
+    deep_thinking_max_tokens: number;
+    json_response_format: boolean;
+  };
+}
+
+export interface AiTestRequest {
+  targets: string[];
+}
+
+export interface AiTestResult {
+  ok: boolean;
+  model?: string;
+  response?: string;
+  error?: string;
+  original?: string;
+  translation?: string;
+}
+
+export interface AiTestResponse {
+  ok: boolean;
+  results: Record<string, AiTestResult>;
+}
