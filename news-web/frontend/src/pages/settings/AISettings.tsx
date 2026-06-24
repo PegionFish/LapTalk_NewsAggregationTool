@@ -4,46 +4,24 @@ import type { AiEndpointConfig, AiEndpointTestResult, AiSettingsResponse } from 
 
 // 入口元数据（中文名 + 描述）
 const ENDPOINT_META: Record<string, { name: string; description: string; group: string }> = {
-  rss_prefilter:         { name: 'RSS 预过滤',     description: 'RSS 抓取后的内容预筛选', group: '数据采集' },
-  html_clean:            { name: '内容清洗',         description: '去除广告/导航/推荐，提取纯净正文', group: '数据处理' },
-  translation:           { name: 'AI 翻译',         description: '英文科技新闻自动译中文', group: '数据处理' },
-  article_analysis:      { name: '文章分析',         description: '单篇科技新闻深度分析摘要', group: 'AI 分析' },
-  event_summary:         { name: '事件总结',         description: '为同一事件的多篇文章生成综合摘要', group: 'AI 分析' },
-  event_ranking:         { name: '事件排序',         description: '全景图推理全局事件优先级排序', group: 'AI 分析' },
-  chain_building:        { name: '逻辑链构建',       description: '全景图推理识别事件分组并构筑逻辑链', group: 'AI 分析' },
-  keyword_extraction:    { name: '关键词提取',       description: '从标题+正文提取技术关键词', group: '结构化任务' },
-  article_classification:{ name: '话题分类',         description: 'AI 分类文章主题领域', group: '结构化任务' },
-  priority_scoring:      { name: '优先级评分',       description: 'AI 评估文章优先级（百分制 0~100）', group: '结构化任务' },
+  title_filter: { name: '标题初筛', description: 'RSS 抓取后的标题批量筛选，判断文章是否值得缓存', group: '数据采集' },
+  article_processing: { name: '文章处理', description: '内容清洗 · 翻译 · 分析摘要 · KCS 合并', group: '文章处理' },
+  event_pipeline: { name: '事件管线', description: '事件聚类 · 摘要生成 · 逻辑链构建', group: '事件管线' },
 };
-
-const GROUP_ORDER = ['数据采集', '数据处理', 'AI 分析', '结构化任务'];
+const GROUP_ORDER = ['数据采集', '文章处理', '事件管线'];
 
 interface Props {
   baseUrl: string; setBaseUrl: (v: string) => void;
   apiKey: string; setApiKey: (v: string) => void;
-  model: string; setModel: (v: string) => void;
   enableThinking: boolean; setEnableThinking: (v: boolean) => void;
   thinkingBudget: number; setThinkingBudget: (v: number) => void;
-  deepThinkingMaxTokens: number; setDeepThinkingMaxTokens: (v: number) => void;
-  jsonResponseFormat: boolean; setJsonResponseFormat: (v: boolean) => void;
-  translationEnabled: boolean; setTranslationEnabled: (v: boolean) => void;
-  translationBaseUrl: string; setTranslationBaseUrl: (v: string) => void;
-  translationApiKey: string; setTranslationApiKey: (v: string) => void;
-  translationModel: string; setTranslationModel: (v: string) => void;
 }
 
 export default function AISettings({
   baseUrl, setBaseUrl,
   apiKey, setApiKey,
-  model, setModel,
   enableThinking, setEnableThinking,
   thinkingBudget, setThinkingBudget,
-  deepThinkingMaxTokens, setDeepThinkingMaxTokens,
-  jsonResponseFormat, setJsonResponseFormat,
-  translationEnabled, setTranslationEnabled,
-  translationBaseUrl, setTranslationBaseUrl,
-  translationApiKey, setTranslationApiKey,
-  translationModel, setTranslationModel,
 }: Props) {
   const [aiSettings, setAiSettings] = useState<AiSettingsResponse | null>(null);
   const [testResults, setTestResults] = useState<AiEndpointTestResult[]>([]);

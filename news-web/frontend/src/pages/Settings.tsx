@@ -164,15 +164,8 @@ export default function Settings() {
         return <AISettings
           baseUrl={openaiBaseUrl} setBaseUrl={setOpenaiBaseUrl}
           apiKey={openaiApiKey} setApiKey={setOpenaiApiKey}
-          model={openaiModel} setModel={setOpenaiModel}
           enableThinking={aiEnableThinking} setEnableThinking={setAiEnableThinking}
           thinkingBudget={aiThinkingBudget} setThinkingBudget={setAiThinkingBudget}
-          deepThinkingMaxTokens={aiDeepThinkingMaxTokens} setDeepThinkingMaxTokens={setAiDeepThinkingMaxTokens}
-          jsonResponseFormat={aiJsonResponseFormat} setJsonResponseFormat={setAiJsonResponseFormat}
-          translationEnabled={translationEnabled} setTranslationEnabled={setTranslationEnabled}
-          translationBaseUrl={translationBaseUrl} setTranslationBaseUrl={setTranslationBaseUrl}
-          translationApiKey={translationApiKey} setTranslationApiKey={setTranslationApiKey}
-          translationModel={translationModel} setTranslationModel={setTranslationModel}
         />;
       case 'cache':
         return <CacheSettings cachePath={cachePath} setCachePath={setCachePath} />;
