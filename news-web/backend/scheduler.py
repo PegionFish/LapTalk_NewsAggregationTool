@@ -171,6 +171,8 @@ def start_scheduler():
                 scheduler.add_job(_run_ai_full_job, trigger)
         # Daily backup at 03:00
         scheduler.add_job(_backup_db, CronTrigger(hour=3, minute=0))
+        # pending_cluster 批处理每天 02:30
+        scheduler.add_job(_run_pending_cluster_job, CronTrigger(hour=2, minute=30))
         scheduler.start()
 
         parts = []
@@ -188,8 +190,9 @@ def start_scheduler():
                 ai_minutes.append(0)
             ai_strs = [f"{h:02d}:{ai_minutes[i]:02d}" for i, h in enumerate(ai_hours[:len(ai_minutes)])]
             parts.append("事件管线 " + ", ".join(ai_strs))
+        parts.append("pending_cluster 02:30")
         _add_schedule_log("调度器启动: " + " / ".join(parts))
-        logger.info(f"Scheduler started: {' / '.join(parts)}, backup at 03:00")
+        logger.info(f"Scheduler started: {' / '.join(parts)}, backup at 03:00, pending_cluster at 02:30")
 
 
 def stop_scheduler():
@@ -228,6 +231,8 @@ def reload_scheduler():
         for trigger in ai_triggers:
             scheduler.add_job(_run_ai_full_job, trigger)
     scheduler.add_job(_backup_db, CronTrigger(hour=3, minute=0))
+    # pending_cluster 批处理每天 02:30
+    scheduler.add_job(_run_pending_cluster_job, CronTrigger(hour=2, minute=30))
 
     scheduler.start()
 
@@ -246,6 +251,7 @@ def reload_scheduler():
             ai_minutes.append(0)
         ai_strs = [f"{h:02d}:{ai_minutes[i]:02d}" for i, h in enumerate(ai_hours[:len(ai_minutes)])]
         parts.append("事件管线 " + ", ".join(ai_strs))
+    parts.append("pending_cluster 02:30")
     _add_schedule_log("调度器重载: " + " / ".join(parts))
     logger.info(f"Scheduler reloaded: {' / '.join(parts)}")
 
@@ -347,6 +353,47 @@ def _run_ai_full_job_sync():
     finally:
         _ai_full_state['running'] = False
         _ai_full_state['last_run'] = datetime.now().isoformat(timespec='seconds')
+
+
+def _process_pending_cluster():
+    """批处理 pending_cluster 文章：尝试匹配此后新产生的事件。
+    在新文章处理完成后由定时任务触发（每天 1 次）。
+    """
+    from pipeline.event_matching import match_article_to_event
+    from utils.db import get_db_connection
+
+    db = get_db_connection(config.db_path)
+    try:
+        rows = db.execute("""
+            SELECT id FROM news_articles
+            WHERE content_status = 'pending_cluster'
+            ORDER BY id DESC
+        """).fetchall()
+        total = len(rows)
+        if total == 0:
+            logger.info("pending_cluster 批处理: 无待处理文章")
+            return
+
+        logger.info(f"pending_cluster 批处理: {total} 篇待匹配")
+        matched = 0
+        for (aid,) in rows:
+            try:
+                event_id = match_article_to_event(aid)
+                if event_id:
+                    matched += 1
+            except Exception as e:
+                logger.warning(f"pending_cluster #{aid} 匹配失败: {e}")
+
+        logger.info(f"pending_cluster 批处理完成: {matched}/{total} 篇成功匹配")
+    finally:
+        db.close()
+
+
+async def _run_pending_cluster_job():
+    """Wrapper for pending_cluster batch processing."""
+    import asyncio
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _process_pending_cluster)
 
 
 async def trigger_ai_full_manual():
