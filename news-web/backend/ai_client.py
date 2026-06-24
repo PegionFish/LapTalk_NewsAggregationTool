@@ -233,7 +233,12 @@ def _ai_json(
                 time.sleep(60)
             else:
                 return None
-        except Exception:
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(
+                f"_ai_json 失败 (attempt {attempt + 1}/3): {e} | "
+                f"prompt 前 200 字: {prompt[:200]}"
+            )
             return None
 
 
@@ -803,6 +808,7 @@ def rank_events_panoramic(context: str) -> list[dict] | None:
         "你是资深科技新闻编辑，负责全局事件优先级排序。只输出 JSON 数组，不输出其他内容。",
         max_tokens=262144,
         temperature=0.1,
+        response_format=None,  # 需要数组输出，禁用 json_object 格式
     )
     if isinstance(result, list):
         return result
@@ -827,6 +833,7 @@ def build_chains_panoramic(context: str) -> list[dict] | None:
         "你是资深科技新闻编辑，擅长识别事件之间的深层关联。只输出 JSON 数组，不输出其他内容。",
         max_tokens=262144,
         temperature=0.1,
+        response_format=None,  # 需要数组输出，禁用 json_object 格式
     )
     if isinstance(result, list):
         return result

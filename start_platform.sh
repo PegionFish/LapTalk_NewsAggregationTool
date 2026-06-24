@@ -189,7 +189,7 @@ status() {
 import sqlite3
 c = sqlite3.connect(r'$(to_win_path "$db")')
 open(r'$(to_win_path "$LOGS_DIR/_count.txt")','w').write(
-    str(c.execute('SELECT COUNT(*) FROM articles').fetchone()[0])
+    str(c.execute('SELECT COUNT(*) FROM news_articles').fetchone()[0])
 )
 c.close()
 " 2>/dev/null

@@ -33,43 +33,46 @@ def _nightly():
     _event_state["steps"] = [{"name": name, "status": "pending"} for name, _, _, _ in steps]
     _event_state["total"] = len(steps)
     _event_state["log"] = []
+    any_failed = False
 
-    for i, (name, fn, st, lock_name) in enumerate(steps):
-        if _event_state.get("cancelled"):
-            _event_state["steps"][i]["status"] = "cancelled"
-            break
-        _event_state["steps"][i]["status"] = "running"
-        _event_state["current"] = name
-        _event_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] 开始: {name}")
-        try:
-            fn()
-            while st.get("running"):
-                if _event_state.get("cancelled"):
-                    break
-                # 同步子步骤进度到步骤显示
+    try:
+        for i, (name, fn, st, lock_name) in enumerate(steps):
+            if _event_state.get("cancelled"):
+                _event_state["steps"][i]["status"] = "cancelled"
+                break
+            _event_state["steps"][i]["status"] = "running"
+            _event_state["current"] = name
+            _event_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] 开始: {name}")
+            try:
+                fn()
+                while st.get("running"):
+                    if _event_state.get("cancelled"):
+                        break
+                    # 同步子步骤进度到步骤显示
+                    _event_state["steps"][i]["done"] = st.get("done", 0)
+                    _event_state["steps"][i]["total"] = st.get("total", 0)
+                    _event_state["steps"][i]["current"] = st.get("current", "")
+                    DashboardStream.publish("event_step", {
+                        "step": name, "status": "running",
+                        "done": st.get("done", 0), "total": st.get("total", 0),
+                        "current": st.get("current", "")
+                    })
+                    time.sleep(2)
+                _event_state["steps"][i]["status"] = "done"
                 _event_state["steps"][i]["done"] = st.get("done", 0)
                 _event_state["steps"][i]["total"] = st.get("total", 0)
-                _event_state["steps"][i]["current"] = st.get("current", "")
-                DashboardStream.publish("event_step", {
-                    "step": name, "status": "running",
-                    "done": st.get("done", 0), "total": st.get("total", 0),
-                    "current": st.get("current", "")
-                })
-                time.sleep(2)
-            _event_state["steps"][i]["status"] = "done"
-            _event_state["steps"][i]["done"] = st.get("done", 0)
-            _event_state["steps"][i]["total"] = st.get("total", 0)
-            _event_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ {name} 完成 ({st.get('done', 0)}/{st.get('total', 0)})")
-        except Exception as e:
-            _event_state["steps"][i]["status"] = "failed"
-            _event_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ {name}: {e}")
-            logger.error(f"nightly {name}: {e}")
-
-    DashboardStream.publish("event_done", {"steps": _event_state["steps"]})
-    _event_state["running"] = False
-    _event_state["current"] = "完成"
-    task_lock.release('event')
-    task_state.finish('event', success=True)
+                _event_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ {name} 完成 ({st.get('done', 0)}/{st.get('total', 0)})")
+            except Exception as e:
+                _event_state["steps"][i]["status"] = "failed"
+                _event_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ {name}: {e}")
+                logger.error(f"nightly {name}: {e}")
+                any_failed = True
+    finally:
+        DashboardStream.publish("event_done", {"steps": _event_state["steps"]})
+        _event_state["running"] = False
+        _event_state["current"] = "完成"
+        task_lock.release('event')
+        task_state.finish('event', success=not any_failed)
 
 
 def _run_recluster():
