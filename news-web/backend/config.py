@@ -25,7 +25,7 @@ DEFAULT_CONFIG = {
     'pipeline_cron_hours': [10, 17],      # 数据采集每天运行的小时数（0-23）
     'pipeline_cron_minutes': [0, 0],      # 对应每个小时的分钟数
     'ai_cron_enabled': True,              # AI 全流程定时开关
-    'ai_cron_hours': [15, 22],            # AI 全流程每天运行的小时数（0-23）
+    'ai_cron_hours': [1],            # 事件管线每天运行的小时数（0-23）
     'ai_cron_minutes': [0, 0],            # 对应每个小时的分钟数
     # 翻译 API — 独立配置
     'translation_enabled': False,
@@ -244,7 +244,7 @@ class AppConfig:
 
     @property
     def ai_cron_hours(self) -> list[int]:
-        hours = self._data.get('ai_cron_hours', [15, 22])
+        hours = self._data.get('ai_cron_hours', [1])
         if not isinstance(hours, list):
             hours = [15, 22]
         return [max(0, min(23, int(h))) for h in hours if isinstance(h, (int, float))]

@@ -10,7 +10,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from config import config
 from pipeline.run_all import run_pipeline
-from api.pipeline import _batch_ai_full
+from api.pipeline_event import _nightly
 from utils.task_lock import task_lock
 from utils.task_state import task_state
 
@@ -28,7 +28,7 @@ _pipeline_state = {
     'run_type': 'scheduled',
 }
 
-# ── AI 全流程状态追踪 ─────────────────────────────
+# ── 事件管线状态追踪 ─────────────────────────────
 _ai_full_state = {
     'running': False,
     'last_run': None,
@@ -48,7 +48,7 @@ def get_pipeline_status() -> dict:
 
 
 def get_schedule_info() -> dict:
-    """返回当前调度配置和状态（含 AI 全流程）。"""
+    """返回当前调度配置和状态（含事件管线）。"""
     hours = config.pipeline_cron_hours
     minutes = config.pipeline_cron_minutes
     while len(minutes) < len(hours):
@@ -96,7 +96,7 @@ def _build_cron_triggers() -> list[CronTrigger]:
 
 
 def _build_ai_cron_triggers() -> list[CronTrigger]:
-    """根据配置生成 AI 全流程 cron triggers。"""
+    """根据配置生成 事件管线 cron triggers。"""
     hours = config.ai_cron_hours
     minutes = config.ai_cron_minutes
     while len(minutes) < len(hours):
@@ -157,7 +157,7 @@ def start_scheduler():
             triggers = _build_cron_triggers()
             for trigger in triggers:
                 scheduler.add_job(_run_pipeline_job, trigger)
-        # AI 全流程
+        # 事件管线
         if ai_enabled:
             ai_triggers = _build_ai_cron_triggers()
             for trigger in ai_triggers:
@@ -180,7 +180,7 @@ def start_scheduler():
             while len(ai_minutes) < len(ai_hours):
                 ai_minutes.append(0)
             ai_strs = [f"{h:02d}:{ai_minutes[i]:02d}" for i, h in enumerate(ai_hours[:len(ai_minutes)])]
-            parts.append("AI 全流程 " + ", ".join(ai_strs))
+            parts.append("事件管线 " + ", ".join(ai_strs))
         _add_schedule_log("调度器启动: " + " / ".join(parts))
         logger.info(f"Scheduler started: {' / '.join(parts)}, backup at 03:00")
 
@@ -238,7 +238,7 @@ def reload_scheduler():
         while len(ai_minutes) < len(ai_hours):
             ai_minutes.append(0)
         ai_strs = [f"{h:02d}:{ai_minutes[i]:02d}" for i, h in enumerate(ai_hours[:len(ai_minutes)])]
-        parts.append("AI 全流程 " + ", ".join(ai_strs))
+        parts.append("事件管线 " + ", ".join(ai_strs))
     _add_schedule_log("调度器重载: " + " / ".join(parts))
     logger.info(f"Scheduler reloaded: {' / '.join(parts)}")
 
@@ -303,7 +303,7 @@ def _run_pipeline_job_sync():
 
 
 # ══════════════════════════════════════════════════════════
-# AI 全流程定时任务
+# 事件管线定时任务
 # ══════════════════════════════════════════════════════════
 
 async def _run_ai_full_job():
@@ -313,39 +313,39 @@ async def _run_ai_full_job():
 
 
 def _run_ai_full_job_sync():
-    """同步版本的 AI 全流程执行（在线程池中运行）。"""
+    """同步版本的事件管线执行（在线程池中运行）。"""
     global _ai_full_state
 
-    ok, reason = task_lock.acquire('ai_full')
+    ok, reason = task_lock.acquire('event')
     if not ok:
-        _add_schedule_log(f"AI 全流程启动失败: {reason}")
-        logger.warning(f"AI full skipped: {reason}")
+        _add_schedule_log(f"事件管线启动失败: {reason}")
+        logger.warning(f"Event pipeline skipped: {reason}")
         return
 
     _ai_full_state.update(running=True)
-    _add_schedule_log("AI 全流程启动（翻译→分析→关键词→分类→评分→聚类→摘要→排序→链）")
-    logger.info("AI full pipeline starting...")
+    _add_schedule_log("事件管线启动（聚类→摘要→逻辑链）")
+    logger.info("Event pipeline starting...")
     try:
-        _batch_ai_full()
-        # _batch_ai_full() 在其 finally 块中调用 _unlock('ai_full')
+        _nightly()
+        # _nightly() 在其 finally 块中调用 task_lock.release('event')
         _ai_full_state['last_status'] = 'success'
-        _add_schedule_log("AI 全流程执行成功")
-        logger.info("AI full pipeline completed successfully")
+        _add_schedule_log("事件管线执行成功")
+        logger.info("Event pipeline completed successfully")
     except Exception as e:
         _ai_full_state['last_status'] = 'error'
-        _add_schedule_log(f"AI 全流程异常: {str(e)[:100]}")
-        logger.exception(f"AI full error: {e}")
-        # 异常时确保锁释放（正常路径由 _batch_ai_full 自行释放）
-        task_lock.release('ai_full')
+        _add_schedule_log(f"事件管线异常: {str(e)[:100]}")
+        logger.exception(f"Event pipeline error: {e}")
+        # 异常时确保锁释放（正常路径由 _nightly 自行释放）
+        task_lock.release('event')
     finally:
         _ai_full_state['running'] = False
         _ai_full_state['last_run'] = datetime.now().isoformat(timespec='seconds')
 
 
 async def trigger_ai_full_manual():
-    """Manually trigger AI full processing (via API)."""
+    """Manually trigger event pipeline (via API)."""
     global _ai_full_state
-    _add_schedule_log("手动触发 AI 全流程")
+    _add_schedule_log("手动触发事件管线")
     import concurrent.futures
     loop = asyncio.get_event_loop()
     loop.run_in_executor(None, _run_ai_full_job_sync)
