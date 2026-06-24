@@ -39,7 +39,7 @@ def _run_single(aid: int):
 def _run_batch():
     global _article_state
     _reset_state()
-    from pipeline.process_article import process_article, _conn
+    from pipeline.process_article import process_article_collect, _conn, flush_updates_batch
 
     # 恢复上次异常中断的文章
     db = _conn()
@@ -81,16 +81,23 @@ def _run_batch():
         task_state.finish('article', success=True)
         return
 
-    # 8 线程并行处理（AI API 调用是 IO 密集型）
+    # 50 线程并行处理 AI 调用，结果收集到内存，每 50 篇批量写入 DB
     done = 0
     failed = 0
     MAX_WORKERS = 50
+    CHECKPOINT = 50
+    pending_updates: list[tuple[int, dict]] = []
+    db_write = _conn()
+
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        future_to_aid = {executor.submit(process_article, aid): aid for (aid,) in rows}
+        future_to_aid = {executor.submit(process_article_collect, aid): aid for (aid,) in rows}
         for future in as_completed(future_to_aid):
             aid = future_to_aid[future]
             try:
                 r = future.result()
+                updates = r.get("updates", {})
+                if updates:
+                    pending_updates.append((aid, updates))
                 if r["ok"]:
                     done += 1
                 else:
@@ -102,6 +109,16 @@ def _run_batch():
             _article_state["done"] = done
             _article_state["failed"] = failed
             _article_state["current"] = f"{done+failed}/{total}"
+
+            # 每 CHECKPOINT 篇或全部完成时批量写入
+            if len(pending_updates) >= CHECKPOINT:
+                flush_updates_batch(db_write, pending_updates)
+                pending_updates.clear()
+
+    # 写入剩余
+    if pending_updates:
+        flush_updates_batch(db_write, pending_updates)
+    db_write.close()
 
     _article_state["current"] = "完成"
     DashboardStream.publish("article_batch_done", {"done": done, "failed": failed})
