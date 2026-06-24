@@ -20,11 +20,12 @@ _chain_state = {"running": False, "total_groups": 0, "chains_created": 0, "curre
 
 
 def _nightly():
-    """线性执行三个阶段：聚类 → 摘要 → 逻辑链"""
-    global _event_state, _recl_state, _es_state, _chain_state
+    """线性执行两个阶段：摘要 → 逻辑链。
+    事件聚类已在文章处理时完成（process_article 内 AI 语义匹配）。
+    """
+    global _event_state, _es_state, _chain_state
 
     steps = [
-        ("事件聚类", _run_recluster, _recl_state, 'recluster'),
         ("事件摘要", _run_summarize, _es_state, 'summarize_events'),
         ("逻辑链构建", _run_build_chains, _chain_state, 'build_chains'),
     ]
@@ -76,6 +77,9 @@ def _nightly():
 
 
 def _run_recluster():
+    """[已废弃] 旧版事件重聚类 — 事件聚类已下沉到 process_article() 中的 AI 语义匹配。
+    保留此函数供手动触发，但不参与 nightly 定时任务。
+    """
     global _recl_state
     _recl_state.clear()
     _recl_state.update({"running": True, "total": 0, "done": 0, "failed": 0, "current": "", "log": [], "cancelled": False})
@@ -270,6 +274,9 @@ def cancel_event_op(op: str):
 
 @router.post("/recluster")
 def start_recluster():
+    """[手动触发] 事件重聚类 — 仅在需要全量重建时使用。
+    日常事件聚类已由 process_article() 自动完成。
+    """
     global _recl_state
     if _recl_state.get("running"):
         return {"ok": False, "message": "重聚类已在运行中"}
