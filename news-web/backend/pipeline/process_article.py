@@ -67,6 +67,8 @@ def process_article(article_id: int) -> dict:
                 db.execute("UPDATE news_articles SET ai_cleaned_content=? WHERE id=?", (cleaned, aid))
                 db.commit()
                 result["steps"]["cleaned"] = f"{len(cleaned)} chars"
+                from api.dashboard import DashboardStream
+                DashboardStream.publish("article_progress", {"id": aid, "title": title, "step": "cleaning", "current": "清洗完成"})
             else:
                 result["steps"]["cleaned"] = "empty"
         except Exception as e:
@@ -128,6 +130,8 @@ def process_article(article_id: int) -> dict:
                                (kcs["score"], kcs.get("label", "medium"), kcs["score"], aid))
                 db.commit()
                 result["steps"]["kcs"] = f"{kcs.get('category','?')} {kcs.get('label','medium')}({kcs.get('score',0):.0f})"
+                from api.dashboard import DashboardStream
+                DashboardStream.publish("article_progress", {"id": aid, "title": title, "step": "kcs", "current": "KCS完成"})
             else:
                 result["steps"]["kcs"] = "empty"
         except Exception as e:

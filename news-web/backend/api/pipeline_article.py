@@ -6,6 +6,7 @@ from fastapi import APIRouter
 from config import config
 from utils.task_lock import task_lock
 from utils.task_state import task_state
+from api.dashboard import DashboardStream
 
 router = APIRouter(prefix="/api/pipeline/article", tags=["pipeline-article"])
 logger = logging.getLogger(__name__)
@@ -26,15 +27,18 @@ def _run_single(aid: int):
     if r["ok"]:
         _article_state["done"] += 1
         _article_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] #{aid} ✅ {r['steps']}")
+        DashboardStream.publish("article_done", {"id": aid, "title": "", "ok": True, "steps": r["steps"]})
     else:
         _article_state["failed"] += 1
         _article_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] #{aid} ❌ {r.get('error', '')}")
+        DashboardStream.publish("article_failed", {"id": aid, "title": "", "error": r.get("error", ""), "step": "unknown"})
     _article_state["current"] = ""
 
 
 def _run_batch():
     global _article_state
     _reset_state()
+    DashboardStream.publish("article_batch_start", {"total": _article_state.get("total", 0)})
     try:
         from pipeline.process_article import process_all_pending
         result = process_all_pending()
@@ -46,6 +50,7 @@ def _run_batch():
         logger.error(f"article batch: {e}")
         _article_state["log"].append(f"❌ {e}")
     finally:
+        DashboardStream.publish("article_batch_done", {"done": _article_state.get("done", 0), "failed": _article_state.get("failed", 0)})
         _article_state["running"] = False
         task_lock.release('article')
         task_state.finish('article', success=True)

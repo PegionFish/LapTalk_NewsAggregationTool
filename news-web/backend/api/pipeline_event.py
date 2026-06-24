@@ -7,6 +7,7 @@ from config import config
 from utils.task_lock import task_lock
 from utils.task_state import task_state
 from utils.db import get_db_connection, safe_commit
+from api.dashboard import DashboardStream
 
 router = APIRouter(prefix="/api/pipeline/event", tags=["pipeline-event"])
 logger = logging.getLogger(__name__)
@@ -49,6 +50,11 @@ def _nightly():
                 _event_state["steps"][i]["done"] = st.get("done", 0)
                 _event_state["steps"][i]["total"] = st.get("total", 0)
                 _event_state["steps"][i]["current"] = st.get("current", "")
+                DashboardStream.publish("event_step", {
+                    "step": name, "status": "running",
+                    "done": st.get("done", 0), "total": st.get("total", 0),
+                    "current": st.get("current", "")
+                })
                 time.sleep(2)
             _event_state["steps"][i]["status"] = "done"
             _event_state["steps"][i]["done"] = st.get("done", 0)
@@ -59,6 +65,7 @@ def _nightly():
             _event_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ {name}: {e}")
             logger.error(f"nightly {name}: {e}")
 
+    DashboardStream.publish("event_done", {"steps": _event_state["steps"]})
     _event_state["running"] = False
     _event_state["current"] = "完成"
     task_lock.release('event')
