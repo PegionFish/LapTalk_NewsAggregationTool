@@ -10,7 +10,7 @@ import re
 import time
 from typing import Any
 
-from openai import OpenAI, RateLimitError
+from openai import OpenAI, RateLimitError, PermissionDeniedError
 
 from config import config
 from utils.text import extract_text_from_html
@@ -120,6 +120,11 @@ def _request_options(
     return options
 
 
+class BalanceInsufficientError(Exception):
+    """API 余额不足异常 — 管线应暂停并等待充值。"""
+    pass
+
+
 def chat(
     prompt: str,
     system_prompt: str = "你是有帮助的助手。",
@@ -184,6 +189,12 @@ def chat(
                 time.sleep(60)
             else:
                 raise
+        except PermissionDeniedError as e:
+            if 'balance' in str(e).lower() or '30001' in str(e):
+                raise BalanceInsufficientError(
+                    "API 余额不足，管线已暂停。请充值后重新触发。"
+                ) from e
+            raise
 
 
 def _strip_json(raw: str) -> str:
@@ -233,6 +244,12 @@ def _ai_json(
                 time.sleep(60)
             else:
                 return None
+        except PermissionDeniedError as e:
+            if 'balance' in str(e).lower() or '30001' in str(e):
+                raise BalanceInsufficientError(
+                    "API 余额不足，管线已暂停。请充值后重新触发。"
+                ) from e
+            return None
         except Exception as e:
             import logging
             logging.getLogger(__name__).warning(
