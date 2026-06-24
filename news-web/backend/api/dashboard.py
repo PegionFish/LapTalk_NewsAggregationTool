@@ -130,11 +130,10 @@ async def dashboard_stream(request: Request):
                     yield f"event: article_state\ndata: {json.dumps({'running': True, 'total': _article_state.get('total', 0), 'done': _article_state.get('done', 0), 'failed': _article_state.get('failed', 0), 'current': _article_state.get('current', '')}, ensure_ascii=False)}\n\n"
             except Exception:
                 pass
-            # 推送当前事件管线状态（懒导入避免循环引用）
+            # 推送当前事件管线状态
             try:
                 from api.pipeline_event import _event_state
-                if _event_state.get("running"):
-                    yield f"event: event_state\ndata: {json.dumps({'running': True, 'steps': _event_state.get('steps', [])}, ensure_ascii=False)}\n\n"
+                yield f"event: event_state\ndata: {json.dumps({'running': _event_state.get('running', False), 'steps': _event_state.get('steps', [])}, ensure_ascii=False)}\n\n"
             except Exception:
                 pass
             last_stats = datetime.now()

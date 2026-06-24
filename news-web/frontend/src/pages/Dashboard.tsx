@@ -99,15 +99,26 @@ export default function Dashboard() {
         const idx = steps.findIndex((s: {name:string}) => s.name === d.step);
         if (idx >= 0) {
           steps[idx] = { ...steps[idx], status: d.status, done: d.done, total: d.total, current: d.current };
+        } else {
+          // 新步骤：追加
+          steps.push({ name: d.step, status: d.status, done: d.done, total: d.total, current: d.current });
         }
         return { ...prev, steps, running: true };
       });
     });
 
+    es.addEventListener('event_state', (e) => {
+      const d = JSON.parse(e.data);
+      if (d.running) {
+        setEventRunning(true);
+        setEventState({ running: true, total: 0, done: 0, failed: 0, current: '', steps: d.steps || [] });
+      }
+    });
+
     es.addEventListener('event_done', (e) => {
       const d = JSON.parse(e.data);
       setEventRunning(false);
-      setEventState({ running: false, total: 0, done: 0, failed: 0, current: '完成', steps: d.steps });
+      setEventState(prev => ({ ...prev, running: false, current: '完成', steps: d.steps || prev.steps || [] }));
     });
 
     es.onerror = () => {}; // browser auto-reconnects
@@ -248,9 +259,13 @@ export default function Dashboard() {
               <Button variant="ghost" onClick={handleBuildChains} disabled={eventRunning}>构建逻辑链</Button>
             </div>
 
-            {eventState.steps && eventState.steps.length > 0 && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {eventState.steps.map((s: {name:string;status:string;done?:number;total?:number;current?:string}, i:number) => {
+            {/* 始终显示三步状态，无数据时用默认值 */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
+                {(eventState.steps && eventState.steps.length > 0 ? eventState.steps : [
+                  {name:'事件聚类',status:'pending',done:0,total:0},
+                  {name:'事件摘要',status:'pending',done:0,total:0},
+                  {name:'逻辑链构建',status:'pending',done:0,total:0}
+                ]).map((s: {name:string;status:string;done?:number;total?:number;current?:string}, i:number) => {
                   const isRunning = s.status === 'running';
                   const hasProgress = isRunning && s.total && s.total > 0;
                   return (
@@ -276,7 +291,6 @@ export default function Dashboard() {
                   );
                 })}
               </div>
-            )}
           </CardBody>
         </Card>
       </div>
