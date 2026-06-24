@@ -12,12 +12,13 @@ sys.path.insert(0, os.path.dirname(SCRIPT_DIR))
 from config import config
 from ai_client import clean_article_content, analyze_article, extract_keywords_classify_score_ai
 from translation_client import translate_html_preserve_structure, translate_html
+from utils.db import safe_commit
 
 logger = logging.getLogger(__name__)
 
 
 def _conn():
-    from utils.db import get_db_connection
+    from utils.db import get_db_connection, safe_commit
     return get_db_connection(config.db_path)
 
 
@@ -34,7 +35,7 @@ def recover_stuck_articles():
         count = db.execute("SELECT COUNT(*) FROM news_articles WHERE content_status='processing'").fetchone()[0]
         if count > 0:
             db.execute("UPDATE news_articles SET content_status='fetched' WHERE content_status='processing'")
-            db.commit()
+            safe_commit(db)
             logger.info(f"恢复 {count} 篇 stuck processing → fetched")
     finally:
         db.close()
@@ -58,7 +59,7 @@ def process_article(article_id: int) -> dict:
         ex_kw, ex_cat, ex_score = row[9], row[10], row[11]
 
         db.execute("UPDATE news_articles SET content_status='processing' WHERE id=?", (aid,))
-        db.commit()
+        safe_commit(db)
 
         html = ""
         if local_path and not local_path.startswith('[ERR:') and os.path.exists(local_path):
@@ -68,7 +69,7 @@ def process_article(article_id: int) -> dict:
             html = text_content
         if not html or len(html.strip()) < 100:
             db.execute("UPDATE news_articles SET content_status='pending' WHERE id=?", (aid,))
-            db.commit(); db.close()
+            safe_commit(db); db.close()
             return {"ok": False, "error": "无有效 HTML，需先缓存", "steps": result["steps"]}
 
         # Step 1: 清洗
@@ -83,7 +84,7 @@ def process_article(article_id: int) -> dict:
                 else:
                     db.execute("UPDATE news_articles SET ai_cleaned_content='[EMPTY]' WHERE id=?", (aid,))
                     result["steps"]["cleaned"] = "empty"
-                db.commit()
+                safe_commit(db)
             except Exception as e:
                 result["steps"]["cleaned"] = f"error: {e}"
                 logger.warning(f"#{aid} 清洗: {e}")
@@ -96,7 +97,7 @@ def process_article(article_id: int) -> dict:
                 t = translate_html_preserve_structure(html) if (config.translation_enabled and config.translation_api_key) else translate_html(html)
                 if t:
                     db.execute("UPDATE news_articles SET translated_content=? WHERE id=?", (t, aid))
-                    db.commit()
+                    safe_commit(db)
                     result["steps"]["translated"] = f"{len(t)} chars"
                 else:
                     result["steps"]["translated"] = "empty"
@@ -114,7 +115,7 @@ def process_article(article_id: int) -> dict:
                 s = analyze_article(title, content)
                 if s:
                     db.execute("UPDATE news_articles SET ai_summary=?, ai_analyzed=1 WHERE id=?", (s, aid))
-                    db.commit()
+                    safe_commit(db)
                     result["steps"]["analyzed"] = True
                 else:
                     result["steps"]["analyzed"] = False
@@ -140,7 +141,7 @@ def process_article(article_id: int) -> dict:
                                       ("ai_priority_score", k.get("score",0))]:
                         if val is not None:
                             db.execute(f"UPDATE news_articles SET {col}=? WHERE id=?", (val, aid))
-                    db.commit()
+                    safe_commit(db)
                     result["steps"]["kcs"] = f"{k.get('category','?')} {k.get('label','medium')}({k.get('score',0):.0f})"
                 else:
                     result["steps"]["kcs"] = "empty"
@@ -169,7 +170,7 @@ def process_article(article_id: int) -> dict:
         else:
             final_status = "fetched"
         db.execute("UPDATE news_articles SET content_status=? WHERE id=?", (final_status, aid))
-        db.commit()
+        safe_commit(db)
     except Exception as e:
         result["ok"] = False; result["error"] = str(e)
         logger.error(f"process_article #{article_id}: {e}")
