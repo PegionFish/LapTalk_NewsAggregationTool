@@ -39,30 +39,20 @@ def _run_single(aid: int):
 def _run_batch():
     global _article_state
     _reset_state()
-    from pipeline.process_article import process_article_collect, _conn, flush_updates_batch
+    from pipeline.process_article import process_article, _conn, recover_stuck_articles
 
-    # 恢复上次异常中断的文章
-    db = _conn()
-    rows = db.execute("""
-        SELECT id FROM news_articles
-        WHERE content_status='processing'
-    """).fetchall()
-    for (aid,) in rows:
-        db.execute("UPDATE news_articles SET content_status='fetched' WHERE id=?", (aid,))
-    if rows:
-        db.commit()
-        _article_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] 恢复 {len(rows)} 篇异常中断的文章")
-    db.close()
+    # 恢复异常中断的文章
+    recover_stuck_articles()
 
-    # 查询待处理文章
+    # 查询待处理（已有 HTML 缓存的文章）
     db = _conn()
     rows = db.execute("""
         SELECT id FROM news_articles
         WHERE content_status IN ('fetched', 'translated')
-          AND ai_filtered != -1
-          AND (local_path != '' OR text_content != '')
+          AND local_path != '' AND local_path NOT LIKE '[ERR:%'
+          AND (ai_filtered IS NULL OR ai_filtered != -1)
           AND (ai_analyzed = 0 OR (ai_cleaned_content IS NULL OR ai_cleaned_content = '') AND ai_cleaned_content != '[EMPTY]'
-               OR translated_content IS NULL OR translated_content = ''
+               OR (translated_content IS NULL OR translated_content = '') AND translated_content != '[EMPTY]'
                OR ai_keywords IS NULL OR ai_keywords = ''
                OR ai_category IS NULL OR ai_category = ''
                OR ai_priority_score IS NULL OR ai_priority_score = 0.0)
@@ -81,23 +71,15 @@ def _run_batch():
         task_state.finish('article', success=True)
         return
 
-    # 50 线程并行处理 AI 调用，结果收集到内存，每 50 篇批量写入 DB
-    done = 0
-    failed = 0
+    # process_article 每步即时写 DB，并行仅加速 AI 调用
+    done = 0; failed = 0
     MAX_WORKERS = 50
-    CHECKPOINT = 50
-    pending_updates: list[tuple[int, dict]] = []
-    db_write = _conn()
-
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        future_to_aid = {executor.submit(process_article_collect, aid): aid for (aid,) in rows}
+        future_to_aid = {executor.submit(process_article, aid): aid for (aid,) in rows}
         for future in as_completed(future_to_aid):
             aid = future_to_aid[future]
             try:
                 r = future.result()
-                updates = r.get("updates", {})
-                if updates:
-                    pending_updates.append((aid, updates))
                 if r["ok"]:
                     done += 1
                     DashboardStream.publish("article_done", {"id": aid, "ok": True, "steps": r.get("steps", {})})
@@ -109,21 +91,11 @@ def _run_batch():
             except Exception as e:
                 failed += 1
                 err = str(e)[:100]
-                _article_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] #{aid} ❌ 线程异常: {err}")
+                _article_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] #{aid} ❌ {err}")
                 DashboardStream.publish("article_failed", {"id": aid, "error": err, "step": "thread"})
             _article_state["done"] = done
             _article_state["failed"] = failed
             _article_state["current"] = f"{done+failed}/{total}"
-
-            # 每 CHECKPOINT 篇或全部完成时批量写入
-            if len(pending_updates) >= CHECKPOINT:
-                flush_updates_batch(db_write, pending_updates)
-                pending_updates.clear()
-
-    # 写入剩余
-    if pending_updates:
-        flush_updates_batch(db_write, pending_updates)
-    db_write.close()
 
     _article_state["current"] = "完成"
     DashboardStream.publish("article_batch_done", {"done": done, "failed": failed})
