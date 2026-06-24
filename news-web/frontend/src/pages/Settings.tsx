@@ -4,13 +4,12 @@ import { useAuth } from '../contexts/AuthContext';
 import { api } from '../api/client';
 import GeneralSettings from './settings/GeneralSettings';
 import AISettings from './settings/AISettings';
-import TranslationSettings from './settings/TranslationSettings';
 import CacheSettings from './settings/CacheSettings';
 import AdminSettings from './settings/AdminSettings';
 import LogSettings from './settings/LogSettings';
 import './settings/settings.css';
 
-type Section = 'general' | 'ai' | 'translation' | 'cache' | 'admin' | 'logs';
+type Section = 'general' | 'ai' | 'cache' | 'admin' | 'logs';
 
 interface SectionDef {
   key: Section;
@@ -20,12 +19,11 @@ interface SectionDef {
 }
 
 const SECTIONS: SectionDef[] = [
-  { key: 'general',     icon: 'fa-sliders-h',    label: '通用设置',   group: '系统' },
-  { key: 'ai',          icon: 'fa-brain',        label: 'AI 分析',    group: 'AI 服务' },
-  { key: 'translation', icon: 'fa-language',     label: 'AI 翻译',    group: 'AI 服务' },
-  { key: 'cache',       icon: 'fa-archive',      label: '内容缓存',   group: '系统' },
-  { key: 'admin',       icon: 'fa-users-cog',    label: '用户管理',   group: '管理' },
-  { key: 'logs',        icon: 'fa-terminal',     label: '操作日志',   group: '管理' },
+  { key: 'general', icon: 'fa-sliders-h',    label: '通用设置',   group: '系统' },
+  { key: 'ai',      icon: 'fa-brain',        label: 'AI 服务',    group: 'AI 服务' },
+  { key: 'cache',   icon: 'fa-archive',      label: '内容缓存',   group: '系统' },
+  { key: 'admin',   icon: 'fa-users-cog',    label: '用户管理',   group: '管理' },
+  { key: 'logs',    icon: 'fa-terminal',     label: '操作日志',   group: '管理' },
 ];
 
 export default function Settings() {
@@ -175,13 +173,6 @@ export default function Settings() {
           translationBaseUrl={translationBaseUrl} setTranslationBaseUrl={setTranslationBaseUrl}
           translationApiKey={translationApiKey} setTranslationApiKey={setTranslationApiKey}
           translationModel={translationModel} setTranslationModel={setTranslationModel}
-        />;
-      case 'translation':
-        return <TranslationSettings
-          enabled={translationEnabled} setEnabled={setTranslationEnabled}
-          baseUrl={translationBaseUrl} setBaseUrl={setTranslationBaseUrl}
-          apiKey={translationApiKey} setApiKey={setTranslationApiKey}
-          model={translationModel} setModel={setTranslationModel}
         />;
       case 'cache':
         return <CacheSettings cachePath={cachePath} setCachePath={setCachePath} />;
