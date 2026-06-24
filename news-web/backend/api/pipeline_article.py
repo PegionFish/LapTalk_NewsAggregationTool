@@ -61,7 +61,7 @@ def _run_batch():
         WHERE content_status IN ('fetched', 'translated')
           AND ai_filtered != -1
           AND (local_path != '' OR text_content != '')
-          AND (ai_analyzed = 0 OR ai_cleaned_content IS NULL OR ai_cleaned_content = ''
+          AND (ai_analyzed = 0 OR (ai_cleaned_content IS NULL OR ai_cleaned_content = '') AND ai_cleaned_content != '[EMPTY]'
                OR translated_content IS NULL OR translated_content = ''
                OR ai_keywords IS NULL OR ai_keywords = ''
                OR ai_category IS NULL OR ai_category = ''

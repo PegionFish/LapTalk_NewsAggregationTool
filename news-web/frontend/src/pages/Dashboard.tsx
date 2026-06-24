@@ -20,6 +20,7 @@ export default function Dashboard() {
   const [recentDone, setRecentDone] = useState<Array<{id:number,title:string,steps:Record<string,unknown>}>>([]);
   const [recentFailed, setRecentFailed] = useState<Array<{id:number,title:string,error:string}>>([]);
   const [batchETA, setBatchETA] = useState('');
+  const [showArticleLog, setShowArticleLog] = useState(false);
 
   // Event pipeline state
   const [eventRunning, setEventRunning] = useState(false);
@@ -184,48 +185,50 @@ export default function Dashboard() {
 
         {/* Article Processing Card */}
         <Card style={articleRunning ? { borderColor: 'var(--accent-blue)', borderWidth: 2 } : undefined}>
-          <CardHeader icon="fa-newspaper" iconColor="var(--accent-blue)" title="📰 文章处理" desc={articleRunning ? `${articleState.done}/${articleState.total} 已完成 · ${articleState.failed} 失败` : '缓存→清洗→翻译→分析+KCS'} />
+          <CardHeader icon="fa-newspaper" iconColor="var(--accent-blue)" title="📰 文章处理" desc={articleRunning ? `${articleState.done}/${articleState.total} 完成${articleState.failed > 0 ? ` · ⚠️ ${articleState.failed} 失败` : ''}` : '缓存→清洗→翻译→分析+KCS'} />
           <CardBody>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
               <Button variant={articleRunning ? 'ghost' : 'primary'} onClick={handleArticleBatch}
                       icon={articleRunning ? 'fa-spinner fa-spin' : 'fa-play'} disabled={articleRunning}>
                 {articleRunning ? `处理中 ${articleState.done}/${articleState.total}` : '一键处理全部'}
               </Button>
-              {articleRunning && batchETA && <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>ETA: {batchETA}</span>}
+              {(articleRunning || recentDone.length > 0 || recentFailed.length > 0) && (
+                <Button variant="ghost" onClick={() => setShowArticleLog(!showArticleLog)} icon="fa-list">
+                  {showArticleLog ? '隐藏日志' : `查看日志 (${recentDone.length + recentFailed.length})`}
+                </Button>
+              )}
             </div>
 
             {articleRunning && (
-              <div style={{ marginBottom: 12 }}>
+              <div style={{ marginTop: 12 }}>
                 <ProgressBar done={articleState.done} total={articleState.total} color="var(--accent-blue)" />
-                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
-                  {articleState.current}
-                </div>
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>{articleState.current}</div>
               </div>
             )}
 
-            {recentDone.length > 0 && (
-              <div style={{ marginTop: 12, maxHeight: articleRunning ? 200 : 120, overflow: 'auto' }}>
-                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 4 }}>最近完成 ({recentDone.length}):</div>
-                {recentDone.map((item, i) => (
-                  <div key={i} style={{ fontSize: 11, color: 'var(--accent-green)', padding: '2px 0', fontFamily: 'monospace' }}>
-                    ✅ #{item.id} {item.title?.slice(0, 80)} — {JSON.stringify(item.steps).slice(0, 80)}
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {recentFailed.length > 0 && (
-              <div style={{ marginTop: 8, maxHeight: articleRunning ? 200 : 100, overflow: 'auto' }}>
-                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--accent-red)', marginBottom: 4 }}>失败 ({recentFailed.length}):</div>
+            {/* 可折叠日志面板 */}
+            {showArticleLog && (recentDone.length > 0 || recentFailed.length > 0) && (
+              <div style={{ marginTop: 12, maxHeight: 380, overflow: 'auto', background: 'var(--bg-secondary)', borderRadius: 8, padding: 12, fontFamily: 'monospace', fontSize: 11, lineHeight: 1.6 }}>
                 {recentFailed.map((item, i) => (
-                  <div key={i} style={{ fontSize: 11, color: 'var(--accent-red)', padding: '2px 0', fontFamily: 'monospace' }}>
-                    ❌ #{item.id} {item.title?.slice(0, 80)} — {item.error}
+                  <div key={`f${i}`} style={{ color: 'var(--accent-red)', marginBottom: 4 }}>
+                    ❌ #{item.id} {item.title?.slice(0, 80)}
+                    <div style={{ marginLeft: 20, color: 'var(--text-secondary)' }}>{item.error}</div>
+                  </div>
+                ))}
+                {recentDone.map((item, i) => (
+                  <div key={`d${i}`} style={{ color: 'var(--accent-green)', marginBottom: 4 }}>
+                    ✅ #{item.id} {item.title?.slice(0, 80)}
+                    <div style={{ marginLeft: 20, color: 'var(--text-secondary)' }}>
+                      {Object.entries(item.steps).map(([k,v]) => (
+                        <span key={k} style={{marginRight:12}}>{k}: {typeof v === 'string' && v.length > 60 ? v.slice(0,60)+'...' : String(v)}</span>
+                      ))}
+                    </div>
                   </div>
                 ))}
               </div>
             )}
 
-            <div style={{ marginTop: 12, fontSize: 10, color: 'var(--text-muted)' }}>
+            <div style={{ marginTop: 8, fontSize: 10, color: 'var(--text-muted)' }}>
               📋 审计日志: logs/dashboard_audit.log
             </div>
           </CardBody>

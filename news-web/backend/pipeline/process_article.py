@@ -287,6 +287,7 @@ def process_article_collect(article_id: int) -> dict:
                     DashboardStream.publish("article_progress", {"id": aid, "title": title, "step": "cleaning", "done": 0, "total": 0, "current": f"#{aid} 清洗完成"})
                 else:
                     result["steps"]["cleaned"] = "empty"
+                    updates["ai_cleaned_content"] = "[EMPTY]"  # 标记已尝试，避免重复处理
             except Exception as e:
                 result["steps"]["cleaned"] = f"error: {e}"
                 logger.warning(f"#{aid} 清洗失败: {e}")
@@ -406,7 +407,7 @@ def process_all_pending() -> dict:
         WHERE content_status IN ('fetched', 'translated')
           AND ai_filtered != -1
           AND (local_path != '' OR text_content != '')
-          AND (ai_analyzed = 0 OR ai_cleaned_content IS NULL OR ai_cleaned_content = ''
+          AND (ai_analyzed = 0 OR (ai_cleaned_content IS NULL OR ai_cleaned_content = '') AND ai_cleaned_content != '[EMPTY]'
                OR translated_content IS NULL OR translated_content = ''
                OR ai_keywords IS NULL OR ai_keywords = ''
                OR ai_category IS NULL OR ai_category = ''
