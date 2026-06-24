@@ -10,19 +10,9 @@ const ENDPOINT_META: Record<string, { name: string; description: string; group: 
 };
 const GROUP_ORDER = ['数据采集', '文章处理', '事件管线'];
 
-interface Props {
-  baseUrl: string; setBaseUrl: (v: string) => void;
-  apiKey: string; setApiKey: (v: string) => void;
-  enableThinking: boolean; setEnableThinking: (v: boolean) => void;
-  thinkingBudget: number; setThinkingBudget: (v: number) => void;
-}
+interface Props {}
 
-export default function AISettings({
-  baseUrl, setBaseUrl,
-  apiKey, setApiKey,
-  enableThinking, setEnableThinking,
-  thinkingBudget, setThinkingBudget,
-}: Props) {
+export default function AISettings(_props: Props) {
   const [aiSettings, setAiSettings] = useState<AiSettingsResponse | null>(null);
   const [testResults, setTestResults] = useState<AiEndpointTestResult[]>([]);
   const [testingAll, setTestingAll] = useState(false);

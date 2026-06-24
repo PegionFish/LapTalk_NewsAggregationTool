@@ -42,21 +42,6 @@ export default function Settings() {
   const [pipelineRunning, setPipelineRunning] = useState(false);
   const [pipelineStatus, setPipelineStatus] = useState<{ last_run?: string | null; last_status?: string | null }>({});
 
-  // AI 分析
-  const [openaiBaseUrl, setOpenaiBaseUrl] = useState('');
-  const [openaiApiKey, setOpenaiApiKey] = useState('');
-  const [openaiModel, setOpenaiModel] = useState('');
-  const [aiEnableThinking, setAiEnableThinking] = useState(true);
-  const [aiThinkingBudget, setAiThinkingBudget] = useState(32768);
-  const [aiDeepThinkingMaxTokens, setAiDeepThinkingMaxTokens] = useState(8192);
-  const [aiJsonResponseFormat, setAiJsonResponseFormat] = useState(true);
-
-  // 翻译
-  const [translationEnabled, setTranslationEnabled] = useState(false);
-  const [translationBaseUrl, setTranslationBaseUrl] = useState('');
-  const [translationApiKey, setTranslationApiKey] = useState('');
-  const [translationModel, setTranslationModel] = useState('');
-
   // 缓存
   const [cachePath, setCachePath] = useState('');
 
@@ -73,18 +58,7 @@ export default function Settings() {
     api.getSettings().then(s => {
       setDbPath(s.db_path || '');
       setUserAgent(s.user_agent || '');
-      setOpenaiBaseUrl(s.openai_base_url || 'https://api.openai.com/v1');
-      setOpenaiApiKey(s.openai_api_key || '');
-      setOpenaiModel(s.openai_model || 'deepseek-ai/DeepSeek-V3.2');
-      setAiEnableThinking(s.ai_enable_thinking !== false);
-      setAiThinkingBudget(Number(s.ai_thinking_budget || 32768));
-      setAiDeepThinkingMaxTokens(Number(s.ai_deep_thinking_max_tokens || 8192));
-      setAiJsonResponseFormat(s.ai_json_response_format !== false);
       setPipelineEnabled(s.pipeline_schedule_enabled !== false);
-      setTranslationEnabled(s.translation_enabled === true);
-      setTranslationBaseUrl(s.translation_base_url || 'https://api.siliconflow.cn/v1');
-      setTranslationApiKey(s.translation_api_key || '');
-      setTranslationModel(s.translation_model || 'deepseek-ai/DeepSeek-V3.2');
       setCachePath(s.content_cache_path || '');
       setProxyEnabled(s.proxy_enabled === true);
       setProxyUrl(s.proxy_url || '');
@@ -100,18 +74,7 @@ export default function Settings() {
       await api.updateSettings({
         db_path: dbPath,
         user_agent: userAgent,
-        openai_base_url: openaiBaseUrl,
-        openai_api_key: openaiApiKey,
-        openai_model: openaiModel,
-        ai_enable_thinking: aiEnableThinking,
-        ai_thinking_budget: aiThinkingBudget,
-        ai_deep_thinking_max_tokens: aiDeepThinkingMaxTokens,
-        ai_json_response_format: aiJsonResponseFormat,
         pipeline_schedule_enabled: pipelineEnabled,
-        translation_enabled: translationEnabled,
-        translation_base_url: translationBaseUrl,
-        translation_api_key: translationApiKey,
-        translation_model: translationModel,
         content_cache_path: cachePath,
         proxy_enabled: proxyEnabled,
         proxy_url: proxyUrl,
@@ -161,12 +124,7 @@ export default function Settings() {
           proxyUrl={proxyUrl} setProxyUrl={setProxyUrl}
         />;
       case 'ai':
-        return <AISettings
-          baseUrl={openaiBaseUrl} setBaseUrl={setOpenaiBaseUrl}
-          apiKey={openaiApiKey} setApiKey={setOpenaiApiKey}
-          enableThinking={aiEnableThinking} setEnableThinking={setAiEnableThinking}
-          thinkingBudget={aiThinkingBudget} setThinkingBudget={setAiThinkingBudget}
-        />;
+        return <AISettings />;
       case 'cache':
         return <CacheSettings cachePath={cachePath} setCachePath={setCachePath} />;
       case 'admin':

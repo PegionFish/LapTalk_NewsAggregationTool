@@ -134,6 +134,18 @@ export default function ArticleSearch() {
   const [aiAnalysis, setAiAnalysis] = useState('');
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisMeta, setAnalysisMeta] = useState<{ ai_analyzed?: boolean; human_processed?: boolean; translated?: boolean }>({});
+  const [processing, setProcessing] = useState(false);
+  const [processResult, setProcessResult] = useState<{ok:boolean,steps:Record<string,unknown>,error:string}|null>(null);
+
+  const handleProcess = async () => {
+    if (!selected) return;
+    setProcessing(true); setProcessResult(null);
+    try {
+      const r = await api.processArticle(selected.id);
+      setProcessResult(r);
+    } catch(e) { setProcessResult({ok:false,steps:{},error:String(e)}); }
+    setProcessing(false);
+  };
 
   const fetchArticles = useCallback(async () => {
     setLoading(true);
@@ -625,6 +637,16 @@ export default function ArticleSearch() {
             >
               原文
             </Button>
+            <Button onClick={handleProcess} disabled={processing} icon="fa-rocket" variant="ghost">
+              {processing ? '处理中...' : '管线处理'}
+            </Button>
+            {processResult && (
+              <div style={{ marginTop: 8, fontSize: 12, padding: 8, borderRadius: 6, background: processResult.ok ? 'rgba(129,199,132,0.1)' : 'rgba(239,83,80,0.1)' }}>
+                {processResult.ok
+                  ? <>✅ {Object.entries(processResult.steps).map(([k,v]) => <span key={k} style={{marginRight:12}}>{k}: {String(v)}</span>)}</>
+                  : <>❌ {processResult.error}</>}
+              </div>
+            )}
           </div>
 
           {/* 事件链接 */}

@@ -193,11 +193,6 @@ export const api = {
 
   getPipelineStatus: () => fetchJSON<{ running: boolean; last_run: string | null; last_status: string | null; current_step: string | null; steps: { name: string; status: string; duration_ms: number }[] }>('/pipeline/status'),
 
-  // KCS 合并端点 — 一次调用完成关键词+分类+评分
-  startBatchKcs: () => fetchJSON<{ ok: boolean; message: string; pending: number }>('/pipeline/batch-kcs', { method: 'POST' }),
-  getBatchKcsStatus: () => fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string; log: string[] }>('/pipeline/batch-kcs/status'),
-  cancelBatchKcs: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/batch-kcs/cancel', { method: 'POST' }),
-  forceResetBatchKcs: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/batch-kcs/force-reset', { method: 'POST' }),
 
   // Article pipeline (new)
   startArticleBatch: () => fetchJSON<{ ok: boolean; message: string; pending: number }>('/pipeline/article/batch-process', { method: 'POST' }),
@@ -332,16 +327,16 @@ export const api = {
     if (params.status) qs.set('status', params.status);
     const query = qs.toString();
     return fetchJSON<{ total: number; page: number; limit: number; source: string; articles: import('../types').FetchArticleItem[] }>(
-      `/fetch/sources/${encodeURIComponent(name)}/articles${query ? `?${query}` : ''}`
+      `/fetch/sources/${encodeURIComponent(name)}/news_articles${query ? `?${query}` : ''}`
     );
   },
 
   retryArticleCache: (id: number) =>
-    fetchJSON<{ ok: boolean; message: string }>(`/fetch/articles/${id}/retry-cache`, { method: 'POST' }),
+    fetchJSON<{ ok: boolean; message: string }>(`/fetch/news_articles/${id}/retry-cache`, { method: 'POST' }),
 
   retryArticlesBatch: (idsOrOptions: number[] | { retry_all: boolean }) =>
     fetchJSON<{ ok: boolean; total: number; message: string }>(
-      '/fetch/articles/batch-retry', {
+      '/fetch/news_articles/batch-retry', {
         method: 'POST',
         body: JSON.stringify(
           Array.isArray(idsOrOptions) ? { ids: idsOrOptions } : idsOrOptions
@@ -350,10 +345,10 @@ export const api = {
     ),
 
   getBatchRetryStatus: () =>
-    fetchJSON<import('../types').BatchRetryState>('/fetch/articles/batch-retry/status'),
+    fetchJSON<import('../types').BatchRetryState>('/fetch/news_articles/batch-retry/status'),
 
   cancelBatchRetry: () =>
-    fetchJSON<{ ok: boolean; message: string }>('/fetch/articles/batch-retry/cancel', { method: 'POST' }),
+    fetchJSON<{ ok: boolean; message: string }>('/fetch/news_articles/batch-retry/cancel', { method: 'POST' }),
 
   recoverDeadLinks: (idsOrOptions: number[] | { retry_all: boolean }) =>
     fetchJSON<{ ok: boolean; total: number; message: string }>(
@@ -370,7 +365,7 @@ export const api = {
 
   getFailedArticles: (page = 1, limit = 50) =>
     fetchJSON<{ total: number; page: number; limit: number; articles: import('../types').FailedArticle[] }>(
-      `/fetch/articles/failed?page=${page}&limit=${limit}`
+      `/fetch/news_articles/failed?page=${page}&limit=${limit}`
     ),
 
   getFetchLogs: (limit = 50) =>
