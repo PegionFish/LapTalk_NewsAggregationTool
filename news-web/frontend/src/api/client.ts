@@ -219,6 +219,11 @@ export const api = {
   getBatchClassifyStatus: () => fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string; log: string[] }>('/pipeline/batch-classify/status'),
   startBatchScore: () => fetchJSON<{ ok: boolean; message: string; pending: number }>('/pipeline/batch-score', { method: 'POST' }),
   getBatchScoreStatus: () => fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string; log: string[] }>('/pipeline/batch-score/status'),
+  // KCS 合并端点 — 一次调用完成关键词+分类+评分
+  startBatchKcs: () => fetchJSON<{ ok: boolean; message: string; pending: number }>('/pipeline/batch-kcs', { method: 'POST' }),
+  getBatchKcsStatus: () => fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string; log: string[] }>('/pipeline/batch-kcs/status'),
+  cancelBatchKcs: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/batch-kcs/cancel', { method: 'POST' }),
+  forceResetBatchKcs: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/batch-kcs/force-reset', { method: 'POST' }),
   startBatchRankEvents: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/batch-rank-events', { method: 'POST' }),
   getBatchRankEventsStatus: () => fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string; log: string[] }>('/pipeline/batch-rank-events/status'),
   startBatchRecluster: () => fetchJSON<{ ok: boolean; message: string; pending: number }>('/pipeline/batch-recluster', { method: 'POST' }),

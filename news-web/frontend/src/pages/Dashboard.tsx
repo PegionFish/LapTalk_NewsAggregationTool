@@ -22,9 +22,7 @@ export default function Dashboard() {
   const [analyState, setAnalyState] = useState<BatchState>(emptyBatch);
   const [chaining, setChaining] = useState(false);
   const [chainState, setChainState] = useState<ChainState>(emptyChain);
-  const [kwRunning, setKwRunning] = useState(false); const [kwState, setKwState] = useState<BatchState>(emptyBatch);
-  const [clsRunning, setClsRunning] = useState(false); const [clsState, setClsState] = useState<BatchState>(emptyBatch);
-  const [scoreRunning, setScoreRunning] = useState(false); const [scoreState, setScoreState] = useState<BatchState>(emptyBatch);
+  const [kcsRunning, setKcsRunning] = useState(false); const [kcsState, setKcsState] = useState<BatchState>(emptyBatch);
   const [reclRunning, setReclRunning] = useState(false); const [reclState, setReclState] = useState<BatchState>(emptyBatch);
   const [esRunning, setEsRunning] = useState(false); const [esState, setEsState] = useState<BatchState>(emptyBatch);
   const [fullRunning, setFullRunning] = useState(false);
@@ -67,9 +65,7 @@ export default function Dashboard() {
   const transTimer = useRef<ReturnType<typeof setInterval>>();
   const analyTimer  = useRef<ReturnType<typeof setInterval>>();
   const chainTimer  = useRef<ReturnType<typeof setInterval>>();
-  const kwTimer = useRef<ReturnType<typeof setInterval>>();
-  const clsTimer = useRef<ReturnType<typeof setInterval>>();
-  const scoreTimer = useRef<ReturnType<typeof setInterval>>();
+  const kcsTimer = useRef<ReturnType<typeof setInterval>>();
   const reclTimer = useRef<ReturnType<typeof setInterval>>();
   const esTimer = useRef<ReturnType<typeof setInterval>>();
   const fullTimer = useRef<ReturnType<typeof setInterval>>();
@@ -94,15 +90,13 @@ export default function Dashboard() {
     api.getBatchTranslateStatus().then((s: unknown) => { const st = s as BatchState; if (st.running) { setTranslating(true); transTimer.current = setInterval(pollTranslate, 2000); } else setTransState(st); }).catch(() => {});
     api.getBatchAnalyzeStatus().then((s: unknown)  => { const st = s as BatchState; if (st.running) { setAnalyzing(true);  analyTimer.current  = setInterval(pollAnalyze, 2000);  } else setAnalyState(st);  }).catch(() => {});
     api.getBuildChainsStatus().then((s: unknown)    => { const st = s as ChainState; if (st.running) { setChaining(true);  chainTimer.current  = setInterval(pollChains, 2000);  } else setChainState(st);  }).catch(() => {});
-    api.getBatchKeywordsStatus().then((s: unknown)  => { const st = s as BatchState; if (st.running) { setKwRunning(true); kwTimer.current = setInterval(pollKw, 2000); } else setKwState(st); }).catch(() => {});
-    api.getBatchClassifyStatus().then((s: unknown)  => { const st = s as BatchState; if (st.running) { setClsRunning(true); clsTimer.current = setInterval(pollCls, 2000); } else setClsState(st); }).catch(() => {});
-    api.getBatchScoreStatus().then((s: unknown)     => { const st = s as BatchState; if (st.running) { setScoreRunning(true); scoreTimer.current = setInterval(pollSc, 2000); } else setScoreState(st); }).catch(() => {});
+    api.getBatchKcsStatus().then((s: unknown)       => { const st = s as BatchState; if (st.running) { setKcsRunning(true); kcsTimer.current = setInterval(pollKcs, 2000); } else setKcsState(st); }).catch(() => {});
     api.getBatchReclusterStatus().then((s: unknown) => { const st = s as BatchState; if (st.running) { setReclRunning(true); reclTimer.current = setInterval(pollRecl, 2000); } else setReclState(st); }).catch(() => {});
     api.getBatchSummarizeEventsStatus().then((s: unknown) => { const st = s as BatchState; if (st.running) { setEsRunning(true); esTimer.current = setInterval(pollEs, 2000); } else setEsState(st); }).catch(() => {});
     api.getBatchAiFullStatus().then((s: unknown)    => { const st = s as BatchState; if (st.running) { setFullRunning(true); fullTimer.current = setInterval(pollFull, 2000); } else setFullState(st); }).catch(() => {});
     api.getBatchCleanStatus().then((s: unknown)   => { const st = s as BatchState; if (st.running) { setCleanRunning(true);  cleanTimer.current  = setInterval(pollClean, 2000);  } else setCleanState(st);  }).catch(() => {});
     return () => {
-      [transTimer, analyTimer, chainTimer, kwTimer, clsTimer, scoreTimer, reclTimer, esTimer, fullTimer, cleanTimer].forEach(t => clearInterval(t.current));
+      [transTimer, analyTimer, chainTimer, kcsTimer, reclTimer, esTimer, fullTimer, cleanTimer].forEach(t => clearInterval(t.current));
     };
   }, []); // eslint-disable-line
 
@@ -124,12 +118,8 @@ export default function Dashboard() {
   const handleAnalyze   = startPoll(api.startBatchAnalyze, pollAnalyze, analyTimer, setAnalyzing);
   const handleBuildChains = startPoll(api.startBuildChains, pollChains, chainTimer, setChaining);
 
-  const pollKw = useCallback(() => poll(api.getBatchKeywordsStatus, v => {const s=v as BatchState; setKwState(s); if(!s.running){setKwRunning(false);clearInterval(kwTimer.current)}},(()=>setKwRunning(false)),kwTimer),[]);
-  const handleKeywords = startPoll(api.startBatchKeywords, pollKw, kwTimer, setKwRunning);
-  const pollCls = useCallback(() => poll(api.getBatchClassifyStatus, v => {const s=v as BatchState; setClsState(s); if(!s.running){setClsRunning(false);clearInterval(clsTimer.current)}},(()=>setClsRunning(false)),clsTimer),[]);
-  const handleClassify = startPoll(api.startBatchClassify, pollCls, clsTimer, setClsRunning);
-  const pollSc = useCallback(() => poll(api.getBatchScoreStatus, v => {const s=v as BatchState; setScoreState(s); if(!s.running){setScoreRunning(false);clearInterval(scoreTimer.current)}},(()=>setScoreRunning(false)),scoreTimer),[]);
-  const handleScore = startPoll(api.startBatchScore, pollSc, scoreTimer, setScoreRunning);
+  const pollKcs = useCallback(() => poll(api.getBatchKcsStatus, v => {const s=v as BatchState; setKcsState(s); if(!s.running){setKcsRunning(false);clearInterval(kcsTimer.current)}},(()=>setKcsRunning(false)),kcsTimer),[]);
+  const handleKcs = startPoll(api.startBatchKcs, pollKcs, kcsTimer, setKcsRunning);
   const pollRecl = useCallback(() => poll(api.getBatchReclusterStatus, v => {const s=v as BatchState; setReclState(s); if(!s.running){setReclRunning(false);clearInterval(reclTimer.current)}},(()=>setReclRunning(false)),reclTimer),[]);
   const handleRecluster = startPoll(api.startBatchRecluster, pollRecl, reclTimer, setReclRunning);
   const pollEs = useCallback(() => poll(api.getBatchSummarizeEventsStatus, v => {const s=v as BatchState; setEsState(s); if(!s.running){setEsRunning(false);clearInterval(esTimer.current)}},(()=>setEsRunning(false)),esTimer),[]);
@@ -398,34 +388,14 @@ export default function Dashboard() {
         gap: 16,
       }}>
         <AICard
-          icon="fa-tags"
+          icon="fa-bolt"
           color="var(--accent-tertiary)"
-          title="AI 关键词提取"
-          desc="从文章正文提取技术关键词，替代硬编码映射表"
-          state={kwState}
-          running={kwRunning}
-          onClick={handleKeywords}
-          label="提取关键词"
-        />
-        <AICard
-          icon="fa-folder-tree"
-          color="var(--accent)"
-          title="AI 智能分类"
-          desc="自动归类文章细粒度领域 + 生成标签"
-          state={clsState}
-          running={clsRunning}
-          onClick={handleClassify}
-          label="智能分类"
-        />
-        <AICard
-          icon="fa-star"
-          color="var(--accent-orange)"
-          title="AI 优先级评分"
-          desc="AI 综合评估文章重要性、时效性、影响力"
-          state={scoreState}
-          running={scoreRunning}
-          onClick={handleScore}
-          label="智能评分"
+          title="AI KCS 合并处理"
+          desc="一次调用完成关键词提取、话题分类、优先级评分"
+          state={kcsState}
+          running={kcsRunning}
+          onClick={handleKcs}
+          label="KCS 合并处理"
         />
         <AICard
           icon="fa-object-group"
