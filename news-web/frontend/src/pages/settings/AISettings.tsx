@@ -1,6 +1,22 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../../api/client';
-import type { AiConfig, AiEndpointProfile, AiProvider, AiTestResult } from '../../types';
+import type { AiEndpointConfig, AiEndpointTestResult, AiSettingsResponse } from '../../types';
+
+// 入口元数据（中文名 + 描述）
+const ENDPOINT_META: Record<string, { name: string; description: string; group: string }> = {
+  rss_prefilter:         { name: 'RSS 预过滤',     description: 'RSS 抓取后的内容预筛选', group: '数据采集' },
+  html_clean:            { name: '内容清洗',         description: '去除广告/导航/推荐，提取纯净正文', group: '数据处理' },
+  translation:           { name: 'AI 翻译',         description: '英文科技新闻自动译中文', group: '数据处理' },
+  article_analysis:      { name: '文章分析',         description: '单篇科技新闻深度分析摘要', group: 'AI 分析' },
+  event_summary:         { name: '事件总结',         description: '为同一事件的多篇文章生成综合摘要', group: 'AI 分析' },
+  event_ranking:         { name: '事件排序',         description: '全景图推理全局事件优先级排序', group: 'AI 分析' },
+  chain_building:        { name: '逻辑链构建',       description: '全景图推理识别事件分组并构筑逻辑链', group: 'AI 分析' },
+  keyword_extraction:    { name: '关键词提取',       description: '从标题+正文提取技术关键词', group: '结构化任务' },
+  article_classification:{ name: '话题分类',         description: 'AI 分类文章主题领域', group: '结构化任务' },
+  priority_scoring:      { name: '优先级评分',       description: 'AI 评估文章优先级（百分制 0~100）', group: '结构化任务' },
+};
+
+const GROUP_ORDER = ['数据采集', '数据处理', 'AI 分析', '结构化任务'];
 
 interface Props {
   baseUrl: string; setBaseUrl: (v: string) => void;
@@ -29,327 +45,312 @@ export default function AISettings({
   translationApiKey, setTranslationApiKey,
   translationModel, setTranslationModel,
 }: Props) {
-  const [aiConfig, setAiConfig] = useState<AiConfig | null>(null);
-  const [testResults, setTestResults] = useState<Record<string, AiTestResult>>({});
-  const [testing, setTesting] = useState<string[]>([]);
+  const [aiSettings, setAiSettings] = useState<AiSettingsResponse | null>(null);
+  const [testResults, setTestResults] = useState<AiEndpointTestResult[]>([]);
   const [testingAll, setTestingAll] = useState(false);
+  const [testingSingle, setTestingSingle] = useState<string | null>(null);
+  const [expandedEndpoint, setExpandedEndpoint] = useState<string | null>(null);
   const [showApiKey, setShowApiKey] = useState<Record<string, boolean>>({});
-  const [showImport, setShowImport] = useState(false);
-  const [importText, setImportText] = useState('');
-  const [expandedProfile, setExpandedProfile] = useState<string | null>(null);
+  const [showImport, setShowImport] = useState<string | null>(null);
+  const [importSource, setImportSource] = useState('');
+  const [importFields, setImportFields] = useState<Record<string, boolean>>({
+    base_url: true, api_key: false, model: true, params: false,
+  });
 
+  // 从后端加载入口级配置
   useEffect(() => {
-    api.getAiConfig().then(setAiConfig).catch(() => {});
+    api.getAiSettings().then(setAiSettings).catch(() => {});
   }, []);
 
-  const providers = aiConfig?.providers ?? {};
-  const profiles = aiConfig?.profiles ?? [];
-  const settings = aiConfig?.settings;
+  const endpoints = aiSettings?.ai_endpoints ?? {};
 
-  const getProviderForProfile = useCallback(
-    (profile: AiEndpointProfile): AiProvider | undefined => providers[profile.provider_id],
-    [providers],
-  );
-
-  const handleTest = async (targets: string[]) => {
-    if (targets[0] === 'all') setTestingAll(true);
-    else setTesting(prev => [...prev, ...targets]);
-    setTestResults({});
+  // 保存单个入口配置
+  const handleSaveEndpoint = useCallback(async (key: string, data: Partial<AiEndpointConfig>) => {
+    const updated = { ...endpoints, [key]: { ...endpoints[key], ...data } };
     try {
-      const resp = await api.testAiConfig(targets);
+      const resp = await api.updateAiSettings({ ai_endpoints: updated });
+      setAiSettings(resp);
+    } catch (e) {
+      console.error('保存失败:', e);
+    }
+  }, [endpoints]);
+
+  // 测试所有入口
+  const handleTestAll = async () => {
+    setTestingAll(true);
+    setTestResults([]);
+    try {
+      const resp = await api.testAiEndpoints();
       setTestResults(resp.results);
-      if (aiConfig) {
-        const newProviders = { ...aiConfig.providers };
-        for (const [name, result] of Object.entries(resp.results)) {
-          for (const p of Object.values(newProviders)) {
-            if (name in (p.models || {})) {
-              newProviders[p.id] = { ...p, status: result.ok ? 'ok' : 'error' };
-            }
-          }
-        }
-        setAiConfig({ ...aiConfig, providers: newProviders });
-      }
     } catch (e) {
       console.error('测试失败:', e);
     }
     setTestingAll(false);
-    setTesting([]);
   };
 
-  const handleCopyKey = (key: string) => {
-    navigator.clipboard.writeText(key).catch(() => {});
-  };
-
-  const handleExport = () => {
-    if (!aiConfig) return;
-    const exportData = {
-      providers: Object.fromEntries(
-        Object.entries(aiConfig.providers).map(([id, p]) => [
-          id,
-          { base_url: p.base_url, api_key: p.api_key, models: p.models },
-        ])
-      ),
-      settings: aiConfig.settings,
-      exported_at: new Date().toISOString(),
-    };
-    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `ai-config-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const handleImport = () => {
+  // 测试单个入口
+  const handleTestSingle = async (key: string) => {
+    setTestingSingle(key);
     try {
-      const data = JSON.parse(importText);
-      if (data.providers) {
-        const updateData: Record<string, unknown> = {};
-        for (const [, p] of Object.entries(data.providers) as [string, { base_url?: string; api_key?: string; models?: Record<string, string> }][]) {
-          if (p.base_url) updateData.openai_base_url = p.base_url;
-          if (p.api_key) updateData.openai_api_key = p.api_key;
-          if (p.models?.analyze) updateData.openai_model = p.models.analyze;
-          if (p.models?.simple) updateData.simple_model = p.models.simple;
-          if (p.models?.clean) updateData.clean_model = p.models.clean;
-          if (p.models?.translation) updateData.translation_model = p.models.translation;
-        }
-        if (data.settings) {
-          Object.assign(updateData, data.settings);
-        }
-        api.updateAiConfig(updateData).then(setAiConfig).catch(() => {});
-      }
-      setShowImport(false);
-      setImportText('');
-    } catch {
-      alert('导入格式错误');
+      const resp = await api.testAiEndpoints(key);
+      setTestResults(prev => {
+        const filtered = prev.filter(r => r.endpoint_key !== key);
+        return [...filtered, ...resp.results];
+      });
+    } catch (e) {
+      console.error('测试失败:', e);
     }
+    setTestingSingle(null);
   };
 
-  const StatusIcon = ({ profile }: { profile: AiEndpointProfile }) => {
-    const provider = getProviderForProfile(profile);
-    if (!provider) return <i className="fas fa-circle" style={{ color: 'var(--text-muted)', fontSize: 8 }} />;
-    const result = testResults[profile.id];
-    if (result) {
-      return result.ok
-        ? <i className="fas fa-check-circle" style={{ color: 'var(--accent-tertiary)', fontSize: 10 }} />
-        : <i className="fas fa-exclamation-circle" style={{ color: 'var(--accent-red)', fontSize: 10 }} />;
+  // 导入配置
+  const handleImport = (targetKey: string) => {
+    if (!importSource || importSource === targetKey) return;
+    const source = endpoints[importSource];
+    if (!source) return;
+
+    const update: Partial<AiEndpointConfig> = {};
+    if (importFields.base_url) update.base_url = source.base_url;
+    if (importFields.api_key) update.api_key = source.api_key;
+    if (importFields.model) update.model = source.model;
+    if (importFields.params) {
+      update.enable_thinking = source.enable_thinking;
+      update.thinking_budget = source.thinking_budget;
+      update.deep_thinking_max_tokens = source.deep_thinking_max_tokens;
+      update.json_response_format = source.json_response_format;
+      update.target_lang = source.target_lang;
+      update.max_tokens = source.max_tokens;
     }
-    return <i className="fas fa-circle" style={{ color: 'var(--text-muted)', fontSize: 8 }} />;
+    handleSaveEndpoint(targetKey, update);
+    setShowImport(null);
   };
+
+  // 获取测试结果
+  const getResult = (key: string) => testResults.find(r => r.endpoint_key === key);
+
+  // 按分组组织入口
+  const grouped = GROUP_ORDER.map(group => ({
+    group,
+    items: Object.entries(endpoints)
+      .filter(([key]) => ENDPOINT_META[key]?.group === group)
+      .map(([key, config]) => ({ key, config, meta: ENDPOINT_META[key] })),
+  })).filter(g => g.items.length > 0);
 
   return (
     <div className="settings-container">
-      {/* 全局操作栏 */}
+      {/* 顶部操作栏 */}
       <div className="ai-config-toolbar">
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <button
-            className="btn btn-secondary"
-            onClick={() => handleTest(['all'])}
-            disabled={testingAll}
-            style={{ fontSize: 12, padding: '6px 14px' }}
-          >
+          <button className="btn btn-secondary" onClick={handleTestAll} disabled={testingAll}
+            style={{ fontSize: 12, padding: '6px 14px' }}>
             <i className={`fas fa-${testingAll ? 'spinner fa-spin' : 'plug'}`} />
-            {' '}{testingAll ? '测试中...' : '全部测试'}
-          </button>
-          <button className="btn btn-secondary" onClick={handleExport} style={{ fontSize: 12, padding: '6px 14px' }}>
-            <i className="fas fa-download" /> 导出
-          </button>
-          <button className="btn btn-secondary" onClick={() => setShowImport(!showImport)} style={{ fontSize: 12, padding: '6px 14px' }}>
-            <i className="fas fa-upload" /> 导入
+            {' '}{testingAll ? '测试中...' : '测试所有 AI 入口'}
           </button>
         </div>
       </div>
 
-      {showImport && (
-        <div className="ai-config-import">
-          <textarea
-            className="form-control"
-            rows={4}
-            placeholder="粘贴导出的 JSON 配置..."
-            value={importText}
-            onChange={e => setImportText(e.target.value)}
-          />
-          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-            <button className="btn btn-primary" onClick={handleImport} style={{ fontSize: 12, padding: '6px 14px' }}>
-              <i className="fas fa-check" /> 应用
-            </button>
-            <button className="btn btn-secondary" onClick={() => { setShowImport(false); setImportText(''); }} style={{ fontSize: 12, padding: '6px 14px' }}>
-              取消
-            </button>
-          </div>
-        </div>
-      )}
+      {/* 按分组渲染入口卡片 */}
+      {grouped.map(({ group, items }) => (
+        <div key={group}>
+          <div className="ai-config-group-title">{group}</div>
+          {items.map(({ key, config: ep, meta }) => {
+            const result = getResult(key);
+            const isExpanded = expandedEndpoint === key;
+            const isTesting = testingSingle === key;
 
-      {/* 端点分组卡片 */}
-      {profiles.map(profile => {
-        const provider = getProviderForProfile(profile);
-        const isExpanded = expandedProfile === profile.id;
-        const result = testResults[profile.id];
-        const isTestingThis = testing.includes(profile.id);
-
-        return (
-          <div key={profile.id} className="ai-config-card">
-            <div
-              className="ai-config-card-header"
-              onClick={() => setExpandedProfile(isExpanded ? null : profile.id)}
-            >
-              <div className="ai-config-card-title">
-                <StatusIcon profile={profile} />
-                <h3>{profile.name}</h3>
-                <span className="ai-config-model-badge">{profile.model_id}</span>
-              </div>
-              <div className="ai-config-card-actions">
-                <span className="ai-config-provider-name">{provider?.name || profile.provider_id}</span>
-                <button
-                  className="btn btn-secondary"
-                  onClick={e => { e.stopPropagation(); handleTest([profile.id]); }}
-                  disabled={isTestingThis}
-                  style={{ fontSize: 11, padding: '4px 10px' }}
-                >
-                  <i className={`fas fa-${isTestingThis ? 'spinner fa-spin' : 'plug'}`} />
-                  {' '}{isTestingThis ? '测试中' : '测试'}
-                </button>
-                <i className={`fas fa-chevron-${isExpanded ? 'up' : 'down'}`} style={{ color: 'var(--text-muted)', fontSize: 10 }} />
-              </div>
-            </div>
-
-            <div className="ai-config-card-desc">{profile.description}</div>
-
-            {result && (
-              <div className={`ai-config-test-result ${result.ok ? 'success' : 'error'}`}>
-                <i className={`fas fa-${result.ok ? 'check-circle' : 'exclamation-circle'}`} />
-                {result.ok
-                  ? `连接成功 · 模型: ${result.model} · ${result.response || result.translation || 'OK'}`
-                  : `连接失败 · ${result.error}`
-                }
-              </div>
-            )}
-
-            {isExpanded && provider && (
-              <div className="ai-config-card-body">
-                <div className="form-group">
-                  <label className="form-label"><i className="fas fa-link" /> API 地址</label>
-                  <input className="form-control" value={provider.base_url} readOnly />
-                  <div className="form-text">端点地址继承自 Provider「{provider.name}」</div>
-                </div>
-                <div className="form-group">
-                  <label className="form-label"><i className="fas fa-key" /> API Key</label>
-                  <div className="ai-config-key-row">
-                    <input
-                      className="form-control"
-                      type={showApiKey[profile.id] ? 'text' : 'password'}
-                      value={showApiKey[profile.id] ? provider.api_key : provider.api_key_masked}
-                      readOnly
-                    />
-                    <button
-                      className="btn btn-secondary"
-                      onClick={() => setShowApiKey(prev => ({ ...prev, [profile.id]: !prev[profile.id] }))}
-                      style={{ padding: '6px 10px', fontSize: 11 }}
-                    >
-                      <i className={`fas fa-${showApiKey[profile.id] ? 'eye-slash' : 'eye'}`} />
-                    </button>
-                    <button
-                      className="btn btn-secondary"
-                      onClick={() => handleCopyKey(provider.api_key)}
-                      style={{ padding: '6px 10px', fontSize: 11 }}
-                    >
-                      <i className="fas fa-copy" />
-                    </button>
+            return (
+              <div key={key} className="ai-config-card">
+                {/* 卡片头 */}
+                <div className="ai-config-card-header"
+                  onClick={() => setExpandedEndpoint(isExpanded ? null : key)}>
+                  <div className="ai-config-card-title">
+                    <i className={`fas fa-circle`}
+                      style={{ color: ep.enabled ? (result?.ok ? 'var(--accent-tertiary)' : result?.ok === false ? 'var(--accent-red)' : 'var(--text-muted)') : 'var(--text-muted)', fontSize: 8 }} />
+                    <h3>{meta.name}</h3>
+                    <span className="ai-config-model-badge">{ep.model || '未配置'}</span>
                   </div>
-                  <div className="form-text">在「通用设置」或「AI 翻译」中修改</div>
+                  <div className="ai-config-card-actions">
+                    <span style={{ fontSize: 11, color: ep.enabled ? 'var(--accent-tertiary)' : 'var(--text-muted)' }}>
+                      {ep.enabled ? '已启用' : '已禁用'}
+                    </span>
+                    <button className="btn btn-secondary"
+                      onClick={e => { e.stopPropagation(); handleTestSingle(key); }}
+                      disabled={isTesting}
+                      style={{ fontSize: 11, padding: '4px 10px' }}>
+                      <i className={`fas fa-${isTesting ? 'spinner fa-spin' : 'plug'}`} />
+                      {' '}{isTesting ? '测试中' : '测试'}
+                    </button>
+                    <i className={`fas fa-chevron-${isExpanded ? 'up' : 'down'}`}
+                      style={{ color: 'var(--text-muted)', fontSize: 10 }} />
+                  </div>
                 </div>
-                <div className="form-group">
-                  <label className="form-label"><i className="fas fa-robot" /> 模型</label>
-                  <input className="form-control" value={profile.model_id} readOnly />
-                  <div className="form-text">{profile.description}</div>
-                </div>
+
+                <div className="ai-config-card-desc">{meta.description}</div>
+
+                {/* 测试结果 */}
+                {result && (
+                  <div className={`ai-config-test-result ${result.ok ? 'success' : result.skipped ? 'skipped' : 'error'}`}>
+                    <i className={`fas fa-${result.ok ? 'check-circle' : result.skipped ? 'info-circle' : 'exclamation-circle'}`} />
+                    {result.skipped
+                      ? `跳过 · ${result.reason || '未配置'}`
+                      : result.ok
+                        ? `连接成功 · ${result.model} · ${result.response || 'OK'}`
+                        : `连接失败 · ${result.error}`
+                    }
+                    {result.elapsed_ms != null && <span style={{ marginLeft: 'auto', opacity: 0.6 }}>{result.elapsed_ms}ms</span>}
+                  </div>
+                )}
+
+                {/* 展开编辑区 */}
+                {isExpanded && (
+                  <div className="ai-config-card-body">
+                    <div className="form-group">
+                      <label className="form-check">
+                        <input type="checkbox" checked={ep.enabled}
+                          onChange={e => handleSaveEndpoint(key, { enabled: e.target.checked })} />
+                        <span className="form-check-label">启用此入口</span>
+                      </label>
+                    </div>
+
+                    <div className="form-group">
+                      <label className="form-label"><i className="fas fa-link" /> API 地址</label>
+                      <input className="form-control" value={ep.base_url || ''}
+                        onChange={e => handleSaveEndpoint(key, { base_url: e.target.value })}
+                        placeholder="https://api.siliconflow.cn/v1" />
+                    </div>
+
+                    <div className="form-group">
+                      <label className="form-label"><i className="fas fa-key" /> API Key</label>
+                      <div className="ai-config-key-row">
+                        <input className="form-control"
+                          type={showApiKey[key] ? 'text' : 'password'}
+                          value={showApiKey[key] ? (ep.api_key === '***' ? '' : ep.api_key || '') : (ep.api_key || '')}
+                          onChange={e => handleSaveEndpoint(key, { api_key: e.target.value })}
+                          placeholder={ep.api_key === '***' ? '已配置 (***' : 'sk-...'} />
+                        <button className="btn btn-secondary"
+                          onClick={() => setShowApiKey(prev => ({ ...prev, [key]: !prev[key] }))}
+                          style={{ padding: '6px 10px', fontSize: 11 }}>
+                          <i className={`fas fa-${showApiKey[key] ? 'eye-slash' : 'eye'}`} />
+                        </button>
+                      </div>
+                      <div className="form-text">留空则跳过此入口。保存后 Key 以 *** 掩码显示。</div>
+                    </div>
+
+                    <div className="form-group">
+                      <label className="form-label"><i className="fas fa-robot" /> 模型</label>
+                      <input className="form-control" value={ep.model || ''}
+                        onChange={e => handleSaveEndpoint(key, { model: e.target.value })}
+                        placeholder="deepseek-ai/DeepSeek-V3.2" />
+                    </div>
+
+                    {/* 高级参数折叠区 */}
+                    <details className="ai-config-advanced">
+                      <summary>高级参数</summary>
+                      <div className="ai-config-advanced-body">
+                        {ep.enable_thinking !== undefined && (
+                          <div className="form-group">
+                            <label className="switch-row">
+                              <input type="checkbox" checked={ep.enable_thinking}
+                                onChange={e => handleSaveEndpoint(key, { enable_thinking: e.target.checked })} />
+                              <span>启用深度思考</span>
+                            </label>
+                          </div>
+                        )}
+                        {ep.thinking_budget !== undefined && (
+                          <div className="form-group">
+                            <label className="form-label">思维预算 token</label>
+                            <input className="form-control" type="number" min={128} max={32768}
+                              value={ep.thinking_budget}
+                              onChange={e => handleSaveEndpoint(key, { thinking_budget: Number(e.target.value) })} />
+                          </div>
+                        )}
+                        {ep.deep_thinking_max_tokens !== undefined && (
+                          <div className="form-group">
+                            <label className="form-label">深度输出上限 token</label>
+                            <input className="form-control" type="number" min={1024}
+                              value={ep.deep_thinking_max_tokens}
+                              onChange={e => handleSaveEndpoint(key, { deep_thinking_max_tokens: Number(e.target.value) })} />
+                          </div>
+                        )}
+                        {ep.json_response_format !== undefined && (
+                          <div className="form-group">
+                            <label className="switch-row">
+                              <input type="checkbox" checked={ep.json_response_format}
+                                onChange={e => handleSaveEndpoint(key, { json_response_format: e.target.checked })} />
+                              <span>强制 JSON 输出</span>
+                            </label>
+                          </div>
+                        )}
+                        {ep.target_lang !== undefined && (
+                          <div className="form-group">
+                            <label className="form-label">目标语言</label>
+                            <input className="form-control" value={ep.target_lang || 'zh-CN'}
+                              onChange={e => handleSaveEndpoint(key, { target_lang: e.target.value })} />
+                          </div>
+                        )}
+                        {ep.max_tokens !== undefined && (
+                          <div className="form-group">
+                            <label className="form-label">最大输出 token</label>
+                            <input className="form-control" type="number" min={1024}
+                              value={ep.max_tokens}
+                              onChange={e => handleSaveEndpoint(key, { max_tokens: Number(e.target.value) })} />
+                          </div>
+                        )}
+                      </div>
+                    </details>
+
+                    {/* 从其他入口导入 */}
+                    <div className="ai-config-import-row">
+                      <button className="btn btn-secondary"
+                        onClick={() => setShowImport(showImport === key ? null : key)}
+                        style={{ fontSize: 11, padding: '4px 10px' }}>
+                        <i className="fas fa-download" /> 从其他入口导入
+                      </button>
+                      {showImport === key && (
+                        <div className="ai-config-import-panel">
+                          <select className="form-select-sm" value={importSource}
+                            onChange={e => setImportSource(e.target.value)}>
+                            <option value="">选择源入口...</option>
+                            {Object.keys(endpoints).filter(k => k !== key).map(k => (
+                              <option key={k} value={k}>{ENDPOINT_META[k]?.name || k}</option>
+                            ))}
+                          </select>
+                          <label className="form-check" style={{ fontSize: 11 }}>
+                            <input type="checkbox" checked={importFields.base_url}
+                              onChange={e => setImportFields(f => ({ ...f, base_url: e.target.checked }))} />
+                            <span>API 地址</span>
+                          </label>
+                          <label className="form-check" style={{ fontSize: 11 }}>
+                            <input type="checkbox" checked={importFields.api_key}
+                              onChange={e => setImportFields(f => ({ ...f, api_key: e.target.checked }))} />
+                            <span>API Key</span>
+                          </label>
+                          <label className="form-check" style={{ fontSize: 11 }}>
+                            <input type="checkbox" checked={importFields.model}
+                              onChange={e => setImportFields(f => ({ ...f, model: e.target.checked }))} />
+                            <span>模型</span>
+                          </label>
+                          <label className="form-check" style={{ fontSize: 11 }}>
+                            <input type="checkbox" checked={importFields.params}
+                              onChange={e => setImportFields(f => ({ ...f, params: e.target.checked }))} />
+                            <span>高级参数</span>
+                          </label>
+                          <button className="btn btn-primary"
+                            onClick={() => handleImport(key)}
+                            disabled={!importSource || importSource === key}
+                            style={{ fontSize: 11, padding: '4px 10px' }}>
+                            应用
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-        );
-      })}
-
-      {/* AI 翻译端点（独立配置，兼容旧流程） */}
-      <div className="ai-config-card">
-        <div className="ai-config-card-header" onClick={() => setExpandedProfile(expandedProfile === 'translation独立' ? null : 'translation独立')}>
-          <div className="ai-config-card-title">
-            <i className="fas fa-circle" style={{ color: translationEnabled ? 'var(--accent-tertiary)' : 'var(--text-muted)', fontSize: 8 }} />
-            <h3>AI 翻译</h3>
-            <span className="ai-config-model-badge">{translationModel || '未配置'}</span>
-          </div>
-          <div className="ai-config-card-actions">
-            <span style={{ fontSize: 11, color: translationEnabled ? 'var(--accent-tertiary)' : 'var(--text-muted)' }}>
-              {translationEnabled ? '已启用' : '已禁用'}
-            </span>
-            <i className={`fas fa-chevron-${expandedProfile === 'translation独立' ? 'up' : 'down'}`} style={{ color: 'var(--text-muted)', fontSize: 10 }} />
-          </div>
+            );
+          })}
         </div>
-        {expandedProfile === 'translation独立' && (
-          <div className="ai-config-card-body">
-            <div className="form-group">
-              <label className="form-check">
-                <input type="checkbox" checked={translationEnabled} onChange={e => setTranslationEnabled(e.target.checked)} />
-                <span className="form-check-label">启用 AI 翻译</span>
-              </label>
-            </div>
-            <div className="form-group">
-              <label className="form-label"><i className="fas fa-link" /> API 地址</label>
-              <input className="form-control" value={translationBaseUrl} onChange={e => setTranslationBaseUrl(e.target.value)}
-                placeholder="https://api.siliconflow.cn/v1" />
-            </div>
-            <div className="form-group">
-              <label className="form-label"><i className="fas fa-key" /> API Key</label>
-              <input className="form-control" type="password" value={translationApiKey} onChange={e => setTranslationApiKey(e.target.value)}
-                placeholder="sk-..." />
-            </div>
-            <div className="form-group">
-              <label className="form-label"><i className="fas fa-robot" /> 模型</label>
-              <input className="form-control" value={translationModel} onChange={e => setTranslationModel(e.target.value)}
-                placeholder="deepseek-ai/DeepSeek-V3.2" />
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* 全局 AI 设置 */}
-      <div className="settings-card">
-        <div className="card-header">
-          <h3><i className="fas fa-cog" /> 全局设置</h3>
-        </div>
-        <div className="card-body">
-          <div className="form-group">
-            <label className="form-label"><i className="fas fa-lightbulb" /> 启用深度思考</label>
-            <label className="switch-row">
-              <input type="checkbox" checked={enableThinking} onChange={e => setEnableThinking(e.target.checked)} />
-              <span>向 SiliconFlow 发送 enable_thinking=true</span>
-            </label>
-            <div className="form-text">若使用不支持 thinking 的兼容端点，可关闭此项。</div>
-          </div>
-          <div className="form-grid two">
-            <div className="form-group">
-              <label className="form-label"><i className="fas fa-brain" /> 思维预算 token</label>
-              <input className="form-control" type="number" min={128} max={32768} value={thinkingBudget}
-                onChange={e => setThinkingBudget(Number(e.target.value))} />
-              <div className="form-text">SiliconFlow thinking_budget 范围：128-32768。</div>
-            </div>
-            <div className="form-group">
-              <label className="form-label"><i className="fas fa-file-alt" /> 深度输出上限 token</label>
-              <input className="form-control" type="number" min={1024} value={deepThinkingMaxTokens}
-                onChange={e => setDeepThinkingMaxTokens(Number(e.target.value))} />
-              <div className="form-text">用于单篇分析、全景排序、逻辑链构建等高质量输出。</div>
-            </div>
-          </div>
-          <div className="form-group">
-            <label className="form-label"><i className="fas fa-code" /> 强制 JSON 输出</label>
-            <label className="switch-row">
-              <input type="checkbox" checked={jsonResponseFormat} onChange={e => setJsonResponseFormat(e.target.checked)} />
-              <span>对关键词、分类、评分、事件关系、全景推理使用 response_format=json_object</span>
-            </label>
-            <div className="form-text">可减少结构化任务解析失败；非 OpenAI 兼容端点如报错可关闭。</div>
-          </div>
-        </div>
-      </div>
+      ))}
 
       {/* 说明 */}
       <div className="settings-card">
@@ -358,11 +359,10 @@ export default function AISettings({
         </div>
         <div className="card-body">
           <div className="info-list">
-            <div className="info-item"><i className="fas fa-check" /> 入口级配置：所有 AI 端点共享主 Provider 的 base_url 和 api_key</div>
-            <div className="info-item"><i className="fas fa-check" /> 独立模型：分析/清洗/轻量任务/翻译可分别指定模型</div>
-            <div className="info-item"><i className="fas fa-check" /> 清洗端点支持独立 API 地址（需在 config.json 中配置 clean_base_url）</div>
-            <div className="info-item"><i className="fas fa-check" /> 全部测试：一键验证所有端点的连通性</div>
-            <div className="info-item"><i className="fas fa-check" /> 配置导入/导出：JSON 格式，便于跨环境迁移</div>
+            <div className="info-item"><i className="fas fa-check" /> 每个 AI 调用入口独立配置 endpoint / API Key / 模型</div>
+            <div className="info-item"><i className="fas fa-check" /> 支持从其他入口导入配置（API 地址 / Key / 模型 / 参数）</div>
+            <div className="info-item"><i className="fas fa-check" /> 导入配置仅改变编辑态，需点击「保存设置」后生效</div>
+            <div className="info-item"><i className="fas fa-check" /> 统一测试入口验证所有启用模块并反馈每个入口的问题</div>
           </div>
         </div>
       </div>

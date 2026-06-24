@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from config import config
 from ai_client import chat
 from translation_client import translate_to_chinese
-from ai_config import get_ai_config, update_ai_config
+from ai_config import to_ai_endpoint_config, apply_ai_endpoint_config, test_ai_endpoint, test_all_ai_endpoints
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -97,130 +97,45 @@ def update_settings(body: SettingsUpdate):
 # AI 入口级配置 API
 # ══════════════════════════════════════════════════════════════
 
-class AiConfigUpdate(BaseModel):
-    openai_base_url: str | None = None
-    openai_api_key: str | None = None
-    openai_model: str | None = None
-    simple_model: str | None = None
-    clean_model: str | None = None
-    clean_base_url: str | None = None
-    clean_api_key: str | None = None
-    translation_base_url: str | None = None
-    translation_api_key: str | None = None
-    translation_model: str | None = None
-    translation_enabled: bool | None = None
-    ai_enable_thinking: bool | None = None
-    ai_thinking_budget: int | None = None
-    ai_deep_thinking_max_tokens: int | None = None
-    ai_json_response_format: bool | None = None
+class AiEndpointUpdate(BaseModel):
+    ai_endpoints: dict
 
 
 class AiTestRequest(BaseModel):
-    targets: list[str] = ['all']
+    endpoint: str | None = None  # None = 测试所有启用入口
 
 
 @router.get("/ai")
 def get_ai_settings():
-    """获取 AI 入口级配置（provider、endpoint、settings、tasks）。"""
-    return get_ai_config()
+    """获取 AI 入口级配置（每个调用入口独立配置）。"""
+    return to_ai_endpoint_config()
 
 
 @router.put("/ai")
-def update_ai_settings(body: AiConfigUpdate):
-    """批量更新 AI 入口级配置。"""
-    data = body.model_dump(exclude_none=True)
-    update_ai_config(data)
-    return get_ai_config()
+def update_ai_settings(body: AiEndpointUpdate):
+    """保存 AI 入口级配置。"""
+    return apply_ai_endpoint_config(body.model_dump())
 
 
 @router.post("/ai/test")
 def test_ai_endpoints(body: AiTestRequest):
     """统一 AI 连通性测试入口。
 
-    targets: ['all'] | ['analyze'] | ['simple'] | ['clean'] | ['translation']
+    endpoint: None 测试所有入口 | 指定入口 key 测试单个入口
     """
-    results = {}
-    targets = body.targets or ['all']
-
-    def _test_analyze():
-        if not config.openai_api_key:
-            return {'ok': False, 'error': 'API Key 未配置', 'model': config.openai_model}
-        try:
-            result = chat(
-                "Hello! Reply with just 'OK'.",
-                system_prompt="You only reply 'OK'.",
-                max_tokens=64,
-                enable_thinking=False,
-            )
-            return {'ok': True, 'model': config.openai_model, 'response': result[:200]}
-        except Exception as e:
-            return {'ok': False, 'error': str(e)[:200], 'model': config.openai_model}
-
-    def _test_simple():
-        if not config.openai_api_key:
-            return {'ok': False, 'error': 'API Key 未配置', 'model': config.simple_model}
-        try:
-            result = chat(
-                "Hello! Reply with just 'OK'.",
-                system_prompt="You only reply 'OK'.",
-                max_tokens=64,
-                enable_thinking=False,
-                model=config.simple_model,
-            )
-            return {'ok': True, 'model': config.simple_model, 'response': result[:200]}
-        except Exception as e:
-            return {'ok': False, 'error': str(e)[:200], 'model': config.simple_model}
-
-    def _test_clean():
-        clean_key = config.clean_api_key
-        if not clean_key:
-            return {'ok': False, 'error': '清洗 API Key 未配置', 'model': config.clean_model}
-        try:
-            result = chat(
-                "Hello! Reply with just 'OK'.",
-                system_prompt="You only reply 'OK'.",
-                max_tokens=64,
-                enable_thinking=False,
-                model=config.clean_model,
-            )
-            return {'ok': True, 'model': config.clean_model, 'response': result[:200]}
-        except Exception as e:
-            return {'ok': False, 'error': str(e)[:200], 'model': config.clean_model}
-
-    def _test_translation():
-        if not config.translation_api_key:
-            return {'ok': False, 'error': '翻译 API Key 未配置', 'model': config.translation_model}
-        try:
-            test_text = "The quick brown fox jumps over the lazy dog."
-            result = translate_to_chinese(test_text)
-            return {
-                'ok': True,
-                'model': config.translation_model,
-                'original': test_text,
-                'translation': result[:300],
-            }
-        except Exception as e:
-            return {'ok': False, 'error': str(e)[:200], 'model': config.translation_model}
-
-    test_map = {
-        'all': {'analyze': _test_analyze, 'simple': _test_simple, 'clean': _test_clean, 'translation': _test_translation},
-        'analyze': {'analyze': _test_analyze},
-        'simple': {'simple': _test_simple},
-        'clean': {'clean': _test_clean},
-        'translation': {'translation': _test_translation},
-    }
-
-    if 'all' in targets:
-        for name, fn in test_map['all'].items():
-            results[name] = fn()
-    else:
-        for target in targets:
-            if target in test_map:
-                for name, fn in test_map[target].items():
-                    results[name] = fn()
-
-    all_ok = all(r.get('ok') for r in results.values())
-    return {'ok': all_ok, 'results': results}
+    if body.endpoint:
+        result = test_ai_endpoint(body.endpoint)
+        return {
+            'ok': result.get('ok'),
+            'summary': {
+                'total': 1,
+                'passed': 1 if result.get('ok') else 0,
+                'failed': 0 if result.get('ok') else 1,
+                'skipped': 1 if result.get('skipped') else 0,
+            },
+            'results': [result],
+        }
+    return test_all_ai_endpoints()
 
 
 # ══════════════════════════════════════════════════════════════

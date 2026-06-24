@@ -254,12 +254,14 @@ export const api = {
     fetchJSON<{ ok: boolean }>('/notifications/prefs', { method: 'PUT', body: JSON.stringify(data) }),
 
   // AI 入口级配置
-  getAiConfig: () => fetchJSON<import('../types').AiConfig>('/settings/ai'),
-  updateAiConfig: (data: Record<string, unknown>) =>
-    fetchJSON<import('../types').AiConfig>('/settings/ai', { method: 'PUT', body: JSON.stringify(data) }),
-  testAiConfig: (targets: string[]) =>
-    fetchJSON<import('../types').AiTestResponse>('/settings/ai/test', {
-      method: 'POST', body: JSON.stringify({ targets }),
+  getAiSettings: () => fetchJSON<import('../types').AiSettingsResponse>('/settings/ai'),
+  updateAiSettings: (data: { ai_endpoints: Record<string, import('../types').AiEndpointConfig> }) =>
+    fetchJSON<import('../types').AiSettingsResponse>('/settings/ai', {
+      method: 'PUT', body: JSON.stringify(data),
+    }),
+  testAiEndpoints: (endpoint?: string) =>
+    fetchJSON<import('../types').AiEndpointTestResponse>('/settings/ai/test', {
+      method: 'POST', body: JSON.stringify({ endpoint: endpoint || null }),
     }),
 
   // AI API 连通性测试（旧接口保留兼容）

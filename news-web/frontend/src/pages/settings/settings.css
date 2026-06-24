@@ -445,6 +445,71 @@
   background: rgba(248, 113, 113, 0.08);
   color: var(--accent-red);
 }
+.ai-config-test-result.skipped {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-muted);
+}
+
+.ai-config-group-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 8px 0 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ai-config-group-title::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.ai-config-advanced {
+  margin-top: 8px;
+}
+.ai-config-advanced summary {
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+  padding: 4px 0;
+}
+.ai-config-advanced summary:hover { color: var(--text-secondary); }
+.ai-config-advanced-body {
+  padding: 8px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ai-config-import-row {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.ai-config-import-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  padding: 10px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.ai-config-import {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px 16px;
+  margin-bottom: 12px;
+}
 
 /* ── 响应式 ─────────────────────────────────────────── */
 @media (max-width: 768px) {
