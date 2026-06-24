@@ -28,6 +28,7 @@ TASK_LEVELS = {
     'summarize_events': 1,
     'build_chains':    1,
     'rank_events':     1,
+    'event':           1,  # 事件管线编排（互斥所有 AI 任务）
     'ai_filter':       1,
     'pipeline':        0,  # 数据采集管道（不阻塞 AI，仅互斥自身）
     'cache_fetch':     0,  # 抓取类：可与 AI 并行
