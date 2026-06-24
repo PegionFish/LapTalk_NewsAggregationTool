@@ -5,10 +5,8 @@ import DashboardCards from '../components/DashboardCards';
 import { Card, CardHeader, CardBody, Button, ProgressBar, LogPanel } from '../components/ui';
 
 type BatchState = { running: boolean; total: number; done: number; failed: number; current: string; log?: string[]; steps?: { name: string; status: string }[] };
-type ChainState = { running: boolean; total_groups: number; chains_created: number; current: string; log?: string[] };
 
 const emptyBatch: BatchState = { running: false, total: 0, done: 0, failed: 0, current: '' };
-const emptyChain: ChainState = { running: false, total_groups: 0, chains_created: 0, current: '' };
 
 export default function Dashboard() {
   const [stats, setStats] = useState<Stats | null>(null);
@@ -16,18 +14,16 @@ export default function Dashboard() {
   const [toast, setToast] = useState('');
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 3000); };
-  const [translating, setTranslating] = useState(false);
-  const [transState, setTransState] = useState<BatchState>(emptyBatch);
-  const [analyzing, setAnalyzing] = useState(false);
-  const [analyState, setAnalyState] = useState<BatchState>(emptyBatch);
-  const [chaining, setChaining] = useState(false);
-  const [chainState, setChainState] = useState<ChainState>(emptyChain);
+
+  // KCS state
   const [kcsRunning, setKcsRunning] = useState(false); const [kcsState, setKcsState] = useState<BatchState>(emptyBatch);
-  const [reclRunning, setReclRunning] = useState(false); const [reclState, setReclState] = useState<BatchState>(emptyBatch);
-  const [esRunning, setEsRunning] = useState(false); const [esState, setEsState] = useState<BatchState>(emptyBatch);
-  const [fullRunning, setFullRunning] = useState(false);
-  const [fullState, setFullState] = useState<BatchState>(emptyBatch);
-  const [cleanRunning, setCleanRunning] = useState(false); const [cleanState, setCleanState] = useState<BatchState>(emptyBatch);
+
+  // Article pipeline state
+  const [articleRunning, setArticleRunning] = useState(false);
+  const [articleState, setArticleState] = useState<BatchState>(emptyBatch);
+  // Event pipeline state
+  const [eventRunning, setEventRunning] = useState(false);
+  const [eventState, setEventState] = useState<BatchState>(emptyBatch);
 
   // 低分清理
   const [cleanupThreshold, setCleanupThreshold] = useState('20');
@@ -62,41 +58,34 @@ export default function Dashboard() {
     setCleanupLoading(false);
   };
 
-  const transTimer = useRef<ReturnType<typeof setInterval>>();
-  const analyTimer  = useRef<ReturnType<typeof setInterval>>();
-  const chainTimer  = useRef<ReturnType<typeof setInterval>>();
   const kcsTimer = useRef<ReturnType<typeof setInterval>>();
-  const reclTimer = useRef<ReturnType<typeof setInterval>>();
-  const esTimer = useRef<ReturnType<typeof setInterval>>();
-  const fullTimer = useRef<ReturnType<typeof setInterval>>();
-  const cleanTimer = useRef<ReturnType<typeof setInterval>>();
+  const articleTimer = useRef<ReturnType<typeof setInterval>>();
+  const eventTimer = useRef<ReturnType<typeof setInterval>>();
 
   const poll = useCallback((fn: () => Promise<unknown>, setter: (v: unknown) => void, stop: () => void, timer: ReturnType<typeof useRef<ReturnType<typeof setInterval>>>) => {
     fn().then(v => { setter(v); if (!(v as BatchState).running) { stop(); clearInterval(timer.current); } }).catch(stop);
   }, []);
 
-  const pollTranslate = useCallback(() => poll(
-    api.getBatchTranslateStatus, v => setTransState(v as BatchState), () => setTranslating(false), transTimer), []);
-  const pollAnalyze = useCallback(() => poll(
-    api.getBatchAnalyzeStatus, v => setAnalyState(v as BatchState), () => setAnalyzing(false), analyTimer), []);
-  const pollClean = useCallback(() => poll(
-    api.getBatchCleanStatus, v => setCleanState(v as BatchState), () => setCleanRunning(false), cleanTimer), []);
-  const pollChains = useCallback(() => poll(
-    api.getBuildChainsStatus, v => setChainState(v as ChainState), () => setChaining(false), chainTimer), []);
-
   useEffect(() => { api.getStats().then(setStats).catch(() => setStats(null)).finally(() => setLoading(false)); }, []);
 
   useEffect(() => {
-    api.getBatchTranslateStatus().then((s: unknown) => { const st = s as BatchState; if (st.running) { setTranslating(true); transTimer.current = setInterval(pollTranslate, 2000); } else setTransState(st); }).catch(() => {});
-    api.getBatchAnalyzeStatus().then((s: unknown)  => { const st = s as BatchState; if (st.running) { setAnalyzing(true);  analyTimer.current  = setInterval(pollAnalyze, 2000);  } else setAnalyState(st);  }).catch(() => {});
-    api.getBuildChainsStatus().then((s: unknown)    => { const st = s as ChainState; if (st.running) { setChaining(true);  chainTimer.current  = setInterval(pollChains, 2000);  } else setChainState(st);  }).catch(() => {});
-    api.getBatchKcsStatus().then((s: unknown)       => { const st = s as BatchState; if (st.running) { setKcsRunning(true); kcsTimer.current = setInterval(pollKcs, 2000); } else setKcsState(st); }).catch(() => {});
-    api.getBatchReclusterStatus().then((s: unknown) => { const st = s as BatchState; if (st.running) { setReclRunning(true); reclTimer.current = setInterval(pollRecl, 2000); } else setReclState(st); }).catch(() => {});
-    api.getBatchSummarizeEventsStatus().then((s: unknown) => { const st = s as BatchState; if (st.running) { setEsRunning(true); esTimer.current = setInterval(pollEs, 2000); } else setEsState(st); }).catch(() => {});
-    api.getBatchAiFullStatus().then((s: unknown)    => { const st = s as BatchState; if (st.running) { setFullRunning(true); fullTimer.current = setInterval(pollFull, 2000); } else setFullState(st); }).catch(() => {});
-    api.getBatchCleanStatus().then((s: unknown)   => { const st = s as BatchState; if (st.running) { setCleanRunning(true);  cleanTimer.current  = setInterval(pollClean, 2000);  } else setCleanState(st);  }).catch(() => {});
+    api.getArticleStatus().then((s: unknown) => {
+      const st = s as BatchState;
+      if (st.running) { setArticleRunning(true); articleTimer.current = setInterval(pollArticle, 2000); }
+      else setArticleState(st);
+    }).catch(() => {});
+    api.getEventStatus().then((s: unknown) => {
+      const st = s as BatchState;
+      if (st.running) { setEventRunning(true); eventTimer.current = setInterval(pollEvent, 2000); }
+      else setEventState(st);
+    }).catch(() => {});
+    api.getBatchKcsStatus().then((s: unknown) => {
+      const st = s as BatchState;
+      if (st.running) { setKcsRunning(true); kcsTimer.current = setInterval(pollKcs, 2000); }
+      else setKcsState(st);
+    }).catch(() => {});
     return () => {
-      [transTimer, analyTimer, chainTimer, kcsTimer, reclTimer, esTimer, fullTimer, cleanTimer].forEach(t => clearInterval(t.current));
+      [articleTimer, eventTimer, kcsTimer].forEach(t => clearInterval(t.current));
     };
   }, []); // eslint-disable-line
 
@@ -114,38 +103,22 @@ export default function Dashboard() {
     } catch { setRunning(false); }
   };
 
-  const handleTranslate = startPoll(api.startBatchTranslate, pollTranslate, transTimer, setTranslating);
-  const handleAnalyze   = startPoll(api.startBatchAnalyze, pollAnalyze, analyTimer, setAnalyzing);
-  const handleBuildChains = startPoll(api.startBuildChains, pollChains, chainTimer, setChaining);
+  // Article polling
+  const pollArticle = useCallback(() => poll(
+    api.getArticleStatus, v => {const s=v as BatchState; setArticleState(s); if(!s.running){setArticleRunning(false);clearInterval(articleTimer.current)}},(()=>setArticleRunning(false)),articleTimer),[]);
+  const handleArticleBatch = startPoll(api.startArticleBatch, pollArticle, articleTimer, setArticleRunning);
 
+  // Event polling
+  const pollEvent = useCallback(() => poll(
+    api.getEventStatus, v => {const s=v as BatchState; setEventState(s); if(!s.running){setEventRunning(false);clearInterval(eventTimer.current)}},(()=>setEventRunning(false)),eventTimer),[]);
+  const handleEventNightly = startPoll(api.startEventNightly, pollEvent, eventTimer, setEventRunning);
+  const handleRecluster = startPoll(api.startRecluster, pollEvent, eventTimer, setEventRunning);
+  const handleSummarize = startPoll(api.startSummarize, pollEvent, eventTimer, setEventRunning);
+  const handleBuildChains = startPoll(api.startBuildChains, pollEvent, eventTimer, setEventRunning);
+
+  // KCS polling
   const pollKcs = useCallback(() => poll(api.getBatchKcsStatus, v => {const s=v as BatchState; setKcsState(s); if(!s.running){setKcsRunning(false);clearInterval(kcsTimer.current)}},(()=>setKcsRunning(false)),kcsTimer),[]);
   const handleKcs = startPoll(api.startBatchKcs, pollKcs, kcsTimer, setKcsRunning);
-  const pollRecl = useCallback(() => poll(api.getBatchReclusterStatus, v => {const s=v as BatchState; setReclState(s); if(!s.running){setReclRunning(false);clearInterval(reclTimer.current)}},(()=>setReclRunning(false)),reclTimer),[]);
-  const handleRecluster = startPoll(api.startBatchRecluster, pollRecl, reclTimer, setReclRunning);
-  const pollEs = useCallback(() => poll(api.getBatchSummarizeEventsStatus, v => {const s=v as BatchState; setEsState(s); if(!s.running){setEsRunning(false);clearInterval(esTimer.current)}},(()=>setEsRunning(false)),esTimer),[]);
-  const handleSummarizeEvents = startPoll(api.startBatchSummarizeEvents, pollEs, esTimer, setEsRunning);
-
-  const pollFull = useCallback(() => poll(api.getBatchAiFullStatus, v => {const s=v as BatchState; setFullState(s); if(!s.running){setFullRunning(false);clearInterval(fullTimer.current)}},(()=>setFullRunning(false)),fullTimer),[]);
-  const handleFullAi = startPoll(api.startBatchAiFull, pollFull, fullTimer, setFullRunning);
-
-  const handleClean  = startPoll(api.startBatchClean, pollClean, cleanTimer, setCleanRunning);
-
-  // ═══ 运行中 → 停止；停止后重启即重置 ═══
-  const makeStopHandler = (cancelFn: () => Promise<any>, setRunning: (v: boolean) => void) =>
-    async () => {
-      try {
-        const r = await cancelFn();
-        setRunning(false);
-        showToast(r?.message || '取消请求已发送');
-      } catch { showToast('取消失败'); }
-    };
-
-  const handleStopClean = makeStopHandler(api.cancelBatchClean, setCleanRunning);
-  const handleStopTranslate = makeStopHandler(api.cancelBatchTranslate, setTranslating);
-  const handleStopAnalyze = makeStopHandler(api.cancelBatchAnalyze, setAnalyzing);
-  const handleStopFullAi = makeStopHandler(api.cancelBatchAiFull, setFullRunning);
-
-  const progressPct = (done: number, total: number) => total > 0 ? Math.round((done / total) * 100) : 0;
 
   return (
     <div style={{ padding: 24, overflow: 'auto', flex: 1 }}>
@@ -187,236 +160,65 @@ export default function Dashboard() {
       {/* 统计卡片 */}
       <DashboardCards stats={stats} loading={loading} />
 
-      {/* ═══ AI 批量处理 ═══ */}
-      <div style={{
-        marginTop: 24,
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
-        gap: 16,
-      }}>
-        {/* ═══ 一键全流程 ═══ */}
-        <Card style={{
-          gridColumn: '1 / -1',
-          background: 'linear-gradient(135deg, rgba(0, 212, 255, 0.08), rgba(129, 199, 132, 0.05))',
-          border: '1px solid rgba(0, 212, 255, 0.2)',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 14 }}>
-            <i className="fas fa-rocket" style={{ color: 'var(--accent)', fontSize: 24 }} />
-            <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: 700, fontSize: 15 }}>一键全流程 AI 处理</div>
-              <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                清洗 ∥ 翻译+分析+聚类+摘要+排序+链 ∥ KCS(关键词+分类+评分合并)
-              </div>
+      {/* AI Processing Cards */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 16, marginTop: 16 }}>
+        {/* Article Processing Card */}
+        <Card>
+          <CardHeader icon="fa-newspaper" iconColor="var(--accent-blue)" title="📰 文章处理" desc="缓存→清洗→翻译→分析+KCS" />
+          <CardBody>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <Button variant={articleRunning ? 'ghost' : 'primary'} onClick={articleRunning ? () => { api.cancelEventOp('article'); setArticleRunning(false); } : handleArticleBatch}
+                      icon={articleRunning ? 'fa-stop' : 'fa-play'}>
+                {articleRunning ? '停止' : '一键处理全部'}
+              </Button>
             </div>
-            <Button
-              variant={fullRunning ? 'ghost' : 'primary'}
-              onClick={fullRunning ? handleStopFullAi : handleFullAi}
-              icon={fullRunning ? 'fa-stop' : 'fa-play'}
-              style={fullRunning ? { borderColor: 'var(--accent-orange)', color: 'var(--accent-orange)' } : undefined}
-            >
-              {fullRunning ? '停止全流程' : '启动全流程'}
-            </Button>
-          </div>
+            {articleRunning && <ProgressBar done={articleState.done} total={articleState.total} color="var(--accent-blue)" />}
+            {articleRunning && articleState.log && <LogPanel entries={articleState.log} />}
+          </CardBody>
+        </Card>
 
-          {(fullRunning || fullState.total > 0) && (
-            <div style={{ maxWidth: '100%' }}>
-              <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 6 }}>
-                {fullRunning ? (
-                  <i className="fas fa-spinner fa-spin" style={{ marginRight: 6 }} />
-                ) : (
-                  <i className="fas fa-check-circle" style={{ color: 'var(--accent-tertiary)', marginRight: 6 }} />
-                )}
-                步骤 {fullState.done}/{fullState.total || 8} · {fullState.current || '等待中...'}
-              </div>
-
-              {fullState.total > 0 && (
-                <ProgressBar
-                  done={fullState.done}
-                  total={fullState.total}
-                  color="var(--accent)"
-                />
-              )}
-
-              {/* 分步状态指示器 */}
-              {fullState.steps && fullState.steps.length > 0 && (
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
-                  {fullState.steps.map((s, i) => {
-                    const variant = s.status === 'done' ? 'green' : s.status === 'failed' ? 'red' : s.status === 'running' ? 'blue' : 'muted';
-                    return (
-                      <div
-                        key={i}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 6,
-                          padding: '4px 10px',
-                          borderRadius: 14,
-                          background: variant === 'green' ? 'rgba(129, 199, 132, 0.12)' : variant === 'red' ? 'rgba(239, 83, 80, 0.12)' : variant === 'blue' ? 'rgba(0, 212, 255, 0.12)' : 'transparent',
-                          border: variant === 'green' ? '1px solid rgba(129, 199, 132, 0.3)' : variant === 'red' ? '1px solid rgba(239, 83, 80, 0.3)' : variant === 'blue' ? '1px solid rgba(0, 212, 255, 0.4)' : '1px solid var(--border)',
-                          fontSize: 11,
-                        }}
-                      >
-                        <span>{s.status === 'done' ? '✅' : s.status === 'failed' ? '❌' : s.status === 'running' ? '⏳' : '⬜'}</span>
-                        <span style={{
-                          color: s.status === 'running' ? 'var(--accent)' : 'var(--text-secondary)',
-                        }}>
-                          {s.name}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+        {/* Event Pipeline Card */}
+        <Card>
+          <CardHeader icon="fa-link" iconColor="var(--accent)" title="🔗 事件管线" desc="聚类→摘要→逻辑链 · 凌晨1:00自动执行" />
+          <CardBody>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+              <Button variant={eventRunning ? 'ghost' : 'primary'} onClick={eventRunning ? () => { api.cancelEventOp('nightly'); setEventRunning(false); } : handleEventNightly}
+                      icon={eventRunning ? 'fa-stop' : 'fa-play'}>
+                {eventRunning ? '停止' : '启动事件管线'}
+              </Button>
+              <Button variant="ghost" onClick={handleRecluster} disabled={eventRunning}>重聚类</Button>
+              <Button variant="ghost" onClick={handleSummarize} disabled={eventRunning}>生成摘要</Button>
+              <Button variant="ghost" onClick={handleBuildChains} disabled={eventRunning}>构建逻辑链</Button>
             </div>
-          )}
-
-          {fullState.log && fullState.log.length > 0 && <LogPanel entries={fullState.log} />}
-        </Card>
-
-        {/* ═══ AI 内容清洗 ═══ */}
-        <Card>
-          <CardHeader icon="fa-magic" iconColor="var(--accent-blue)" title="AI 内容清洗" desc="LLM 提取纯净文章正文，去广告/导航/侧栏/弹窗" />
-          <CardBody>
-            <Button
-              variant="ghost"
-              onClick={cleanRunning ? handleStopClean : handleClean}
-              icon={cleanRunning ? 'fa-stop' : 'fa-play'}
-              style={{
-                borderColor: cleanRunning ? 'var(--accent-orange)' : 'var(--accent-blue)',
-                color: cleanRunning ? 'var(--accent-orange)' : 'var(--accent-blue)',
-              }}
-            >
-              {cleanRunning ? '停止清洗' : '批量清洗所有已缓存文章'}
-            </Button>
-            {cleanState.total > 0 && (
-              <ProgressBar
-                done={cleanState.done}
-                total={cleanState.total}
-                failed={cleanState.failed}
-                current={cleanState.current}
-                color="var(--accent-blue)"
-              />
-            )}
-          </CardBody>
-          {cleanState.log && cleanState.log.length > 0 && <LogPanel entries={cleanState.log} />}
-        </Card>
-
-        {/* ═══ 批量翻译 ═══ */}
-        <Card>
-          <CardHeader icon="fa-language" iconColor="var(--accent-tertiary)" title="AI 批量翻译" desc="遍历英文文章 HTML，调用 API 翻译为中文" />
-          <CardBody>
-            <Button
-              variant="green"
-              onClick={translating ? handleStopTranslate : handleTranslate}
-              icon={translating ? 'fa-stop' : 'fa-play'}
-            >
-              {translating ? '停止翻译' : '开始批量翻译'}
-            </Button>
-            {transState.total > 0 && (
-              <ProgressBar
-                done={transState.done}
-                total={transState.total}
-                failed={transState.failed}
-                current={transState.current}
-                color="var(--accent-tertiary)"
-              />
-            )}
-          </CardBody>
-          {transState.log && transState.log.length > 0 && <LogPanel entries={transState.log} />}
-        </Card>
-
-        {/* ═══ 批量分析 ═══ */}
-        <Card>
-          <CardHeader icon="fa-brain" iconColor="var(--accent)" title="AI 批量分析" desc="遍历已提取文本的文章，生成结构化分析摘要" />
-          <CardBody>
-            <Button
-              variant="primary"
-              onClick={analyzing ? handleStopAnalyze : handleAnalyze}
-              icon={analyzing ? 'fa-stop' : 'fa-play'}
-            >
-              {analyzing ? '停止分析' : '开始批量分析'}
-            </Button>
-            {analyState.total > 0 && (
-              <ProgressBar
-                done={analyState.done}
-                total={analyState.total}
-                failed={analyState.failed}
-                current={analyState.current}
-                color="var(--accent)"
-              />
-            )}
-          </CardBody>
-          {analyState.log && analyState.log.length > 0 && <LogPanel entries={analyState.log} />}
-        </Card>
-
-        {/* ═══ 自动构筑逻辑链 ═══ */}
-        <Card>
-          <CardHeader icon="fa-diagram-project" iconColor="var(--accent-purple)" title="自动构筑逻辑链" desc="基于已分析事件的关键词自动分组，AI 命名后创建逻辑链" />
-          <CardBody>
-            <Button
-              variant="purple"
-              onClick={handleBuildChains}
-              loading={chaining}
-              icon="fa-play"
-            >
-              自动构筑
-            </Button>
-            {chainState.total_groups > 0 && (
-              <ProgressBar
-                done={chainState.chains_created}
-                total={chainState.total_groups}
-                current={chainState.current}
-                color="var(--accent-purple)"
-              />
-            )}
-            {chainState.chains_created > 0 && !chaining && (
-              <div style={{ fontSize: 11, color: 'var(--accent-tertiary)', display: 'flex', alignItems: 'center', gap: 4 }}>
-                <i className="fas fa-check-circle" />
-                完成 {chainState.chains_created} 个链
+            {eventRunning && eventState.steps && (
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+                {eventState.steps.map((s: {name: string; status: string}, i: number) => (
+                  <span key={i} style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10,
+                    background: s.status === 'done' ? 'rgba(129,199,132,0.12)' : s.status === 'running' ? 'rgba(0,212,255,0.12)' : 'transparent' }}>
+                    {s.status === 'done' ? '✅' : s.status === 'running' ? '⏳' : '⬜'} {s.name}
+                  </span>
+                ))}
               </div>
             )}
+            {eventRunning && eventState.log && <LogPanel entries={eventState.log} />}
           </CardBody>
-          {chainState.log && chainState.log.length > 0 && <LogPanel entries={chainState.log} />}
         </Card>
       </div>
 
-      {/* ── AI 语义处理 ── */}
-      <div style={{
-        marginTop: 16,
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
-        gap: 16,
-      }}>
-        <AICard
-          icon="fa-bolt"
-          color="var(--accent-tertiary)"
-          title="AI KCS 合并处理"
-          desc="一次调用完成关键词提取、话题分类、优先级评分"
-          state={kcsState}
-          running={kcsRunning}
-          onClick={handleKcs}
-          label="KCS 合并处理"
-        />
-        <AICard
-          icon="fa-object-group"
-          color="var(--accent-purple)"
-          title="智能事件重聚类"
-          desc="AI 重新判定文章归属事件，修正误聚类"
-          state={reclState}
-          running={reclRunning}
-          onClick={handleRecluster}
-          label="重聚类"
-        />
-        <AICard
-          icon="fa-file-lines"
-          color="var(--accent-green)"
-          title="事件摘要生成"
-          desc="为多篇文章的事件生成综合 AI 摘要"
-          state={esState}
-          running={esRunning}
-          onClick={handleSummarizeEvents}
-          label="生成摘要"
-        />
+      {/* KCS Card */}
+      <div style={{ marginTop: 16 }}>
+        <Card>
+          <CardHeader icon="fa-bolt" iconColor="var(--accent-tertiary)" title="AI KCS 合并处理" desc="一次调用完成关键词提取、话题分类、优先级评分" />
+          <CardBody>
+            <Button variant="green" onClick={handleKcs} loading={kcsRunning} icon="fa-play">
+              KCS 合并处理
+            </Button>
+            {kcsState.total > 0 && (
+              <ProgressBar done={kcsState.done} total={kcsState.total} failed={kcsState.failed} current={kcsState.current} color="var(--accent-tertiary)" />
+            )}
+          </CardBody>
+          {kcsState.log && kcsState.log.length > 0 && <LogPanel entries={kcsState.log} />}
+        </Card>
       </div>
 
       {/* ═══ 低分新闻手动清理 ═══ */}
@@ -636,36 +438,5 @@ export default function Dashboard() {
         </div>
       )}
     </div>
-  );
-}
-
-// ── AI 卡片组件 ──
-function AICard({ icon, color, title, desc, state, running, onClick, label }: {
-  icon: string; color: string; title: string; desc: string; state: BatchState; running: boolean; onClick: () => void; label: string;
-}) {
-  return (
-    <Card>
-      <CardHeader icon={icon} iconColor={color} title={title} desc={desc} />
-      <CardBody>
-        <Button
-          onClick={onClick}
-          loading={running}
-          variant={color === 'var(--accent-tertiary)' ? 'green' : color === 'var(--accent-purple)' ? 'purple' : color === 'var(--accent-orange)' ? 'orange' : 'primary'}
-          icon="fa-play"
-        >
-          {label}
-        </Button>
-        {state.total > 0 && (
-          <ProgressBar
-            done={state.done}
-            total={state.total}
-            failed={state.failed}
-            current={state.current}
-            color={color}
-          />
-        )}
-      </CardBody>
-      {state.log && state.log.length > 0 && <LogPanel entries={state.log} />}
-    </Card>
   );
 }
