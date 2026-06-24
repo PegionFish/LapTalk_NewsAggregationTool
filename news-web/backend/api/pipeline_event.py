@@ -45,9 +45,15 @@ def _nightly():
             while st.get("running"):
                 if _event_state.get("cancelled"):
                     break
+                # 同步子步骤进度到步骤显示
+                _event_state["steps"][i]["done"] = st.get("done", 0)
+                _event_state["steps"][i]["total"] = st.get("total", 0)
+                _event_state["steps"][i]["current"] = st.get("current", "")
                 time.sleep(2)
             _event_state["steps"][i]["status"] = "done"
-            _event_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ {name} 完成")
+            _event_state["steps"][i]["done"] = st.get("done", 0)
+            _event_state["steps"][i]["total"] = st.get("total", 0)
+            _event_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ {name} 完成 ({st.get('done', 0)}/{st.get('total', 0)})")
         except Exception as e:
             _event_state["steps"][i]["status"] = "failed"
             _event_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ {name}: {e}")

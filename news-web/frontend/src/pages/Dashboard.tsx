@@ -191,13 +191,39 @@ export default function Dashboard() {
               <Button variant="ghost" onClick={handleBuildChains} disabled={eventRunning}>构建逻辑链</Button>
             </div>
             {eventRunning && eventState.steps && (
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
-                {eventState.steps.map((s: {name: string; status: string}, i: number) => (
-                  <span key={i} style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10,
-                    background: s.status === 'done' ? 'rgba(129,199,132,0.12)' : s.status === 'running' ? 'rgba(0,212,255,0.12)' : 'transparent' }}>
-                    {s.status === 'done' ? '✅' : s.status === 'running' ? '⏳' : '⬜'} {s.name}
-                  </span>
-                ))}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 10 }}>
+                {eventState.steps.map((s: {name: string; status: string; done?: number; total?: number; current?: string}, i: number) => {
+                  const isRunning = s.status === 'running';
+                  const hasProgress = isRunning && s.total && s.total > 0;
+                  return (
+                    <div key={i} style={{
+                      display: 'flex', flexDirection: 'column', gap: 4,
+                      padding: '8px 12px', borderRadius: 8, fontSize: 12,
+                      background: s.status === 'done' ? 'rgba(129,199,132,0.08)' : isRunning ? 'rgba(0,212,255,0.08)' : 'transparent',
+                      border: s.status === 'done' ? '1px solid rgba(129,199,132,0.2)' : isRunning ? '1px solid rgba(0,212,255,0.25)' : '1px solid var(--border)',
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span>{s.status === 'done' ? '✅' : isRunning ? '⏳' : '⬜'}</span>
+                        <span style={{ fontWeight: 600, color: isRunning ? 'var(--accent)' : 'var(--text-primary)' }}>{s.name}</span>
+                        {hasProgress && (
+                          <span style={{ color: 'var(--text-secondary)', fontSize: 11 }}>
+                            {s.done}/{s.total}
+                          </span>
+                        )}
+                      </div>
+                      {hasProgress && (
+                        <div style={{ marginLeft: 24 }}>
+                          <div style={{ height: 3, borderRadius: 2, background: 'var(--border)', overflow: 'hidden' }}>
+                            <div style={{ height: '100%', width: `${Math.round((s.done! / s.total!) * 100)}%`, background: 'var(--accent)', borderRadius: 2, transition: 'width 1s ease' }} />
+                          </div>
+                          {s.current && (
+                            <div style={{ fontSize: 10, color: 'var(--text-secondary)', marginTop: 2 }}>{s.current}</div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
             {eventRunning && eventState.log && <LogPanel entries={eventState.log} />}
