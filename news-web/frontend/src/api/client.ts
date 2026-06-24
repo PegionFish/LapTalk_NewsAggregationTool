@@ -193,48 +193,29 @@ export const api = {
 
   getPipelineStatus: () => fetchJSON<{ running: boolean; last_run: string | null; last_status: string | null; current_step: string | null; steps: { name: string; status: string; duration_ms: number }[] }>('/pipeline/status'),
 
-  // 批量 AI 处理
-  startBatchTranslate: () => fetchJSON<{ ok: boolean; message: string; pending: number }>('/pipeline/batch-translate', { method: 'POST' }),
-  getBatchTranslateStatus: () => fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string }>('/pipeline/batch-translate/status'),
-  cancelBatchTranslate: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/batch-translate/cancel', { method: 'POST' }),
-  forceResetBatchTranslate: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/batch-translate/force-reset', { method: 'POST' }),
-
-  startBatchAnalyze: () => fetchJSON<{ ok: boolean; message: string; pending: number }>('/pipeline/batch-analyze', { method: 'POST' }),
-  getBatchAnalyzeStatus: () => fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string }>('/pipeline/batch-analyze/status'),
-  cancelBatchAnalyze: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/batch-analyze/cancel', { method: 'POST' }),
-  forceResetBatchAnalyze: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/batch-analyze/force-reset', { method: 'POST' }),
-
-  startBatchClean: () => fetchJSON<{ ok: boolean; message: string; pending: number }>('/pipeline/batch-clean', { method: 'POST' }),
-  getBatchCleanStatus: () => fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string; log: string[] }>('/pipeline/batch-clean/status'),
-  cancelBatchClean: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/batch-clean/cancel', { method: 'POST' }),
-  forceResetBatchClean: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/batch-clean/force-reset', { method: 'POST' }),
-
-  startBuildChains: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/build-chains', { method: 'POST' }),
-  getBuildChainsStatus: () => fetchJSON<{ running: boolean; total_groups: number; chains_created: number; current: string }>('/pipeline/build-chains/status'),
-
-  // AI 接管批量端点
-  startBatchKeywords: () => fetchJSON<{ ok: boolean; message: string; pending: number }>('/pipeline/batch-keywords', { method: 'POST' }),
-  getBatchKeywordsStatus: () => fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string; log: string[] }>('/pipeline/batch-keywords/status'),
-  startBatchClassify: () => fetchJSON<{ ok: boolean; message: string; pending: number }>('/pipeline/batch-classify', { method: 'POST' }),
-  getBatchClassifyStatus: () => fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string; log: string[] }>('/pipeline/batch-classify/status'),
-  startBatchScore: () => fetchJSON<{ ok: boolean; message: string; pending: number }>('/pipeline/batch-score', { method: 'POST' }),
-  getBatchScoreStatus: () => fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string; log: string[] }>('/pipeline/batch-score/status'),
   // KCS 合并端点 — 一次调用完成关键词+分类+评分
   startBatchKcs: () => fetchJSON<{ ok: boolean; message: string; pending: number }>('/pipeline/batch-kcs', { method: 'POST' }),
   getBatchKcsStatus: () => fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string; log: string[] }>('/pipeline/batch-kcs/status'),
   cancelBatchKcs: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/batch-kcs/cancel', { method: 'POST' }),
   forceResetBatchKcs: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/batch-kcs/force-reset', { method: 'POST' }),
-  startBatchRankEvents: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/batch-rank-events', { method: 'POST' }),
-  getBatchRankEventsStatus: () => fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string; log: string[] }>('/pipeline/batch-rank-events/status'),
-  startBatchRecluster: () => fetchJSON<{ ok: boolean; message: string; pending: number }>('/pipeline/batch-recluster', { method: 'POST' }),
-  getBatchReclusterStatus: () => fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string; log: string[] }>('/pipeline/batch-recluster/status'),
-  startBatchSummarizeEvents: () => fetchJSON<{ ok: boolean; message: string; pending: number }>('/pipeline/batch-summarize-events', { method: 'POST' }),
-  getBatchSummarizeEventsStatus: () => fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string; log: string[] }>('/pipeline/batch-summarize-events/status'),
 
-  startBatchAiFull: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/batch-ai-full', { method: 'POST' }),
-  getBatchAiFullStatus: () => fetchJSON<{ running: boolean; total: number; done: number; current: string; log: string[] }>('/pipeline/batch-ai-full/status'),
-  cancelBatchAiFull: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/batch-ai-full/cancel', { method: 'POST' }),
-  forceResetBatchAiFull: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/batch-ai-full/force-reset', { method: 'POST' }),
+  // Article pipeline (new)
+  startArticleBatch: () => fetchJSON<{ ok: boolean; message: string; pending: number }>('/pipeline/article/batch-process', { method: 'POST' }),
+  getArticleStatus: () => fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string; log: string[] }>('/pipeline/article/status'),
+  processArticle: (id: number) => fetchJSON<{ ok: boolean; steps: Record<string, unknown>; error: string }>(`/pipeline/article/${id}/process`, { method: 'POST' }),
+
+  // Event pipeline (new)
+  startEventNightly: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/event/nightly', { method: 'POST' }),
+  getEventStatus: () => fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string; log: string[]; steps: { name: string; status: string }[] }>('/pipeline/event/status'),
+  cancelEventOp: (op: string) => fetchJSON<{ ok: boolean; message: string }>(`/pipeline/event/${op}/cancel`, { method: 'POST' }),
+
+  // Event standalone ops
+  startRecluster: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/event/recluster', { method: 'POST' }),
+  getReclusterStatus: () => fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string; log: string[] }>('/pipeline/event/recluster/status'),
+  startSummarize: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/event/summarize', { method: 'POST' }),
+  getSummarizeStatus: () => fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string; log: string[] }>('/pipeline/event/summarize/status'),
+  startBuildChains: () => fetchJSON<{ ok: boolean; message: string }>('/pipeline/event/build-chains', { method: 'POST' }),
+  getBuildChainsStatus: () => fetchJSON<{ running: boolean; total_groups: number; chains_created: number; current: string; log: string[] }>('/pipeline/event/build-chains/status'),
 
   startBatchAiFilter: () => fetchJSON<{ ok: boolean; message: string; pending: number }>('/pipeline/batch-ai-filter', { method: 'POST' }),
   getBatchAiFilterStatus: () => fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string; log: string[] }>('/pipeline/batch-ai-filter/status'),
