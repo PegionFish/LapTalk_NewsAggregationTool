@@ -147,8 +147,28 @@ def process_article(article_id: int) -> dict:
             except Exception as e:
                 result["steps"]["kcs"] = f"error: {e}"
 
+        # Step 4: AI 语义事件匹配（替代旧版 bigram link_articles_to_events）
+        try:
+            from pipeline.event_matching import match_article_to_event
+            matched_event = match_article_to_event(aid)
+            if matched_event:
+                result["steps"]["event_match"] = f"Event#{matched_event}"
+            else:
+                result["steps"]["event_match"] = "pending_cluster"
+        except Exception as e:
+            result["steps"]["event_match"] = f"error: {e}"
+            logger.warning(f"#{aid} 事件匹配: {e}")
+
+        # 确定最终状态：事件匹配成功 → processed，否则 → pending_cluster
+        matched = result["steps"].get("event_match") and str(result["steps"]["event_match"]).startswith("Event#")
         ok = result["steps"].get("analyzed") == True
-        db.execute("UPDATE news_articles SET content_status=? WHERE id=?", ("processed" if ok else "fetched", aid))
+        if ok and matched:
+            final_status = "processed"
+        elif ok and not matched:
+            final_status = "pending_cluster"
+        else:
+            final_status = "fetched"
+        db.execute("UPDATE news_articles SET content_status=? WHERE id=?", (final_status, aid))
         db.commit()
     except Exception as e:
         result["ok"] = False; result["error"] = str(e)
