@@ -714,7 +714,10 @@ def build_panoramic_context(conn) -> str:
     events = conn.execute("""
         SELECT e.id, e.title, e.article_count, e.first_seen, e.last_seen, e.ai_summary
         FROM events e
-        WHERE e.status = 'active' AND e.article_count >= 1
+        JOIN news_article_events ae ON ae.event_id = e.id
+        WHERE e.status = 'active'
+        GROUP BY e.id
+        HAVING COUNT(ae.article_id) >= 2
         ORDER BY e.article_count DESC
     """).fetchall()
 
@@ -766,7 +769,7 @@ def build_panoramic_context(conn) -> str:
 
     # 组装结构化文本 — 全量数据，不截断
     lines: list[str] = []
-    lines.append(f"=== 事件全景图（共 {len(events)} 个活跃事件）===\n")
+    lines.append(f"=== 事件全景图（共 {len(events)} 个活跃事件，均 ≥2 篇文章交叉验证）===\n")
 
     for evt_id, title, count, first_seen, last_seen, summary in events:
         kws = event_kws.get(evt_id, set())
