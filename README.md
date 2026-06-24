@@ -24,22 +24,23 @@ chmod +x run_prod.sh && ./run_prod.sh   # 构建前端 + 启动后端 → :8080
 
 ```
 浏览器 (React + React Flow)
-  ↕ REST API
+  ↕ REST + SSE (EventSource)
 FastAPI (:8080)
-  ├── APScheduler → 定时抓取 (10:00 / 17:00)
-  ├── SQLite (WAL 模式) → 读写分离
-  └── OpenAI 兼容 API → AI 事件分析
+  ├── APScheduler → 数据采集 (10:00/17:00) + 事件管线 (1:00) + 备份 (3:00)
+  ├── SQLite (WAL, busy_timeout=30s, safe_commit)
+  └── AI API (1M 上下文, 50 线程并行)
 
-Pipeline 子进程:
-  RSS 抓取 → 去重聚类 → 页面归档 → AI 分析
+管线流程:
+  白天: RSS 抓取 → AI 标题筛选 → HTML 缓存 → 即时处理(清洗→翻译→分析+KCS)
+  凌晨: 事件聚类 → 事件摘要 → 逻辑链构建
 ```
 
 | 层 | 技术栈 |
 |----|--------|
-| 后端 | Python 3.11+, FastAPI, SQLite, APScheduler, bcrypt, PyJWT, openai |
-| 前端 | React 18, Vite 5, TypeScript, React Router 6, React Flow (xyflow 12) |
-| 测试 | pytest (后端 29 用例), Vitest + Testing Library (前端 16 用例), Playwright (E2E 5 用例) |
-| 部署 | systemd (Linux), launchd (macOS), run_prod.sh |
+| 后端 | Python 3.14, FastAPI, SQLite, APScheduler, bcrypt, PyJWT, openai |
+| 前端 | React 18, Vite 5, TypeScript, React Flow 12, SSE (EventSource) |
+| 测试 | pytest (38 用例), Vitest + Testing Library (16 用例), Playwright (5 用例) |
+| 部署 | systemd (Linux), start_platform.sh |
 
 ## 项目结构
 
@@ -54,26 +55,24 @@ news-web/
 │   │   ├── auth.py          # 密码哈希、Token 签发/验证、Depends 注入
 │   │   └── models.py        # users 表定义与迁移
 │   ├── api/
-│   │   ├── settings.py      # GET/PUT /api/settings
-│   │   ├── stats.py         # GET /api/stats (仪表盘统计)
-│   │   ├── articles.py      # 文章搜索/详情/更新/原文代理 + 分类筛选/排序/低分清理
-│   │   ├── comments.py      # 文章多级评语 (CRUD + 点赞)
-│   │   ├── events.py        # 事件 CRUD/合并/拆分
-│   │   ├── chains.py        # 逻辑链 CRUD/拼接/拆分/重排/递归时间线
-│   │   ├── relations.py     # 事件关系 (推荐/确认/拒绝/批量查询)
-│   │   ├── auth.py          # POST 登录/注册, GET 当前用户
-│   │   ├── audit.py         # GET 审计日志
-│   │   └── notifications.py # 通知偏好/列表/已读标记
-│   ├── db/
-│   │   ├── news_db.py       # Skill 仓库 ORM 层 (含评语/清理/分类方法)
-│   │   ├── migrations.py    # logic_chains + users + audit + 评语/点赞 表迁移
-│   │   └── audit.py         # 审计日志写入/查询
-│   └── pipeline/
-│       ├── run_all.py       # 编排器 (fetch → cluster → archive → AI)
-│       ├── fetch_english_news.py  # RSS 40 源抓取
-│       ├── collect_data.py        # 去重 + 聚类 + 写入 DB
-│       ├── fetch_content.py       # 页面归档
-│       └── analyze.py            # AI 事件摘要 + 关系发现
+│   │   ├── dashboard.py         # SSE 端点 + 审计日志
+│   │   ├── pipeline_article.py  # 文章管线 (清洗→翻译→分析+KCS)
+│   │   ├── pipeline_event.py    # 事件管线 (聚类→摘要→逻辑链)
+│   │   ├── pipeline.py          # AI 预筛选 (保留)
+│   │   ├── settings.py          # GET/PUT /api/settings + AI 三段式
+│   │   ├── stats.py             # GET /api/stats
+│   │   ├── news.py              # 文章搜索/详情/更新/原文代理
+│   │   ├── comments.py          # 文章评语
+│   │   ├── events.py            # 事件 CRUD/合并/拆分
+│   │   ├── chains.py            # 逻辑链 CRUD/拼接/拆分/重排
+│   │   ├── relations.py         # 事件关系
+│   │   ├── auth.py              # 登录/注册
+│   │   └── notifications.py     # 通知
+│   ├── pipeline/
+│   │   ├── process_article.py   # 单篇处理编排 (即时写DB)
+│   │   ├── ai_filter.py         # AI 标题筛选 (BATCH=200)
+│   │   ├── analyze.py           # 事件级分析 (聚类/关系)
+│   │   └── ...                  # fetch, translate, clean 等
 ├── frontend/
 │   ├── src/
 │   │   ├── App.tsx          # 路由 + 鉴权门控 + ErrorBoundary
@@ -101,7 +100,7 @@ news-web/
 │   │   └── types/index.ts    # TypeScript 类型定义
 │   ├── e2e/                   # Playwright E2E 测试
 │   └── vite.config.ts         # Vite + 代理 + Vitest 配置
-├── tests/backend/             # pytest 集成测试 (29 用例)
+├── tests/backend/             # pytest 集成测试 (38 用例)
 ├── config.json                # 运行时配置
 ├── run_prod.sh                # 一键生产部署脚本
 └── deploy/                    # systemd / launchd 服务模板
@@ -141,30 +140,20 @@ news-web/
 ## 核心工作流
 
 ```
-1. 定时抓取 (APScheduler 10:00/17:00)
-   └→ fetch_english_news.py → RSS 40 源
-   └→ collect_data.py        → 去重 + 聚类 + 写入 DB
-   └→ fetch_content.py       → 页面归档
-   └→ analyze.py             → AI 摘要 + AI 关系发现
+白天 (10:00 / 17:00):
+  RSS 抓取 → AI 标题筛选 → HTML 缓存
+  └→ 缓存完成即触发: 清洗 → 翻译 → 分析+KCS (50 线程并行)
 
-2. 用户登录 → 仪表盘 → 查看今日新增
+凌晨 (1:00):
+  事件聚类 → 事件摘要 → 逻辑链构建 (全量全景图)
 
-3. 进入工作台 → 搜索关键词 → 拖入画布
-   └→ 事件容器自动聚合 → 审查/拆分/合并
+仪表盘:
+  SSE 实时推送 (stats + article进度 + event进度)
+  ├── 📰 文章处理卡片: 一键批量处理 + 进度条 + 实时日志
+  └── 🔗 事件管线卡片: 三步状态 + 独立操作按钮
 
-4. 事件间拖出连线 → 选择关系类型 → 构建逻辑链
-
-5. 链拼接 → 多子链汇聚为完整叙事
-   └→ AI 推荐关系虚线显示 → 确认或忽略
-
-6. Ctrl+Z / Ctrl+Shift+Z 撤销/重做
-   └→ 自动草稿保存 (localStorage 2s debounce)
-
-7. 文章详情 → 评语审核
-   └→ 发表评语/回复 → 点赞/编辑/删除
-
-8. 仪表盘 → 低分新闻清理
-   └→ 设置阈值 → 预览 → 二次确认 → 批量删除
+逻辑链工作台:
+  拖拽编辑 → 事件连线 → 链拼接/拆分 → 时间轴视图
 ```
 
 ## API 端点
@@ -238,18 +227,22 @@ news-web/
 | POST | `/api/notifications/:id/read` | 标记已读 |
 | POST | `/api/notifications/read-all` | 全部已读 |
 
-### 配置与调度
+### 管线
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET/PUT | `/api/settings` | 数据库/AI/调度配置 |
-| POST | `/api/pipeline/run` | 手动触发抓取 |
-| GET | `/api/pipeline/status` | 当前任务状态 |
+| POST | `/api/pipeline/article/batch-process` | 批量文章处理 (50 线程并行) |
+| GET | `/api/pipeline/article/status` | 文章处理进度 |
+| POST | `/api/pipeline/event/nightly` | 事件管线 (聚类→摘要→逻辑链) |
+| GET | `/api/pipeline/event/status` | 事件管线进度 (含步骤) |
+| GET | `/api/dashboard/stream` | SSE 实时推送 |
+| GET/PUT | `/api/settings` | 数据库/调度配置 |
+| GET/PUT | `/api/settings/ai` | AI 三段式配置 |
 
 ## 测试
 
 ```bash
-# 后端 (29 用例)
-python -m pytest news-web/tests/backend/test_api.py -v
+# 后端 (38 用例)
+python -m pytest news-web/tests/backend/ -v
 
 # 前端单元 (16 用例)
 cd news-web/frontend && npm test
@@ -273,8 +266,9 @@ cd news-web/frontend && npx playwright test
 - **Phase 2** ✅ 用户认证 (bcrypt + JWT, 3 端点)
 - **Phase 3** ✅ 多用户审计日志 (1 端点)
 - **Phase 4** ✅ 通知系统 (5 端点)
-- **Phase 5** ✅ 审核评语 + 低分清理 + 分类Tab筛选 + 评分排序 (11 端点)
-- **后续** QNAP NAS LDAP/SSO 集成 / WebSocket 实时协作
+- **Phase 5** ✅ 审核评语 + 低分清理 + 分类Tab筛选 + 评分排序
+- **Phase 6** ✅ 管线重构: 文章处理(50线程并行) + 事件管线(线性三阶段) + SSE推送 + 审计日志
+- **后续** Preset 模型配置 / LDAP/SSO 集成
 
 ## 部署
 

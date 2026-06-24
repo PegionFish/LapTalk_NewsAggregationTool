@@ -16,12 +16,13 @@
 | 层 | 技术 | 关键文件 |
 |----|------|---------|
 | 后端 | Python 3.14, FastAPI, SQLite (WAL), APScheduler (BackgroundScheduler) | `news-web/backend/main.py` |
-| AI | OpenAI 兼容 API — DeepSeek V3.2 @ 硅基流动 (160K, 大文件自动拆分) | `news-web/backend/ai_client.py` |
-| 翻译 | OpenAI 兼容 API — 独立配置，分段翻译 | `news-web/backend/translation_client.py` |
+| AI | OpenAI 兼容 API — 大上下文窗口 (1M)，50 线程并行 | `news-web/backend/ai_client.py` |
+| 翻译 | OpenAI 兼容 API — HTML 直传，大上下文一次完成 | `news-web/backend/translation_client.py` |
 | 鉴权 | bcrypt + PyJWT (72h 令牌) | `news-web/backend/auth/auth.py` |
+| SSE 推送 | Server-Sent Events — 单端点替代全部轮询 | `news-web/backend/api/dashboard.py` |
 | 浏览器渲染 | Playwright + playwright-stealth（反爬降级） | `news-web/backend/pipeline/browser_capture.py` |
 | 前端 | React 18, Vite 5, TypeScript, React Flow 12 | `news-web/frontend/src/` |
-| 后端测试 | pytest (31 用例) | `news-web/tests/backend/test_api.py` |
+| 后端测试 | pytest (38 用例) | `news-web/tests/backend/` |
 | 前端测试 | Vitest + Testing Library (16 用例) | `news-web/frontend/src/components/__tests__/` |
 | E2E | Playwright (5 用例) | `news-web/frontend/e2e/` |
 | 启动脚本 | bash, stop/start/restart/status/test/build | `start_platform.sh` |
@@ -33,34 +34,39 @@
 news-web/
 ├── backend/
 │   ├── main.py              # 入口: 生命周期 + 路由注册 + 静态托管 :8081
-│   ├── scheduler.py         # 定时抓取 10:00/17:00 + AI 全流程 15:00/22:00 + 备份 03:00 (BackgroundScheduler)
-│   ├── ai_client.py         # AI 客户端: chat(), get_client(), _ai_json(), analyze_article(), clean_article_content(), extract_keywords_ai(), classify_article_ai(), score_priority_ai(), rank_events_panoramic(), build_chains_panoramic()
-│   ├── translation_client.py # translate_to_chinese() — HTML 直传 LLM 翻译
+│   ├── scheduler.py         # 定时: 数据采集 10:00/17:00 + 事件管线 1:00 + 备份 03:00
+│   ├── ai_client.py         # AI 客户端: chat(), clean_article_content(), analyze_article(),
+│   │                        #   extract_keywords_classify_score_ai(), extract_keywords_batch(),
+│   │                        #   build_panoramic_context(), rank_events_panoramic(), build_chains_panoramic()
+│   ├── translation_client.py # translate_html_preserve_structure() — HTML 直传翻译
 │   ├── auth/auth.py         # hash_password, verify_password, create_token, get_current_user
-│   ├── api/                 # 14 个模块: settings, stats, news, trending, events, chains, relations,
-│   │                        #            auth, audit, notifications, logs, cache, pipeline, fetch
+│   ├── api/                 # 模块: dashboard(SSE), pipeline_article, pipeline_event,
+│   │                        #   settings, stats, news, events, chains, relations, fetch, cache, ...
 │   ├── db/news_db.py        # ORM + link_articles_to_events() + calculate_priority() + 迁移
-│   ├── db/migrations.py     # ensure_schema() — 幂等迁移 (v1~v4)
-│   └── pipeline/            # 管道步骤: fetch→sanitize→archive→(browser_capture降级)→translate→analyze
-│       ├── dead_link_recovery.py   # 死链 URL 恢复 — DuckDuckGo 搜索找新链接
-│       └── browser_capture.py      # Playwright 浏览器渲染 — 反爬/验证码降级
+│   ├── db/migrations.py     # ensure_schema() — 幂等迁移
+│   └── pipeline/            # 管道步骤
+│       ├── process_article.py    # 单篇处理编排: 清洗→翻译→分析+KCS (即时写DB)
+│       ├── ai_filter.py          # AI 标题预筛选 (抓取后自动调用)
+│       ├── analyze.py            # 事件级分析 (聚类/关系)
+│       ├── dead_link_recovery.py # 死链 URL 恢复 — DuckDuckGo 搜索找新链接
+│       └── browser_capture.py    # Playwright 浏览器渲染 — 反爬/验证码降级
 ├── frontend/src/
 │   ├── App.tsx              # 路由: /chains → /chains/new /chains/:id
 │   ├── contexts/AuthContext.tsx  # JWT localStorage 持久化
 │   ├── hooks/useUndoRedo.ts     # 自定义 50 步历史栈
 │   ├── pages/
-│   │   ├── Dashboard.tsx       # 仪表盘 — 统计卡片 + AI 操作区（翻译/分析/内容清洗等）
+│   │   ├── Dashboard.tsx       # 仪表盘 — 统计卡片 + SSE 实时推送 + 文章处理/事件管线两张卡片
 │   │   ├── ArticleSearch.tsx   # 文章检索 — 多维度筛选 + AI 分析面板 + 标注徽章
 │   │   ├── FetchMonitor.tsx    # 采集监控 — 源健康/抓取历史/批量重试/调度管理
 │   │   ├── Workspace.tsx       # 逻辑链工作台（/chains 子路由）
 │   │   ├── ChainList.tsx       # 逻辑链列表
-│   │   └── settings/           # 7 个子面板: 通用/AI/翻译/缓存/管理/日志/采集调度
+│   │   └── settings/           # 设置: 通用/AI(三段式)/缓存/管理/日志
 │   │       └── CacheSettings.tsx  # 缓存状态检查 + 缺失修复 + 批量预缓存
-│   └── api/client.ts           # 50+ 端点封装
+│   └── api/client.ts           # API 端点封装
 ├── deploy/
 │   ├── install.sh              # systemd 服务一键安装脚本
 │   └── laptalk.service         # systemd 服务单元（安全加固 + 日志输出）
-├── tests/backend/test_api.py   # 31 用例覆盖所有端点
+├── tests/backend/              # 38 用例: test_api.py + test_pipeline_article.py + test_pipeline_event.py
 └── config.json                 # 运行时配置（已 gitignore，含 API 密钥）
 
 cockpit/                         # Linux Cockpit Web 管理面板插件
@@ -95,7 +101,7 @@ bash cockpit/install.sh            # 安装到 Cockpit（需 Cockpit ≥ 236）
 
 # 手动测试
 cd news-web
-python -m pytest tests/backend/test_api.py -v   # 31 用例
+python -m pytest tests/backend/ -v   # 38 用例
 cd frontend && npm test                          # 16 用例
 npm run build                                    # tsc + vite build → dist/
 
@@ -120,7 +126,7 @@ articles
 ├── text_content            ← 原始 HTML（直传 LLM，保留标签结构）
 ├── translated_content      ← AI 翻译后的中文（译文）
 ├── content_lang            ← 语言检测结果 (en/zh)
-├── content_status          ← 缓存状态 (pending/fetched/translated/failed/dead)
+├── content_status          ← 状态 (pending/fetched/translated/processing/processed/failed/dead)
 ├── retry_count             ← 同类 HTTP 错误重试计数，≥2 次 404/410 标记 dead
 ├── ai_summary              ← AI 分析摘要
 ├── ai_analyzed             ← AI 分析完成标记 (0/1)
@@ -147,54 +153,54 @@ article_comments
 └── rating                     ← 可选评分列 (v3 迁移新增)
 ```
 
-### AI 模型分工与 API endpoint
+### AI 配置三段式
 
-| 任务 | 模型 | API endpoint | 上下文 |
-|------|------|-------------|--------|
-| 内容清洗 | `config.clean_model` (nex-agi/Nex-N2-Pro) | `config.openai_base_url` (SiliconFlow) | 160K（超大 HTML 自动拆分绕开限制） |
-| 翻译 | `config.translation_model` | `config.translation_base_url` | 160K |
-| AI 分析 | `config.openai_model` | `config.openai_base_url` (硅基流动) | 160K |
-| 关键词提取 | `config.simple_model` | `config.openai_base_url` | 256K |
-| 智能分类 | `config.simple_model` | `config.openai_base_url` | 256K |
-| 优先级评分 | `config.simple_model` | `config.openai_base_url` | 256K |
-| 事件重聚类/摘要/排序/逻辑链 | `config.openai_model` | `config.openai_base_url` | 160K |
+AI 配置从前端可控，分为三组（`/api/settings/ai`）：
 
-- `get_client()` → SiliconFlow (DeepSeek V3.2)
-- `config.clean_api_key` 为空时自动复用 `config.openai_api_key`
-- `config.clean_base_url` 默认回退到 `config.openai_base_url`
-- 内容清洗已切回 SiliconFlow（`config.openai_model`），`get_clean_client()` 已移除
-- 翻译 `translation_base_url` 和 `translation_api_key` 独立配置
-- `chat()` 接受可选 `client` 参数切换 endpoint
+| 分组 | 用途 | 包含任务 |
+|------|------|---------|
+| 标题初筛 | RSS 标题 AI 筛选 | `rss_prefilter` |
+| 文章处理 | 单篇管线处理 | 清洗 + 翻译 + 分析 + KCS 合并 |
+| 事件管线 | 事件级批量任务 | 聚类 + 摘要 + 逻辑链 |
 
-### 批量 AI 处理 API（仪表盘操作卡片）
+- 所有模型统一为大上下文窗口（1M tokens）
+- 清洗超大 HTML（>1.8M 字符）自动在块级边界拆分
+- KCS = 关键词 + 分类 + 评分一次 API 调用完成
+- 代码注释不绑定具体模型名称
+
+### 管线 API
+
+**文章管线** (`api/pipeline_article.py`)
 
 | 端点 | 说明 |
 |------|------|
-| `POST /api/pipeline/batch-translate` | 遍历 HTML 缓存 → HTML 直传 LLM 翻译 → 入库 |
-| `POST /api/pipeline/batch-translate/cancel` | 优雅取消：设置 cancel 标志，完成当前文章后停止 |
-| `POST /api/pipeline/batch-translate/force-reset` | 强制重置：清除内存状态+锁+DB 持久化 |
-| `GET /api/pipeline/batch-translate/status` | 进度: running/total/done/log[] |
-| `POST /api/pipeline/batch-analyze` | 遍历 HTML 内容 → AI 分析摘要 → 入库 |
-| `POST /api/pipeline/batch-analyze/cancel` | 优雅取消 |
-| `POST /api/pipeline/batch-analyze/force-reset` | 强制重置 |
-| `GET /api/pipeline/batch-analyze/status` | 进度: running/total/done/log[] |
-| `POST /api/pipeline/batch-clean` | AI 内容清洗 — 纯净阅读模式（去除广告/导航/推荐） |
-| `POST /api/pipeline/batch-clean/cancel` | 优雅取消 |
-| `POST /api/pipeline/batch-clean/force-reset` | 强制重置 |
-| `GET /api/pipeline/batch-clean/status` | 进度: running/total/done/log[] |
-| `POST /api/pipeline/batch-ai-full` | 全自动 AI 流程 — 三轨并行: 清洗 ∥ 翻译/分析/链 ∥ 关键词/分类/评分（均走 SiliconFlow） |
-| `POST /api/pipeline/batch-ai-full/cancel` | 优雅取消（传播到所有子步骤） |
-| `POST /api/pipeline/batch-ai-full/force-reset` | 强制重置（清除所有子步骤状态） |
-| `GET /api/pipeline/batch-ai-full/status` | 进度: running/total/done/steps[]/log[] |
-| `POST /api/pipeline/batch-keywords` | 批量关键词提取（优先使用清洗后正文） |
-| `POST /api/pipeline/batch-classify` | 批量话题分类（优先使用清洗后正文） |
-| `POST /api/pipeline/batch-score` | 批量优先级评分（优先使用清洗后正文） |
-| `POST /api/pipeline/batch-recluster` | 批量重新聚类 |
-| `POST /api/pipeline/batch-summarize-events` | 批量事件摘要 |
-| `POST /api/pipeline/build-chains` | 全景图推理 → AI 识别逻辑链分组 → 创建逻辑链 |
-| `GET /api/pipeline/build-chains/status` | 进度: total_groups/chains_created/log[] |
-| `POST /api/pipeline/batch-rank-events` | 全景图推理 → AI 全局事件优先级排序 |
-| `GET /api/pipeline/batch-rank-events/status` | 进度: running/total/done/log[] |
+| `POST /api/pipeline/article/{id}/process` | 单篇处理: 清洗→翻译→分析+KCS |
+| `POST /api/pipeline/article/batch-process` | 批量处理 (50 线程并行) |
+| `GET /api/pipeline/article/status` | 进度: running/total/done/failed/current |
+
+**事件管线** (`api/pipeline_event.py`)
+
+| 端点 | 说明 |
+|------|------|
+| `POST /api/pipeline/event/nightly` | 全量事件管线: 聚类→摘要→逻辑链 |
+| `GET /api/pipeline/event/status` | 进度: steps[] (含各步骤 done/total/current) |
+| `POST /api/pipeline/event/recluster` | 事件重聚类 |
+| `POST /api/pipeline/event/summarize` | 事件摘要生成 |
+| `POST /api/pipeline/event/build-chains` | 逻辑链构建 |
+| `GET /api/pipeline/event/{op}/status` | 各子操作状态 |
+
+**SSE 实时推送** (`api/dashboard.py`)
+
+| 端点 | 说明 |
+|------|------|
+| `GET /api/dashboard/stream` | SSE 端点 — stats + article 进度 + event 进度 + 审计日志 |
+
+**AI 预筛选** (`api/pipeline.py` — 保留)
+
+| 端点 | 说明 |
+|------|------|
+| `POST /api/pipeline/batch-ai-filter` | AI 标题批量筛选 (BATCH=200) |
+| `GET /api/pipeline/batch-ai-filter/status` | 筛选进度 |
 
 ### 数据采集监控 API（FetchMonitor 页面）
 
@@ -230,61 +236,54 @@ article_comments
 
 ### 架构决策记录
 
-1. **Pipeline 集成在 FastAPI 进程中** — BackgroundScheduler 在 lifespan 中启动，不再依赖 asyncio event loop
-2. **SQLite WAL 模式** — 并发读写安全
-3. **批量 AI 处理为后台线程** — threading.Thread + 轮询 status 端点，DB 统计 ≈ 状态
-4. **翻译走 HTML 直传** — `translate_to_chinese(html)`，原始 HTML 直接传给 DeepSeek V3.2，保留全部标签结构
-5. **AI 分析走完整内容** — 所有 AI 函数（分析/关键词/分类/评分）直接传入完整 HTML/正文，无截断
-6. **源文/译文独立存储** — `text_content`（原始 HTML）+ `translated_content`（AI 译文）两列，对照阅读
-7. **人工标注不覆写** — `human_processed=1` 时 `calculate_priority` 和 `extract_keywords_for` 跳过
-8. **事件日期使用 `published_date`** — 无发布日期时回退到 `fetched_at`
-9. **逻辑链自动构筑** — 全景图推理（事件+关键词+关系一次性给 LLM），替代 Jaccard 机械匹配
-10. **事件关系批量检测** — 每批 15 对事件一次 API 调用，替代逐个配对的 O(n²) 调用
-11. **全景图事件排序** — 所有事件蒸馏数据一次性给 LLM，全局上下文推理优先级
-12. **前端鉴权门控** — `App.tsx` 在 AuthProvider 内检查令牌
-13. **API 密钥掩码** — `config.to_dict()` 返回 `"***"`；`settings.py` 忽略 `"***"` 回写
-14. **`config.json` 已 gitignore** — 含 API 密钥，不进入版本控制
-15. **撤销/重做** — 自定义 hook，`onNodeDragStop` 触发快照
-16. **边重建** — from `event_relations` 按颜色/线型映射
-17. **前端路由** — `/chains` 列表 → `/chains/new` 新建工作台 / `/chains/:id` 编辑
-18. **HTML 安全** — `_sanitize_html` 切除 script/iframe/link/tracking，额外剥离 Alpine.js/Vue.js/Angular 框架指令属性
-19. **OpenAI 客户端超时** — 统一 1800s (30 分钟)，适配慢速模型 token 生成
-20. **iframe 阅读** — `sandbox="allow-same-origin allow-popups"` + CSP 头加固 + 超时兜底（服务器已切除脚本）
-21. **平台热搜采集** — 直连各平台官方 API（微博/知乎/抖音/头条 + B站），B站支持分页，与 RSS 并行入库
-22. **死链温和标记** — `retry_count` 跟踪同类 HTTP 错误次数；连续 ≥2 次 404/410 时标记 `content_status='dead'`，不删除记录
-23. **死链 URL 自动恢复** — DuckDuckGo HTML 搜索 → 标题+来源匹配候选 URL → HEAD 验证可用性 → 自动更新数据库并重置缓存状态
-24. **浏览器降级捕获** — HTTP 请求被反爬/验证码拦截时，自动降级到 Playwright headless Chromium 渲染页面
-25. **Playwright 隐身增强** — `playwright-stealth` 处理浏览器指纹自动化检测，移除 `--disable-web-security` 等反爬红旗参数
-26. **AI 内容清洗** — 批量清洗广告/导航/推荐等非正文内容，实现纯净阅读模式。清洗范围默认排除热搜/B站分类
-27. **内容统计排除热搜/B站** — `ArticleSearch.tsx` 和 API 查询默认排除 `platform_hotlists` 和 `bilibili_videos` 类别，避免总数虚高
-28. **批量重试并发优化** — 4 线程并行下载 + 取消端点 + 上限 500 篇 + 前端进度实时刷新
-29. **Linux 生产部署** — systemd 服务单元（安全加固: NoNewPrivileges + ProtectSystem + 日志双输出）+ Cockpit Web 管理插件（服务控制/调度配置/实时日志）
-30. **调度热生效** — Cockpit 插件保存调度配置后自动调用 `reload_scheduler()`，无需重启后端
-31. **三轨并行 AI 管道** — Nex(清洗) ∥ DeepSeek(翻译/分析/聚类/链) ∥ Qwen(关键词/分类/评分)，独立速率限制互不阻塞
-32. **清洗切回 SiliconFlow** — `clean_article_content` 使用 `get_client()` + `config.clean_model` (nex-agi/Nex-N2-Pro)，大 HTML 自动拆分绕开 160K 限制
-33. **梯度模型分配** — 清洗用 Nex-N2-Pro(SiliconFlow)，翻译/分析/逻辑链用 DeepSeek V3.2(硅基流动)，关键词/分类/评分用 Qwen 3.5 35B(硅基流动)
-34. **`_request_options` 始终显式传 `enable_thinking`** — 防止模型默认启用思考导致 token 耗尽
-35. **空返回+异常统一回池重试** — `_queue_retry()` 支持最多 5 次重试，关键词/分类/评分/清洗全覆盖
-36. **AI 处理优先用清洗后正文** — 关键词/分类/评分查询用 `COALESCE(ai_cleaned_content, text_content)`，优先取清洗后的正文
-37. **速率限制改为 SF 429 重试** — 移除本地 `RateLimiter` 预分配，API 调用遇 429 自动 sleep 60s 重试最多 3 次
-38. **NEWS_WEB_TESTING 布尔解析** — `'0'` 在 Python 中是 truthy，改为 `not in ('1', 'true', 'yes')` 判断
-39. **AsyncIOScheduler → BackgroundScheduler** — 解决 sync 端点中 `no running event loop` 问题
-40. **清洗切回 SiliconFlow + 大 HTML 拆分** — `clean_article_content` 使用 `get_client()` + `config.clean_model` (nex-agi/Nex-N2-Pro)，移除 `get_clean_client()`。超大 HTML（>180K 字符）在块级元素边界自动拆分为多块分别清洗后合并，绕开 160K 上下文限制。
+1. **Pipeline 集成在 FastAPI 进程中** — BackgroundScheduler 在 lifespan 中启动
+2. **SQLite WAL 模式 + 即时写 DB** — 每步完成后立即 commit，进度不丢失
+3. **文章处理 50 线程并行** — ThreadPoolExecutor，AI API IO 等待期间并行处理
+4. **缓存属于数据采集环节** — `process_article()` 不负责缓存，只处理已有 HTML 的文章
+5. **每步即时写 DB** — 清洗/翻译/分析/KCS 每步完成后立即 commit，不怕中断
+6. **已处理跳过** — 查询已有字段，已完成的步骤自动跳过，空清洗标记 `[EMPTY]`
+7. **content_status 状态机** — pending→fetched→processing→processed，支持重启恢复
+8. **SSE 替代轮询** — 单一 `EventSource` 连接推送 stats + article + event 进度
+9. **审计日志** — `logs/dashboard_audit.log` (JSONL)，凌晨 3:00 轮转，保留 7 天
+10. **DashboardStream 线程安全** — 使用 `queue.Queue`，子线程可安全 publish
+11. **文章管线与事件管线分离** — `pipeline_article.py` + `pipeline_event.py`
+12. **线性事件管线** — 聚类→摘要→逻辑链 三阶段串行，凌晨 1:00 定时
+13. **逻辑链全量全景图** — 所有事件完整数据一次传入 AI，不截断不蒸馏
+14. **AI 配置三段式** — 标题初筛 / 文章处理 / 事件管线，前端可选不同模型
+15. **KCS 合并** — 关键词+分类+评分一次 API 调用完成，减少 66% 调用
+16. **大上下文全量处理** — 1M tokens，翻译/清洗/分析直接传完整 HTML
+17. **翻译 HTML 直传** — `translate_html_preserve_structure()` 保留标签结构
+18. **人工标注不覆写** — `human_processed=1` 时跳过 AI 覆写
+19. **事件日期使用 `published_date`** — 无发布日期时回退到 `fetched_at`
+20. **逻辑链自动构筑** — 全景图推理（事件+文章+评分+关键词一次性给 LLM）
+21. **事件关系批量检测** — 每批 50 对事件一次 API 调用
+22. **前端鉴权门控** — `App.tsx` 在 AuthProvider 内检查令牌
+23. **API 密钥掩码** — `config.to_dict()` 返回 `"***"`；`settings.py` 忽略 `"***"` 回写
+24. **`config.json` 已 gitignore** — 含 API 密钥，不进入版本控制
+25. **前端路由** — `/chains` 列表 → `/chains/new` 新建工作台 / `/chains/:id` 编辑
+26. **HTML 安全** — `_sanitize_html` 切除 script/iframe/link/tracking
+27. **iframe 阅读** — `sandbox="allow-same-origin allow-popups"` + CSP 头加固
+28. **内容统计排除热搜/B站** — 查询默认排除 `platform_hotlists` 和 `bilibili_videos` 类别
+29. **Linux 生产部署** — systemd 服务 + Cockpit Web 管理插件
+30. **调度热生效** — 保存调度配置后自动调用 `reload_scheduler()`
+31. **`_request_options` 始终显式传 `enable_thinking`** — 防止模型默认启用思考
+32. **速率限制改为 SF 429 重试** — API 调用遇 429 自动 sleep 60s 重试最多 3 次
+33. **NEWS_WEB_TESTING 布尔解析** — `'0'` 在 Python 中是 truthy，用 `in` 判断
+34. **AsyncIOScheduler → BackgroundScheduler** — 解决 sync 端点中 `no running event loop` 问题
+35. **超大 HTML 拆分** — >1.8M 字符在块级元素边界自动拆分后分别清洗
 
 ### 已知设计约束
 
 - **Phase 2 仅存的功能：** 边重建已实现。LDAP/SSO 仍为后续阶段。
-- **撤销/重做限制：** XYFlow v12 移除了内置 `useUndoRedo`；自定义 hook 跟踪节点/边快照。
-- **E2E 测试需运行服务器：** `playwright.config.ts` 自动启动 `:8080`。
-- **测试期间不启动调度器：** `main.py` 在 `NEWS_WEB_TESTING` in `('1','true','yes')` 时跳过 `start_scheduler()`。注意：`'0'` 是 truthy 的 Python 字符串，必须用 in 判断而非 `not`。
-- **批量任务状态不能只绑前端：** status 端点从 DB 派生统计，服务重启不丢失进度。
-- **Playwright 环境依赖：** 生产环境需运行 `playwright install chromium` 安装浏览器；低内存/容器环境需 `--disable-dev-shm-usage`。
-- **Cockpit 插件要求：** 需 Cockpit ≥ 236；安装后必须退出重新登录才能看到新插件。
-- **死链恢复速率限制：** DuckDuckGo 搜索间隔 4~8 秒随机延迟，避免被限流。
-- **GameSpot 等源受 Cloudflare 拦截**：HTTP/Playwright 均返回 403，需代理或手动处理。
+- **测试期间不启动调度器：** `main.py` 在 `NEWS_WEB_TESTING` in `('1','true','yes')` 时跳过 `start_scheduler()`。注意：`'0'` 是 truthy，必须用 `in` 判断。
+- **批量任务状态持久化到 DB**：每步完成即时 commit，服务重启不丢失进度。
+- **Playwright 环境依赖：** 生产环境需运行 `playwright install chromium` 安装浏览器。
+- **Cockpit 插件要求：** 需 Cockpit ≥ 236；安装后必须退出重新登录。
 - **Socks5 代理仅用于 RSS 下载**：AI/翻译 API 调用不走代理。
-- **大 HTML 自动拆分绕上下文限制**：清洗 >180K 字符的 HTML 时自动在块级元素边界拆分为多块分别清洗后合并，适配 160K 上下文窗口。
-- **`_run_seq` 循环机制**：DS/Qwen 轨道完成后重新扫描数据库，30s × 3 轮无新工作后退出，支持清洗产出新数据后自动补入处理。
+- **大 HTML 拆分**：>1.8M 字符在块级元素边界自动拆分为多块分别清洗后合并。
+- **反爬源仅入库元数据**：GameSpot 等 Cloudflare 拦截源不强制缓存，用户手动触发。
+- **SQLite 写锁**：WAL 模式 + busy_timeout=30s + safe_commit 指数退避。
+- **审计日志**：JSONL 格式，凌晨 3:00 轮转，保留 7 天。
 
 ## 核心交互原则
 
@@ -452,7 +451,7 @@ article_comments
 - 设计时必须评估时间复杂度、内存占用与 I/O 影响，避免无谓消耗。
 - 识别潜在瓶颈后应提供监测或优化建议，确保可持续迭代。
 - 禁止引入未经评估的昂贵依赖或阻塞操作。
-- **AI 调用利用大上下文**：翻译 HTML 直传保留标签结构，AI 分析（分析/关键词/分类/评分/清洗）直接传入完整 HTML/正文。利用 DeepSeek V3.2 160K 上下文。事件关系检查已从逐个配对改为批量（每批 15 对一次调用）。内容清洗、批量重试等后台任务使用线程池并发（4~8 线程）。
+- **AI 调用利用大上下文**：1M tokens 上下文，翻译/清洗/分析直接传完整 HTML。每步即时写 DB。文章处理 50 线程并行。事件关系每批 50 对一次调用。
 
 ## 通用工作流程
 
