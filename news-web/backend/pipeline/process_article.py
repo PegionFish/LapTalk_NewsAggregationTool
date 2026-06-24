@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""单篇文章处理编排器 —— 缓存→清洗→翻译→分析+KCS 线性执行。"""
+"""单篇文章处理编排器 —— 缓存→清洗→翻译→分析+KCS 线性执行。
+每步完成后立即写入 DB，已完成的步骤自动跳过，避免重复 API 调用。
+处理状态持久化到 content_status 字段，支持重启恢复。
+"""
 import sys, os, sqlite3, time, logging, json as _json
 from datetime import datetime
 
@@ -18,9 +21,41 @@ def _conn():
     return get_db_connection(config.db_path)
 
 
+def _is_not_empty(val) -> bool:
+    """判断 DB 字段是否已有有效内容。"""
+    if val is None:
+        return False
+    if isinstance(val, str):
+        return len(val.strip()) > 0
+    if isinstance(val, (int, float)):
+        return val > 0
+    return bool(val)
+
+
+def recover_stuck_articles():
+    """恢复卡在 'processing' 状态的文章（服务重启后调用）。
+    将其重置为 'fetched'，以便下一轮处理重新拾取。
+    """
+    db = _conn()
+    try:
+        count = db.execute(
+            "SELECT COUNT(*) FROM news_articles WHERE content_status='processing'"
+        ).fetchone()[0]
+        if count > 0:
+            db.execute(
+                "UPDATE news_articles SET content_status='fetched' WHERE content_status='processing'"
+            )
+            db.commit()
+            logger.info(f"恢复 {count} 篇卡在 processing 状态的文章 → fetched")
+    except Exception as e:
+        logger.warning(f"恢复 stuck articles 失败: {e}")
+    finally:
+        db.close()
+
+
 def process_article(article_id: int) -> dict:
     """单篇文章完整处理：缓存(如未缓存)→清洗→翻译→分析+KCS。
-    每步完成后立即写入 DB，失败不阻断后续步骤。
+    每步写入 DB，已完成的步骤自动跳过。
     返回 {"ok": bool, "steps": {...}, "error": str}
     """
     result = {"ok": True, "steps": {}, "error": ""}
@@ -28,13 +63,23 @@ def process_article(article_id: int) -> dict:
 
     try:
         row = db.execute("""
-            SELECT id, title, url, local_path, text_content, source, content_status, fetched_at
+            SELECT id, title, url, local_path, text_content, source, content_status, fetched_at,
+                   ai_cleaned_content, translated_content, ai_summary,
+                   ai_keywords, ai_category, ai_priority_score
             FROM news_articles WHERE id=?
         """, (article_id,)).fetchone()
         if not row:
+            db.close()
             return {"ok": False, "error": f"文章 #{article_id} 不存在"}
 
-        aid, title, url, local_path, text_content, source, status, fetched_at = row
+        aid = row[0]; title = row[1]; url = row[2]; local_path = row[3]
+        text_content = row[4]; source = row[5]; status = row[6]; fetched_at = row[7]
+        existing_cleaned = row[8]; existing_translated = row[9]; existing_summary = row[10]
+        existing_keywords = row[11]; existing_category = row[12]; existing_score = row[13]
+
+        # 标记处理中
+        db.execute("UPDATE news_articles SET content_status='processing' WHERE id=?", (aid,))
+        db.commit()
 
         # ── Step 1: 内容缓存 ──
         if not local_path or local_path.startswith('[ERR:'):
@@ -44,11 +89,11 @@ def process_article(article_id: int) -> dict:
         else:
             result["steps"]["cached"] = True
 
-        # 重新读取以确保拿到最新的 local_path
-        row = db.execute("SELECT local_path, text_content FROM news_articles WHERE id=?", (aid,)).fetchone()
-        local_path, text_content = row if row else ("", "")
+        # 重新读取 local_path
+        row2 = db.execute("SELECT local_path, text_content FROM news_articles WHERE id=?", (aid,)).fetchone()
+        local_path, text_content = row2 if row2 else ("", "")
 
-        # 读取 HTML 内容
+        # 读取 HTML
         html = ""
         if local_path and not local_path.startswith('[ERR:') and os.path.exists(local_path):
             with open(local_path, 'r', encoding='utf-8', errors='replace') as f:
@@ -57,100 +102,129 @@ def process_article(article_id: int) -> dict:
             html = text_content
 
         if not html or len(html.strip()) < 100:
-            db.close()
+            db.execute("UPDATE news_articles SET content_status='failed' WHERE id=?", (aid,))
+            db.commit(); db.close()
             return {"ok": False, "error": f"#{aid} 无有效 HTML 内容", "steps": result["steps"]}
 
-        # ── Step 2: 内容清洗 ──
-        try:
-            cleaned = clean_article_content(html)
-            if cleaned and len(cleaned.strip()) > 50:
-                db.execute("UPDATE news_articles SET ai_cleaned_content=? WHERE id=?", (cleaned, aid))
-                db.commit()
-                result["steps"]["cleaned"] = f"{len(cleaned)} chars"
-                from api.dashboard import DashboardStream
-                DashboardStream.publish("article_progress", {"id": aid, "title": title, "step": "cleaning", "current": "清洗完成"})
-            else:
-                result["steps"]["cleaned"] = "empty"
-        except Exception as e:
-            result["steps"]["cleaned"] = f"error: {e}"
-            logger.warning(f"#{aid} 清洗失败: {e}")
+        # ── Step 2: 内容清洗（跳过已完成）──
+        if _is_not_empty(existing_cleaned) and len(existing_cleaned.strip()) > 50:
+            result["steps"]["cleaned"] = f"{len(existing_cleaned)} chars (已缓存)"
+        else:
+            try:
+                cleaned = clean_article_content(html)
+                if cleaned and len(cleaned.strip()) > 50:
+                    db.execute("UPDATE news_articles SET ai_cleaned_content=? WHERE id=?", (cleaned, aid))
+                    db.commit()
+                    result["steps"]["cleaned"] = f"{len(cleaned)} chars"
+                    from api.dashboard import DashboardStream
+                    DashboardStream.publish("article_progress", {"id": aid, "title": title, "step": "cleaning", "current": "清洗完成"})
+                else:
+                    result["steps"]["cleaned"] = "empty"
+            except Exception as e:
+                result["steps"]["cleaned"] = f"error: {e}"
+                logger.warning(f"#{aid} 清洗失败: {e}")
 
-        # ── Step 3: 翻译 ──
-        try:
-            if config.translation_enabled and config.translation_api_key:
-                translated = translate_html_preserve_structure(html)
-            else:
-                translated = translate_html(html)
-            if translated:
-                db.execute("UPDATE news_articles SET translated_content=? WHERE id=?", (translated, aid))
-                db.commit()
-                result["steps"]["translated"] = f"{len(translated)} chars"
-            else:
-                result["steps"]["translated"] = "empty"
-        except Exception as e:
-            result["steps"]["translated"] = f"error: {e}"
-            logger.warning(f"#{aid} 翻译失败: {e}")
+        # ── Step 3: 翻译（跳过已完成）──
+        if _is_not_empty(existing_translated) and len(existing_translated.strip()) > 50:
+            result["steps"]["translated"] = f"{len(existing_translated)} chars (已缓存)"
+        else:
+            try:
+                if config.translation_enabled and config.translation_api_key:
+                    translated = translate_html_preserve_structure(html)
+                else:
+                    translated = translate_html(html)
+                if translated:
+                    db.execute("UPDATE news_articles SET translated_content=? WHERE id=?", (translated, aid))
+                    db.commit()
+                    result["steps"]["translated"] = f"{len(translated)} chars"
+                else:
+                    result["steps"]["translated"] = "empty"
+            except Exception as e:
+                result["steps"]["translated"] = f"error: {e}"
+                logger.warning(f"#{aid} 翻译失败: {e}")
 
         # ── Step 4: 分析+KCS ──
-        row = db.execute("SELECT ai_cleaned_content, text_content, fetched_at FROM news_articles WHERE id=?", (aid,)).fetchone()
-        content_for_ai = (row[0] or row[1]) if row else html
+        row3 = db.execute("SELECT ai_cleaned_content, text_content, fetched_at FROM news_articles WHERE id=?", (aid,)).fetchone()
+        content_for_ai = (row3[0] or row3[1]) if row3 else html
 
-        # a) 分析摘要
-        try:
-            summary = analyze_article(title, content_for_ai)
-            if summary:
-                db.execute("UPDATE news_articles SET ai_summary=?, ai_analyzed=1 WHERE id=?", (summary, aid))
-                db.commit()
-                result["steps"]["analyzed"] = True
-            else:
-                result["steps"]["analyzed"] = False
-        except Exception as e:
-            result["steps"]["analyzed"] = f"error: {e}"
-            logger.warning(f"#{aid} 分析失败: {e}")
+        # a) 分析摘要（跳过已完成）
+        if _is_not_empty(existing_summary) and len(existing_summary.strip()) > 50:
+            result["steps"]["analyzed"] = True
+        else:
+            try:
+                summary = analyze_article(title, content_for_ai)
+                if summary:
+                    db.execute("UPDATE news_articles SET ai_summary=?, ai_analyzed=1 WHERE id=?", (summary, aid))
+                    db.commit()
+                    result["steps"]["analyzed"] = True
+                else:
+                    result["steps"]["analyzed"] = False
+            except Exception as e:
+                result["steps"]["analyzed"] = f"error: {e}"
+                logger.warning(f"#{aid} 分析失败: {e}")
 
-        # b) KCS 合并
-        try:
-            days = 0
-            if fetched_at:
-                try:
-                    days = max(0, (datetime.now() - datetime.fromisoformat(fetched_at)).days)
-                except Exception:
-                    pass
-            kcs = extract_keywords_classify_score_ai(title, content_for_ai, source, days)
-            if kcs:
-                kws = kcs.get("keywords", [])
-                if kws:
-                    db.execute("UPDATE news_articles SET keywords=?, ai_keywords=? WHERE id=?",
-                               (_json.dumps(kws, ensure_ascii=False), _json.dumps(kws, ensure_ascii=False), aid))
-                if kcs.get("category"):
-                    db.execute("UPDATE news_articles SET ai_category=?, ai_tags=? WHERE id=?",
-                               (kcs["category"], _json.dumps(kcs.get("tags", []), ensure_ascii=False), aid))
-                if "score" in kcs:
-                    db.execute("UPDATE news_articles SET priority_score=?, priority_label=?, ai_priority_score=? WHERE id=?",
-                               (kcs["score"], kcs.get("label", "medium"), kcs["score"], aid))
-                db.commit()
-                result["steps"]["kcs"] = f"{kcs.get('category','?')} {kcs.get('label','medium')}({kcs.get('score',0):.0f})"
-                from api.dashboard import DashboardStream
-                DashboardStream.publish("article_progress", {"id": aid, "title": title, "step": "kcs", "current": "KCS完成"})
-            else:
-                result["steps"]["kcs"] = "empty"
-        except Exception as e:
-            result["steps"]["kcs"] = f"error: {e}"
-            logger.warning(f"#{aid} KCS 失败: {e}")
+        # b) KCS 合并（跳过已完成 — 三个字段都有有效值就跳过）
+        kcs_already_done = (
+            _is_not_empty(existing_keywords) and
+            _is_not_empty(existing_category) and
+            _is_not_empty(existing_score)
+        )
+        if kcs_already_done:
+            result["steps"]["kcs"] = f"{existing_category} {existing_score:.0f} (已缓存)"
+        else:
+            try:
+                days = 0
+                if fetched_at:
+                    try:
+                        days = max(0, (datetime.now() - datetime.fromisoformat(fetched_at)).days)
+                    except Exception:
+                        pass
+                kcs = extract_keywords_classify_score_ai(title, content_for_ai, source, days)
+                if kcs:
+                    kws = kcs.get("keywords", [])
+                    if kws:
+                        db.execute("UPDATE news_articles SET keywords=?, ai_keywords=? WHERE id=?",
+                                   (_json.dumps(kws, ensure_ascii=False), _json.dumps(kws, ensure_ascii=False), aid))
+                    if kcs.get("category"):
+                        db.execute("UPDATE news_articles SET ai_category=?, ai_tags=? WHERE id=?",
+                                   (kcs["category"], _json.dumps(kcs.get("tags", []), ensure_ascii=False), aid))
+                    if "score" in kcs:
+                        db.execute("UPDATE news_articles SET priority_score=?, priority_label=?, ai_priority_score=? WHERE id=?",
+                                   (kcs["score"], kcs.get("label", "medium"), kcs["score"], aid))
+                    db.commit()
+                    result["steps"]["kcs"] = f"{kcs.get('category','?')} {kcs.get('label','medium')}({kcs.get('score',0):.0f})"
+                    from api.dashboard import DashboardStream
+                    DashboardStream.publish("article_progress", {"id": aid, "title": title, "step": "kcs", "current": "KCS完成"})
+                else:
+                    result["steps"]["kcs"] = "empty"
+            except Exception as e:
+                result["steps"]["kcs"] = f"error: {e}"
+                logger.warning(f"#{aid} KCS 失败: {e}")
 
+        # 标记处理完成
+        cleaned_ok = isinstance(result["steps"].get("cleaned"), str) and not result["steps"]["cleaned"].startswith(("error", "empty"))
+        analyzed_ok = result["steps"].get("analyzed") == True
+        new_status = 'processed' if (cleaned_ok or _is_not_empty(existing_cleaned)) and analyzed_ok else 'fetched'
+        db.execute("UPDATE news_articles SET content_status=? WHERE id=?", (new_status, aid))
         db.commit()
     except Exception as e:
         result["ok"] = False
         result["error"] = str(e)
         logger.error(f"process_article #{article_id} 异常: {e}")
+        try:
+            db.execute("UPDATE news_articles SET content_status='fetched' WHERE id=?", (article_id,))
+            db.commit()
+        except Exception:
+            pass
     finally:
         db.close()
     return result
 
 
 def process_all_pending() -> dict:
-    """遍历所有待处理文章，逐篇执行 process_article()。返回进度汇总。"""
-
+    """遍历所有待处理文章（content_status IN ('fetched','translated') 且非 processing/processed），
+    逐篇执行 process_article()。返回进度汇总。
+    """
     db = _conn()
     rows = db.execute("""
         SELECT id FROM news_articles
@@ -178,7 +252,7 @@ def process_all_pending() -> dict:
             done += 1
         else:
             failed += 1
-            log.append(f"#{aid} ❌ {r.get('error', '未知错误')}")
+            log.append(f"#{aid} ❌ {r.get('error', '未知错误')[:120]}")
         time.sleep(0.5)
 
     log.append(f"[{datetime.now().strftime('%H:%M:%S')}] 完成: {done}/{total}, 失败: {failed}")

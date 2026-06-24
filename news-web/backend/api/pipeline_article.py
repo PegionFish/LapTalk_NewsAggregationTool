@@ -38,9 +38,11 @@ def _run_single(aid: int):
 def _run_batch():
     global _article_state
     _reset_state()
+    # 恢复上次异常中断的文章
+    from pipeline.process_article import process_all_pending, recover_stuck_articles
+    recover_stuck_articles()
     DashboardStream.publish("article_batch_start", {"total": _article_state.get("total", 0)})
     try:
-        from pipeline.process_article import process_all_pending
         result = process_all_pending()
         _article_state["total"] = result["total"]
         _article_state["done"] = result["done"]
