@@ -80,6 +80,7 @@ def start_article_batch():
         SELECT COUNT(*) FROM news_articles
         WHERE content_status IN ('fetched', 'translated')
           AND ai_filtered != -1
+          AND (local_path != '' OR text_content != '')
           AND (ai_analyzed = 0 OR ai_cleaned_content IS NULL OR ai_cleaned_content = ''
                OR translated_content IS NULL OR translated_content = ''
                OR ai_keywords IS NULL OR ai_keywords = '')
