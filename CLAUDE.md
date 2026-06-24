@@ -34,7 +34,7 @@
 news-web/
 ├── backend/
 │   ├── main.py              # 入口: 生命周期 + 路由注册 + 静态托管 :8081
-│   ├── scheduler.py         # 定时: 数据采集 10:00/17:00 + 事件管线 1:00 + 备份 03:00
+│   ├── scheduler.py         # 定时: 数据采集 10:00/17:00 + 事件管线 1:00 + pending_cluster 2:30 + 备份 3:00
 │   ├── ai_client.py         # AI 客户端: chat(), clean_article_content(), analyze_article(),
 │   │                        #   extract_keywords_classify_score_ai(), extract_keywords_batch(),
 │   │                        #   build_panoramic_context(), rank_events_panoramic(), build_chains_panoramic()
@@ -126,7 +126,7 @@ articles
 ├── text_content            ← 原始 HTML（直传 LLM，保留标签结构）
 ├── translated_content      ← AI 翻译后的中文（译文）
 ├── content_lang            ← 语言检测结果 (en/zh)
-├── content_status          ← 状态 (pending/fetched/translated/processing/processed/failed/dead)
+├── content_status          ← 状态 (pending/fetched/translated/processing/processed/failed/dead/pending_cluster)
 ├── retry_count             ← 同类 HTTP 错误重试计数，≥2 次 404/410 标记 dead
 ├── ai_summary              ← AI 分析摘要
 ├── ai_analyzed             ← AI 分析完成标记 (0/1)
@@ -160,12 +160,13 @@ AI 配置从前端可控，分为三组（`/api/settings/ai`）：
 | 分组 | 用途 | 包含任务 |
 |------|------|---------|
 | 标题初筛 | RSS 标题 AI 筛选 | `rss_prefilter` |
-| 文章处理 | 单篇管线处理 | 清洗 + 翻译 + 分析 + KCS 合并 |
-| 事件管线 | 事件级批量任务 | 聚类 + 摘要 + 逻辑链 |
+| 文章处理 | 单篇管线处理 | 清洗 → 翻译 → KCS → 事件匹配 |
+| 事件管线 | 事件级批量任务 | 摘要 + 逻辑链（聚类已下沉到文章处理） |
 
-- 所有模型统一为大上下文窗口（1M tokens）
+- 清洗用长上下文模型（>1M tokens），翻译/KCS/事件匹配可用 160K 模型降本
 - 清洗超大 HTML（>1.8M 字符）自动在块级边界拆分
 - KCS = 关键词 + 分类 + 评分一次 API 调用完成
+- 事件匹配 = AI 语义匹配替代旧版 bigram Jaccard
 - 代码注释不绑定具体模型名称
 
 ### 管线 API
@@ -182,12 +183,12 @@ AI 配置从前端可控，分为三组（`/api/settings/ai`）：
 
 | 端点 | 说明 |
 |------|------|
-| `POST /api/pipeline/event/nightly` | 全量事件管线: 聚类→摘要→逻辑链 |
+| `POST /api/pipeline/event/nightly` | 全量事件管线: 摘要→逻辑链（两步） |
 | `GET /api/pipeline/event/status` | 进度: steps[] (含各步骤 done/total/current) |
-| `POST /api/pipeline/event/recluster` | 事件重聚类 |
 | `POST /api/pipeline/event/summarize` | 事件摘要生成 |
 | `POST /api/pipeline/event/build-chains` | 逻辑链构建 |
 | `GET /api/pipeline/event/{op}/status` | 各子操作状态 |
+| `POST /api/pipeline/event/recluster` | [手动] 事件重聚类（日常聚类已在文章处理时完成） |
 
 **SSE 实时推送** (`api/dashboard.py`)
 
