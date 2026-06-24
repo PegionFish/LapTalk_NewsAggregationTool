@@ -99,6 +99,7 @@ from api.update import router as update_router
 from api.tasks import router as tasks_router
 from api.browser import router as browser_router
 from api.trending import router as trending_router
+from api.dashboard import router as dashboard_router
 
 app.include_router(settings_router)
 app.include_router(stats_router)
@@ -120,6 +121,7 @@ app.include_router(update_router)
 app.include_router(tasks_router)
 app.include_router(browser_router)
 app.include_router(trending_router)
+app.include_router(dashboard_router)
 
 # ── SPA fallback + static mount (must be last) ──────────
 from fastapi.responses import FileResponse

@@ -140,6 +140,13 @@ async def _backup_db():
             os.remove(f)
             logger.info(f"Pruned old backup: {f}")
 
+    # 审计日志轮转
+    try:
+        from api.dashboard import rotate_audit_log
+        rotate_audit_log()
+    except Exception as e:
+        logger.warning(f"审计日志轮转失败: {e}")
+
 
 def start_scheduler():
     """Start scheduler if any schedule is enabled in config."""
