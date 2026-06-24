@@ -121,12 +121,18 @@ def _run_summarize():
     try:
         from ai_client import generate_event_summary_ai
         db = get_db_connection(config.db_path)
-        events = db.execute(
-            "SELECT id FROM events WHERE article_count >= 2 AND (ai_summary IS NULL OR ai_summary = '')"
-        ).fetchall()
+        # 用 JOIN 确保事件实际有 >= 2 篇文章，避免 article_count 缓存不准
+        events = db.execute("""
+            SELECT e.id, COUNT(ae.article_id) as cnt
+            FROM events e
+            JOIN news_article_events ae ON ae.event_id = e.id
+            WHERE e.article_count >= 2 AND (e.ai_summary IS NULL OR e.ai_summary = '')
+            GROUP BY e.id
+            HAVING cnt >= 2
+        """).fetchall()
         _es_state["total"] = len(events)
         db.close()
-        for (eid,) in events:
+        for (eid, _cnt) in events:
             if _es_state.get("cancelled"):
                 break
             _es_state["current"] = f"事件#{eid}"
@@ -138,6 +144,7 @@ def _run_summarize():
             ).fetchall()]
             db2.close()
             if len(titles) < 2:
+                _es_state["failed"] += 1  # 理论上不应到达（HAVING 已过滤），但防御性保留
                 continue
             try:
                 block = "\n".join(f"- {t}" for t in titles)
@@ -148,6 +155,8 @@ def _run_summarize():
                     safe_commit(db3)
                     db3.close()
                     _es_state["done"] += 1
+                else:
+                    _es_state["failed"] += 1
             except Exception as e:
                 _es_state["failed"] += 1
             time.sleep(0.1)
