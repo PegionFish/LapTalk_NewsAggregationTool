@@ -1,5 +1,5 @@
 """文章级管线 API — 缓存→清洗→翻译→分析+KCS"""
-import threading, logging
+import threading, logging, time
 from datetime import datetime
 from fastapi import APIRouter
 
@@ -38,24 +38,68 @@ def _run_single(aid: int):
 def _run_batch():
     global _article_state
     _reset_state()
+    from pipeline.process_article import process_article, _conn
+
     # 恢复上次异常中断的文章
-    from pipeline.process_article import process_all_pending, recover_stuck_articles
-    recover_stuck_articles()
-    DashboardStream.publish("article_batch_start", {"total": _article_state.get("total", 0)})
-    try:
-        result = process_all_pending()
-        _article_state["total"] = result["total"]
-        _article_state["done"] = result["done"]
-        _article_state["failed"] = result["failed"]
-        _article_state["log"].extend(result["log"])
-    except Exception as e:
-        logger.error(f"article batch: {e}")
-        _article_state["log"].append(f"❌ {e}")
-    finally:
-        DashboardStream.publish("article_batch_done", {"done": _article_state.get("done", 0), "failed": _article_state.get("failed", 0)})
+    db = _conn()
+    rows = db.execute("""
+        SELECT id FROM news_articles
+        WHERE content_status='processing'
+    """).fetchall()
+    for (aid,) in rows:
+        db.execute("UPDATE news_articles SET content_status='fetched' WHERE id=?", (aid,))
+    if rows:
+        db.commit()
+        _article_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] 恢复 {len(rows)} 篇异常中断的文章")
+    db.close()
+
+    # 查询待处理文章
+    db = _conn()
+    rows = db.execute("""
+        SELECT id FROM news_articles
+        WHERE content_status IN ('fetched', 'translated')
+          AND ai_filtered != -1
+          AND (local_path != '' OR text_content != '')
+          AND (ai_analyzed = 0 OR ai_cleaned_content IS NULL OR ai_cleaned_content = ''
+               OR translated_content IS NULL OR translated_content = ''
+               OR ai_keywords IS NULL OR ai_keywords = ''
+               OR ai_category IS NULL OR ai_category = ''
+               OR ai_priority_score IS NULL OR ai_priority_score = 0.0)
+        ORDER BY id DESC
+    """).fetchall()
+    db.close()
+
+    total = len(rows)
+    _article_state["total"] = total
+    DashboardStream.publish("article_batch_start", {"total": total})
+
+    if total == 0:
         _article_state["running"] = False
+        DashboardStream.publish("article_batch_done", {"done": 0, "failed": 0})
         task_lock.release('article')
         task_state.finish('article', success=True)
+        return
+
+    done = 0
+    failed = 0
+    for (aid,) in rows:
+        _article_state["current"] = f"#{aid}"
+        r = process_article(aid)
+        if r["ok"]:
+            done += 1
+            _article_state["done"] = done
+            _article_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] #{aid} ✅")
+        else:
+            failed += 1
+            _article_state["failed"] = failed
+            _article_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] #{aid} ❌ {r.get('error', '')[:100]}")
+        time.sleep(0.3)
+
+    _article_state["current"] = "完成"
+    DashboardStream.publish("article_batch_done", {"done": done, "failed": failed})
+    _article_state["running"] = False
+    task_lock.release('article')
+    task_state.finish('article', success=True)
 
 
 @router.post("/{article_id}/process")
