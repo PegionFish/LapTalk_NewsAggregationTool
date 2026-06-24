@@ -151,7 +151,7 @@ def process_article(article_id: int) -> dict:
         # Step 4: AI 语义事件匹配（替代旧版 bigram link_articles_to_events）
         try:
             from pipeline.event_matching import match_article_to_event
-            matched_event = match_article_to_event(aid)
+            matched_event = match_article_to_event(aid, db)
             if matched_event:
                 result["steps"]["event_match"] = f"Event#{matched_event}"
             else:

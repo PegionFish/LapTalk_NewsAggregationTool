@@ -88,7 +88,7 @@ def _category_overlap(category: str, event_title: str) -> bool:
     return any(p in etitle_lower for p in patterns)
 
 
-def match_article_to_event(article_id: int) -> int | None:
+def match_article_to_event(article_id: int, db=None) -> int | None:
     """对单篇文章进行 AI 语义事件匹配。
 
     在 process_article() KCS 完成后调用。
@@ -99,7 +99,9 @@ def match_article_to_event(article_id: int) -> int | None:
     Returns:
         匹配的 event_id，或 None（文章标记为 pending_cluster）
     """
-    db = get_db_connection(config.db_path)
+    own_db = db is None
+    if own_db:
+        db = get_db_connection(config.db_path)
     try:
         # 获取文章信息
         row = db.execute("""
@@ -176,4 +178,5 @@ def match_article_to_event(article_id: int) -> int | None:
             pass
         return None
     finally:
-        db.close()
+        if own_db:
+            db.close()
