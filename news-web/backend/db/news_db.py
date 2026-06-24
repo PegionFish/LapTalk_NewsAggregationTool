@@ -566,61 +566,18 @@ class NewsDB:
     # ═══════════════════════════════════════════════════════
 
     def link_articles_to_events(self, threshold: float = 0.35) -> int:
-        with self._conn() as conn:
-            unlinked = conn.execute("""
-                SELECT a.id, a.title, a.published_date, a.fetched_at
-                FROM news_articles a
-                LEFT JOIN news_article_events ae ON a.id = ae.article_id
-                WHERE ae.article_id IS NULL
-                AND a.content_status IN ('fetched', 'translated')
-            """).fetchall()
-            if not unlinked:
-                return 0
-            active_events = conn.execute(
-                "SELECT id, title FROM events WHERE status='active'"
-            ).fetchall()
-            new_events = 0
-            for art_id, art_title, pub_date, fetched_at in unlinked:
-                # 优先使用真实发布日期，无日期时回退到抓取日期
-                event_date = (pub_date or '')[:10] if pub_date else fetched_at[:10]
-                best_event = None
-                best_score = 0
-                art_entities = art_title.lower().split()  # 简单分词，替换 extract_entities
-                for evt_id, evt_title in active_events:
-                    sim = title_similarity(art_title, evt_title)
-                    evt_entities = evt_title.lower().split()  # 简单分词
-                    entity_overlap = len(set(art_entities) & set(evt_entities))
-                    score = sim * 0.6 + (entity_overlap / max(len(art_entities), 1)) * 0.4
-                    if score > best_score:
-                        best_score = score
-                        best_event = evt_id
-                if best_event and best_score >= threshold:
-                    conn.execute("""
-                        INSERT OR IGNORE INTO news_article_events (article_id, event_id, relevance)
-                        VALUES (?, ?, ?)
-                    """, (art_id, best_event, round(best_score, 2)))
-                    conn.execute("""
-                        UPDATE events SET last_seen=?, article_count=article_count+1 WHERE id=?
-                    """, (event_date, best_event))
-                else:
-                    event_title = art_title[:80]
-                    cur = conn.execute("""
-                        INSERT INTO events (title, first_seen, last_seen, status)
-                        VALUES (?, ?, ?, 'active')
-                    """, (event_title, event_date, event_date))
-                    evt_id = cur.lastrowid
-                    conn.execute("""
-                        INSERT INTO news_article_events (article_id, event_id)
-                        VALUES (?, ?)
-                    """, (art_id, evt_id))
-                    new_events += 1
-                    active_events.append((evt_id, event_title))
-            conn.commit()
-            # 重算 B 维度
-            for art_id, _, _, _ in unlinked:
-                self.calculate_priority(art_id, conn)
-            conn.commit()
-        return new_events
+        """[已废弃] 旧版 bigram 聚类 — 2026-06-24 起由 AI 语义匹配替代。
+
+        此方法不再执行任何操作。事件聚类现由 process_article() 中的
+        AI match_article_to_events_ai() 完成。
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(
+            "link_articles_to_events() 已废弃，调用被忽略。"
+            "事件聚类现由 process_article() 内 AI 语义匹配完成。"
+        )
+        return 0
 
     # ═══════════════════════════════════════════════════════
     # 人工反馈
@@ -761,92 +718,17 @@ class NewsDB:
     def suggest_event_relations(self, max_days: int = 7,
                                 time_weight: float = 0.4,
                                 title_weight: float = 0.6) -> int:
+        """[已废弃] 旧版规则引擎关系检测 — 2026-06-24 起由 AI 关系检测替代。
+
+        此方法不再执行任何操作。事件关系现由 nightly 中的 AI 批量检测完成。
         """
-        自动扫描所有事件对，根据时间接近度、标题相似度
-        推荐可能的事件关系。结果写入 event_relations(created_by='auto')。
-        已有关系的事件对不会重复推荐。
-
-        Args:
-            max_days: 时间接近度阈值（天）
-            time_weight: 时间接近度权重
-            title_weight: 标题相似度权重
-
-        Returns: 新推荐的关系数
-        """
-        with self._conn() as conn:
-            # 获取所有活跃事件
-            events = conn.execute("""
-                SELECT id, title, first_seen, last_seen, article_count
-                FROM events WHERE status='active'
-                ORDER BY last_seen DESC
-            """).fetchall()
-
-            # 获取已有关系（避免重复推荐）
-            existing = set()
-            for r in conn.execute(
-                "SELECT from_event_id, to_event_id FROM event_relations"
-            ).fetchall():
-                existing.add((r[0], r[1]))
-                existing.add((r[1], r[0]))  # 双向标记
-
-            suggestions = 0
-            now_date = date.today()
-
-            for i, (eid1, title1, first1, last1, cnt1) in enumerate(events):
-                for j, (eid2, title2, first2, last2, cnt2) in enumerate(events):
-                    if i >= j:
-                        continue
-                    if (eid1, eid2) in existing:
-                        continue
-
-                    # 时间接近度
-                    try:
-                        d1 = datetime.strptime(last1, '%Y-%m-%d').date()
-                        d2 = datetime.strptime(last2, '%Y-%m-%d').date()
-                    except:
-                        continue
-                    day_diff = abs((d1 - d2).days)
-                    if day_diff > max_days:
-                        continue
-                    t_score = max(0, 1.0 - day_diff / max_days)
-
-                    # 标题相似度
-                    s_score = title_similarity(title1, title2)
-                    if s_score < 0.15:
-                        continue
-
-                    # 综合评分（时间接近度 + 标题相似度）
-                    combined = t_score * time_weight + s_score * title_weight
-
-                    if combined >= 0.2:
-                        # 确定关系类型
-                        if s_score > 0.5:
-                            rel = 'related'
-                        elif day_diff <= 1:
-                            rel = 'update'
-                        else:
-                            rel = 'related'
-
-                        # 按时间顺序确定方向
-                        if d1 < d2:
-                            from_e, to_e = eid1, eid2
-                        else:
-                            from_e, to_e = eid2, eid1
-
-                        now = datetime.now().isoformat(timespec='seconds')
-                        try:
-                            conn.execute("""
-                                INSERT OR IGNORE INTO event_relations
-                                    (from_event_id, to_event_id, relation, created_by, created_at)
-                                VALUES (?, ?, ?, 'auto', ?)
-                            """, (from_e, to_e, rel, now))
-                            if conn.total_changes > 0:
-                                suggestions += 1
-                        except:
-                            continue
-
-            conn.commit()
-        return suggestions
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(
+            "suggest_event_relations() 已废弃，调用被忽略。"
+            "事件关系现由 nightly AI 批量检测完成。"
+        )
+        return 0
 
     def get_pending_relations(self, limit: int = 50) -> list:
         """
