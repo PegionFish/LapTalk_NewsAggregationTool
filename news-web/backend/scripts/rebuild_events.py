@@ -31,12 +31,11 @@ def clear_all_events(db):
 
 
 def reset_article_status(db):
-    """将所有已处理文章标记为 pending_cluster，等待重新匹配。"""
+    """将已完成 KCS 的文章标记为 pending_cluster，等待重新匹配。"""
     count = db.execute("""
         UPDATE news_articles
         SET content_status = 'pending_cluster'
-        WHERE content_status IN ('processed', 'fetched', 'translated')
-          AND ai_keywords IS NOT NULL AND ai_keywords != ''
+        WHERE ai_keywords IS NOT NULL AND ai_keywords != '' AND ai_keywords != '[]'
     """).rowcount
     safe_commit(db)
     logger.info(f"  重置 {count} 篇文章状态 → pending_cluster")
@@ -48,7 +47,10 @@ def rebuild_all(db_path: str, dry_run: bool = False):
 
     # 统计当前状态
     evt_count = db.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-    art_count = db.execute("SELECT COUNT(*) FROM news_articles WHERE content_status IN ('processed','fetched','translated') AND ai_keywords IS NOT NULL AND ai_keywords != ''").fetchone()[0]
+    art_count = db.execute("""
+        SELECT COUNT(*) FROM news_articles
+        WHERE ai_keywords IS NOT NULL AND ai_keywords != '' AND ai_keywords != '[]'
+    """).fetchone()[0]
 
     logger.info(f"当前: {evt_count} 事件, {art_count} 篇可聚类文章")
 
