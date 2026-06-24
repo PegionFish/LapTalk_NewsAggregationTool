@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """单篇文章处理编排器 —— 缓存→清洗→翻译→分析+KCS 线性执行。"""
-import sys, os, sqlite3, time, logging
+import sys, os, sqlite3, time, logging, json as _json
+from datetime import datetime
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(SCRIPT_DIR))
@@ -38,10 +39,8 @@ def process_article(article_id: int) -> dict:
         # ── Step 1: 内容缓存 ──
         if not local_path or local_path.startswith('[ERR:'):
             from pipeline.fetch_content import fetch_article_content
-            ok = fetch_article_content(aid, url, config.content_cache_path)
-            result["steps"]["cached"] = ok
-            if not ok:
-                result["steps"]["cached"] = False
+            fetch_result = fetch_article_content(url, aid, config.content_cache_path)
+            result["steps"]["cached"] = fetch_result.get("ok", False)
         else:
             result["steps"]["cached"] = True
 
@@ -109,16 +108,14 @@ def process_article(article_id: int) -> dict:
 
         # b) KCS 合并
         try:
-            from datetime import datetime as _dt
             days = 0
             if fetched_at:
                 try:
-                    days = max(0, (_dt.now() - _dt.fromisoformat(fetched_at)).days)
+                    days = max(0, (datetime.now() - datetime.fromisoformat(fetched_at)).days)
                 except Exception:
                     pass
             kcs = extract_keywords_classify_score_ai(title, content_for_ai, source, days)
             if kcs:
-                import json as _json
                 kws = kcs.get("keywords", [])
                 if kws:
                     db.execute("UPDATE news_articles SET keywords=?, ai_keywords=? WHERE id=?",
@@ -147,10 +144,8 @@ def process_article(article_id: int) -> dict:
     return result
 
 
-def process_all_pending(db_path: str | None = None) -> dict:
+def process_all_pending() -> dict:
     """遍历所有待处理文章，逐篇执行 process_article()。返回进度汇总。"""
-    if not db_path:
-        db_path = config.db_path
 
     db = _conn()
     rows = db.execute("""
@@ -171,7 +166,6 @@ def process_all_pending(db_path: str | None = None) -> dict:
     failed = 0
     log: list[str] = []
 
-    from datetime import datetime
     log.append(f"[{datetime.now().strftime('%H:%M:%S')}] 开始处理 {total} 篇文章")
 
     for (aid,) in rows:
