@@ -75,6 +75,9 @@ def process_article(article_id: int) -> dict:
         # Step 1: 清洗
         if _is_not_empty(ex_clean) and len(ex_clean.strip()) > 50:
             result["steps"]["cleaned"] = f"{len(ex_clean)} chars"
+        elif _is_not_empty(ex_trans) and len(ex_trans.strip()) > 50:
+            # 翻译已完成，跳过清洗——分析步骤可直接用 text_content
+            result["steps"]["cleaned"] = "skipped (翻译已完成)"
         else:
             try:
                 c = clean_article_content(html)
