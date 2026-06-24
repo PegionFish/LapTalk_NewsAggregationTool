@@ -59,10 +59,10 @@ class TaskStateManager:
         try:
             conn = _conn(self._db_path)
             rows = conn.execute("SELECT * FROM task_states").fetchall()
-            cols = [d[0] for d in conn.execute("PRAGMA table_info(task_states)").fetchall()]
+            cols = [d[1] for d in conn.execute("PRAGMA table_info(task_states)").fetchall()]
             conn.close()
             for row in rows:
-                d = dict(zip([c[1] for c in conn.execute("PRAGMA table_info(task_states)").fetchall()], row))
+                d = dict(zip(cols, row))
                 task_type = d.pop('task_type', '')
                 if task_type:
                     d['log'] = json.loads(d.get('log', '[]'))
