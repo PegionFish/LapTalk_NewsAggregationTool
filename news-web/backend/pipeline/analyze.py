@@ -12,7 +12,7 @@ sys.path.insert(0, PARENT_DIR)
 logger = logging.getLogger(__name__)
 
 from config import config
-from ai_client import chat, summarize_events, extract_keywords_ai
+from ai_client import chat, summarize_events, extract_keywords_ai, extract_keywords_batch
 
 
 def analyze_events(db_path: str) -> tuple:
@@ -28,7 +28,7 @@ def analyze_events(db_path: str) -> tuple:
     keywords_extracted = 0
 
     try:
-        # ── 0. AI 关键词提取 ─────────────────────────────────
+        # ── 0. AI 关键词提取（批量模式）─────────────────────
         pending_news_articles = conn.execute("""
             SELECT a.id, a.title, a.text_content, a.source
             FROM news_articles a
@@ -38,20 +38,58 @@ def analyze_events(db_path: str) -> tuple:
         """).fetchall()
 
         if pending_news_articles:
-            logger.info(f"AI 关键词提取: {len(pending_news_articles)} 篇待处理")
+            logger.info(f"AI 关键词提取: {len(pending_news_articles)} 篇待处理（批量模式）")
             import json as _json
-            for aid, title, text, source in pending_news_articles:
+
+            # 每批最多 50 篇，合并为一次 API 调用
+            KW_BATCH = 50
+            for batch_start in range(0, len(pending_news_articles), KW_BATCH):
+                batch_rows = pending_news_articles[batch_start:batch_start + KW_BATCH]
+                batch_articles = [
+                    {"id": aid, "title": title, "text": text or '', "source": source or ''}
+                    for aid, title, text, source in batch_rows
+                ]
                 try:
-                    kws = extract_keywords_ai(title, text or '', source or '')
-                    if kws:
-                        conn.execute(
-                            "UPDATE news_articles SET keywords=?, ai_keywords=? WHERE id=?",
-                            (_json.dumps(kws, ensure_ascii=False),
-                             _json.dumps(kws, ensure_ascii=False), aid)
-                        )
-                        keywords_extracted += 1
+                    batch_kws = extract_keywords_batch(batch_articles)
+                    if batch_kws:
+                        for i, kws in enumerate(batch_kws):
+                            if kws:
+                                aid = batch_articles[i]["id"]
+                                conn.execute(
+                                    "UPDATE news_articles SET keywords=?, ai_keywords=? WHERE id=?",
+                                    (_json.dumps(kws, ensure_ascii=False),
+                                     _json.dumps(kws, ensure_ascii=False), aid)
+                                )
+                                keywords_extracted += 1
+                    else:
+                        # 批量失败回退到逐篇模式
+                        logger.warning("批量关键词提取失败，回退到逐篇模式")
+                        for aid, title, text, source in batch_rows:
+                            try:
+                                kws = extract_keywords_ai(title, text or '', source or '')
+                                if kws:
+                                    conn.execute(
+                                        "UPDATE news_articles SET keywords=?, ai_keywords=? WHERE id=?",
+                                        (_json.dumps(kws, ensure_ascii=False),
+                                         _json.dumps(kws, ensure_ascii=False), aid)
+                                    )
+                                    keywords_extracted += 1
+                            except Exception as e:
+                                logger.warning(f"  extract_keywords_ai failed for #{aid}: {e}")
                 except Exception as e:
-                    logger.warning(f"  extract_keywords_ai failed for #{aid}: {e}")
+                    logger.warning(f"  批量关键词提取异常: {e}，回退逐篇")
+                    for aid, title, text, source in batch_rows:
+                        try:
+                            kws = extract_keywords_ai(title, text or '', source or '')
+                            if kws:
+                                conn.execute(
+                                    "UPDATE news_articles SET keywords=?, ai_keywords=? WHERE id=?",
+                                    (_json.dumps(kws, ensure_ascii=False),
+                                     _json.dumps(kws, ensure_ascii=False), aid)
+                                )
+                                keywords_extracted += 1
+                        except Exception as e2:
+                            logger.warning(f"  extract_keywords_ai failed for #{aid}: {e2}")
             conn.commit()
             logger.info(f"AI 关键词提取完成: {keywords_extracted}/{len(pending_news_articles)} 篇")
 
@@ -107,8 +145,8 @@ def analyze_events(db_path: str) -> tuple:
                     if existing == 0:
                         candidate_pairs.append((evt1, evt2))
 
-            # 每批最多 15 个配对，一次 API 调用处理一批
-            BATCH_SIZE = 15
+            # 每批最多 50 个配对，一次 API 调用处理一批
+            BATCH_SIZE = 50
             for batch_start in range(0, len(candidate_pairs), BATCH_SIZE):
                 batch = candidate_pairs[batch_start:batch_start + BATCH_SIZE]
                 if not batch:

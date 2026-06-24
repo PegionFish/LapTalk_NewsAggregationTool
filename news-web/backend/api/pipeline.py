@@ -711,6 +711,7 @@ def start_build_chains():
 _kw_state    = _new_state()
 _cls_state   = _new_state()
 _score_state = _new_state()
+_kcs_state   = _new_state()       # 合并关键词+分类+评分
 _recluster_state  = _new_state()
 _evt_sum_state    = _new_state()
 _filter_state     = _new_state()
@@ -964,6 +965,117 @@ def _batch_ai_score():
         task_state.finish('score', success=True)
 
 
+def _batch_ai_kcs():
+    """合并关键词+分类+评分 — 一次 API 调用完成三项任务。"""
+    global _kcs_state
+    _reset_state(_kcs_state)
+    try:
+        db = _conn()
+        rows = db.execute("""
+            SELECT id, title,
+                   COALESCE(NULLIF(ai_cleaned_content, ''), text_content) as content,
+                   source, fetched_at
+            FROM news_articles
+            WHERE content_status IN ('fetched', 'translated')
+            ORDER BY id DESC
+        """).fetchall(); db.close()
+        if not rows: _kcs_state["running"] = False; return
+        _kcs_state["total"] = len(rows)
+        _log(_kcs_state, f"合并 KCS 处理 {len(rows)} 篇")
+        from ai_client import extract_keywords_classify_score_ai
+        from datetime import datetime as _dt
+        import json as _json
+
+        retry_counts: dict[int, int] = {}
+        retry_queue: list[tuple[int, str, str, str, str]] = []
+
+        for idx, (aid, title, text, source, fetched_at) in enumerate(rows, 1):
+            if _check_cancelled(_kcs_state):
+                _log(_kcs_state, "🛑 KCS 已取消")
+                break
+            _kcs_state["current"] = f"#{aid} {title[:50]}"
+            if _hp_check(aid):
+                _log(_kcs_state, f"#{aid} ⏭️ 人工已处理"); _kcs_state["done"] += 1; continue
+            try:
+                days = max(0, (_dt.now() - _dt.fromisoformat(fetched_at)).days) if fetched_at else 0
+            except Exception:
+                days = 0
+            try:
+                r = extract_keywords_classify_score_ai(title, text, source or "Unknown", days, model=config.simple_model)
+            except Exception as e:
+                if _is_request_timeout_error(e) and _queue_timeout_retry(_kcs_state, aid, retry_counts):
+                    retry_queue.append((aid, title, text, source or "Unknown", fetched_at or ""))
+                    continue
+                _log(_kcs_state, f"#{aid} ❌ API 调用失败: {str(e)[:300]}")
+                _kcs_state["failed"] += 1; _kcs_state["done"] += 1
+                continue
+            if r:
+                db2 = _conn()
+                # 关键词
+                kws = r.get("keywords", [])
+                if kws:
+                    db2.execute("UPDATE news_articles SET keywords=?, ai_keywords=? WHERE id=?",
+                                (_json.dumps(kws, ensure_ascii=False), _json.dumps(kws, ensure_ascii=False), aid))
+                # 分类
+                if r.get("category"):
+                    db2.execute("UPDATE news_articles SET ai_category=?, ai_tags=? WHERE id=?",
+                                (r["category"], _json.dumps(r.get("tags", []), ensure_ascii=False), aid))
+                # 评分
+                if "score" in r:
+                    db2.execute("UPDATE news_articles SET priority_score=?, priority_label=?, ai_priority_score=? WHERE id=?",
+                                (r["score"], r.get("label", "medium"), r["score"], aid))
+                safe_commit(db2); db2.close()
+                _log(_kcs_state, f"#{aid} ✅ {r.get('category','?')} {r.get('label','medium')}({r.get('score',0):.0f}) | {len(kws)} kw")
+            else:
+                if _queue_retry(_kcs_state, aid, retry_counts, reason='AI 返回空', task_type='kcs'):
+                    retry_queue.append((aid, title, text, source or "Unknown", fetched_at or ""))
+                else:
+                    _kcs_state["failed"] += 1
+            _kcs_state["done"] += 1
+            time.sleep(0.1) if idx < len(rows) else None
+
+        for aid, title, text, source, fetched_at in retry_queue:
+            _kcs_state["current"] = f"#{aid} {title[:50]}"
+            _log(_kcs_state, f"#{aid} 🔄 重试 KCS...")
+            try:
+                days = max(0, (_dt.now() - _dt.fromisoformat(fetched_at)).days) if fetched_at else 0
+            except Exception:
+                days = 0
+            try:
+                r = extract_keywords_classify_score_ai(title, text, source, days, model=config.simple_model)
+                if r:
+                    db2 = _conn()
+                    kws = r.get("keywords", [])
+                    if kws:
+                        db2.execute("UPDATE news_articles SET keywords=?, ai_keywords=? WHERE id=?",
+                                    (_json.dumps(kws, ensure_ascii=False), _json.dumps(kws, ensure_ascii=False), aid))
+                    if r.get("category"):
+                        db2.execute("UPDATE news_articles SET ai_category=?, ai_tags=? WHERE id=?",
+                                    (r["category"], _json.dumps(r.get("tags", []), ensure_ascii=False), aid))
+                    if "score" in r:
+                        db2.execute("UPDATE news_articles SET priority_score=?, priority_label=?, ai_priority_score=? WHERE id=?",
+                                    (r["score"], r.get("label", "medium"), r["score"], aid))
+                    safe_commit(db2); db2.close()
+                    _log(_kcs_state, f"#{aid} ✅ {r.get('category','?')} {r.get('label','medium')}({r.get('score',0):.0f}) | {len(kws)} kw")
+                else:
+                    if _queue_retry(_kcs_state, aid, retry_counts, reason='重试后仍空', task_type='kcs'):
+                        retry_queue.append((aid, title, text, source, fetched_at))
+                    else:
+                        _kcs_state["failed"] += 1
+            except Exception as e:
+                if _is_request_timeout_error(e):
+                    _log(_kcs_state, f"#{aid} ❌ API 调用失败: Request Timed Out（重试后仍超时）")
+                else:
+                    _log(_kcs_state, f"#{aid} ❌ API 调用失败: {str(e)[:300]}")
+                _kcs_state["failed"] += 1
+            _kcs_state["done"] += 1
+    except Exception as e: logger.error(f"batch-kcs: {e}")
+    finally:
+        _kcs_state["running"] = False
+        _unlock('kcs')
+        task_state.finish('kcs', success=True)
+
+
 def _batch_ai_recluster():
     global _recluster_state
     _reset_state(_recluster_state)
@@ -1172,7 +1284,7 @@ def _batch_ai_filter():
 
         from pipeline.ai_filter import filter_batch
 
-        BATCH = 30
+        BATCH = 200
         for i in range(0, len(rows), BATCH):
             batch = rows[i:i + BATCH]
             _filter_state["current"] = f"批次 {i // BATCH + 1} ({len(batch)} 篇)"
@@ -1297,6 +1409,36 @@ def start_batch_score():
     _score_state["running"] = True
     threading.Thread(target=_batch_ai_score, daemon=True).start()
     return {"ok": True, "message": f"启动 AI 评分，预计 {n} 篇", "pending": n}
+
+@router.post("/batch-kcs")
+def start_batch_kcs():
+    """合并关键词+分类+评分 — 一次 API 调用完成三项任务。"""
+    global _kcs_state
+    if _kcs_state.get("running"): return {"ok": False, "message": "KCS 已在运行中"}
+    ok, msg = _check_and_lock('kcs')
+    if not ok: return {"ok": False, "message": msg}
+    db = _conn(); n = db.execute("SELECT COUNT(*) FROM news_articles WHERE content_status IN ('fetched', 'translated')").fetchone()[0]; db.close()
+    task_state.init_state('kcs', total=n)
+    _kcs_state["running"] = True
+    _kcs_state["total"] = n
+    _kcs_state["current"] = "启动中..."
+    threading.Thread(target=_batch_ai_kcs, daemon=True).start()
+    return {"ok": True, "message": f"启动合并 KCS，预计 {n} 篇", "pending": n}
+
+@router.get("/batch-kcs/status")
+def get_batch_kcs_status(): return dict(_kcs_state)
+
+@router.post("/batch-kcs/cancel")
+def cancel_batch_kcs():
+    global _kcs_state
+    _kcs_state["cancelled"] = True
+    close_active_client()
+    return {"ok": True, "message": "已发送 KCS 取消信号"}
+
+@router.post("/batch-kcs/force-reset")
+def force_reset_batch_kcs():
+    global _kcs_state
+    return _force_reset('kcs', _kcs_state)
 
 @router.post("/batch-recluster")
 def start_batch_recluster():
@@ -1427,9 +1569,8 @@ def _batch_clean():
                 db2.close()
                 continue
 
-            # 直接将原始 HTML 传给 AI — AI 的 system prompt 已明确要求移除
-            # 脚本/广告/导航等非正文元素，本地预清理反而破坏结构、浪费算力
-            # Nex-N2-Pro 不支持 SSE 流式，改用前后日志记录耗时
+            # 直接将原始 HTML 传给 AI — system prompt 已明确要求移除非正文元素
+            # 本地预清理反而破坏结构、浪费算力
             _log(_clean_state, f"#{aid} 📡 AI 清洗中... (HTML {len(html)//1024}KB)")
             try:
                 t0 = time.time()
@@ -1574,16 +1715,14 @@ def force_reset_batch_clean():
 _full_state = _new_state()
 
 def _batch_ai_full():
-    """三轨并行管道 — Nex(清洗) ∥ Qwen(关键/分类/评分) ∥ DeepSeek(翻译/分析/聚类/摘要/排序/链)。"""
+    """三轨并行管道 — 清洗 ∥ 翻译+分析+聚类+摘要+排序+链 ∥ KCS(关键词+分类+评分合并)。"""
     global _full_state
     _reset_state(_full_state, steps=[])
 
     # ── 三轨定义 ──────────────────────────────────────────────
-    # 各轨独立速率限制，互不阻塞
-    qwen_steps = [
-        ("关键词提取",    _batch_ai_keywords,         _kw_state,         'keywords'),
-        ("智能分类",      _batch_ai_classify,         _cls_state,        'classify'),
-        ("优先级评分",    _batch_ai_score,            _score_state,      'score'),
+    # Track 3 (Simple): 合并关键词+分类+评分为一次调用，大幅减少 API 调用
+    simple_steps = [
+        ("KCS 合并处理",  _batch_ai_kcs,              _kcs_state,        'kcs'),
     ]
     deepseek_steps = [
         ("翻译",          _batch_translate,           _translate_state,  'translate'),
@@ -1593,10 +1732,10 @@ def _batch_ai_full():
         ("全景图排序",    _batch_ai_rank_events,      _rank_state,       'rank_events'),
         ("构筑逻辑链",    _build_logic_chains,        _chain_state,      'build_chains'),
     ]
-    step_names = ["内容清洗"] + [nm for nm, _, _, _ in deepseek_steps] + [nm for nm, _, _, _ in qwen_steps]
+    step_names = ["内容清洗"] + [nm for nm, _, _, _ in deepseek_steps] + [nm for nm, _, _, _ in simple_steps]
     _full_state["steps"] = [{"name": nm, "status": "pending"} for nm in step_names]
     _full_state["total"] = len(step_names)
-    _log(_full_state, f"🚀 三轨并行 — Nex(清洗) ∥ DSv3.2(翻译+分析+链) ∥ Qwen(关键词+分类+评分)")
+    _log(_full_state, "🚀 三轨并行 — 清洗 ∥ 翻译+分析+链 ∥ KCS(关键词+分类+评分合并)")
 
     import threading as _th
 
@@ -1638,33 +1777,33 @@ def _batch_ai_full():
             else:
                 idle_rounds = 0
 
-    # ── 轨道 1: 清洗 (Nex) ───────────────────────────────────
+    # ── 轨道 1: 内容清洗 ─────────────────────────────────
     _full_state["steps"][0]["status"] = "running"
     ct = _th.Thread(target=_batch_clean, daemon=True)
     ct.start()
-    _log(_full_state, "┣ [Nex] 内容清洗 — 已启动")
+    _log(_full_state, "┣ [清洗] 内容清洗 — 已启动")
 
     # ── 轨道 2: DeepSeek (翻译→分析→聚类→摘要→排序→链) ─────
     ds_idx = 1  # after clean
-    dt = _th.Thread(target=_run_seq, args=("DS", deepseek_steps, ds_idx), daemon=True)
+    dt = _th.Thread(target=_run_seq, args=("主流程", deepseek_steps, ds_idx), daemon=True)
     dt.start()
-    _log(_full_state, "┣ [DS] 翻译+分析+聚类+摘要+排序+链 — 已启动")
+    _log(_full_state, "┣ [主流程] 翻译+分析+聚类+摘要+排序+链 — 已启动")
 
-    # ── 轨道 3: Qwen (关键词→分类→评分) ─────────────────────
-    qw_idx = ds_idx + len(deepseek_steps)
-    qt = _th.Thread(target=_run_seq, args=("Qwen", qwen_steps, qw_idx), daemon=True)
-    qt.start()
-    _log(_full_state, "┣ [Qwen] 关键词+分类+评分 — 已启动")
+    # ── 轨道 3: KCS 合并 (关键词+分类+评分一次完成) ─────
+    kcs_idx = ds_idx + len(deepseek_steps)
+    kt = _th.Thread(target=_run_seq, args=("KCS", simple_steps, kcs_idx), daemon=True)
+    kt.start()
+    _log(_full_state, "┣ [KCS] 关键词+分类+评分合并 — 已启动")
 
     # ── 等待所有轨道完成 ─────────────────────────────────────
     ct.join()
     if _full_state["steps"]:
         _full_state["steps"][0]["status"] = "skipped" if _clean_state.get("cancelled") else "done"
-    _log(_full_state, "┣ [Nex] 清洗完成")
+    _log(_full_state, "┣ [清洗] 清洗完成")
     dt.join()
-    _log(_full_state, "┣ [DS] DeepSeek 管道完成")
-    qt.join()
-    _log(_full_state, "┣ [Qwen] Qwen 管道完成")
+    _log(_full_state, "┣ [主流程] 翻译+分析+链 管道完成")
+    kt.join()
+    _log(_full_state, "┣ [KCS] KCS 合并管道完成")
 
     _full_state["running"] = False
     _full_state["current"] = "全部完成"

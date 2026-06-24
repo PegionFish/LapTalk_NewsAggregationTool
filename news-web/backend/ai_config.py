@@ -16,7 +16,7 @@ AI_ENDPOINTS = {
         'name': 'RSS 预过滤',
         'description': 'RSS 抓取后的内容预筛选',
         'default_base_url': 'https://api.siliconflow.cn/v1',
-        'default_model': 'Qwen/Qwen3.5-35B-A3B',
+        'default_model': 'deepseek-ai/DeepSeek-V4-Flash',
         'default_enabled': True,
         'params': ['enable_thinking', 'thinking_budget', 'json_response_format'],
         'legacy_field': None,
@@ -27,7 +27,7 @@ AI_ENDPOINTS = {
         'name': '内容清洗',
         'description': '去除广告/导航/推荐，提取纯净正文',
         'default_base_url': 'https://api.siliconflow.cn/v1',
-        'default_model': 'nex-agi/Nex-N2-Pro',
+        'default_model': 'deepseek-ai/DeepSeek-V4-Flash',
         'default_enabled': True,
         'params': ['enable_thinking', 'thinking_budget', 'json_response_format'],
         'legacy_field': 'clean',
@@ -36,7 +36,7 @@ AI_ENDPOINTS = {
         'name': 'AI 翻译',
         'description': '英文科技新闻自动译中文',
         'default_base_url': 'https://api.siliconflow.cn/v1',
-        'default_model': 'deepseek-ai/DeepSeek-V3.2',
+        'default_model': 'deepseek-ai/DeepSeek-V4-Flash',
         'default_enabled': False,
         'params': ['target_lang', 'max_tokens'],
         'legacy_field': 'translation',
@@ -45,7 +45,7 @@ AI_ENDPOINTS = {
         'name': '文章分析',
         'description': '单篇科技新闻深度分析摘要',
         'default_base_url': 'https://api.siliconflow.cn/v1',
-        'default_model': 'deepseek-ai/DeepSeek-V3.2',
+        'default_model': 'deepseek-ai/DeepSeek-V4-Flash',
         'default_enabled': True,
         'params': ['enable_thinking', 'thinking_budget', 'deep_thinking_max_tokens', 'json_response_format'],
         'legacy_field': 'openai',
@@ -54,7 +54,7 @@ AI_ENDPOINTS = {
         'name': '事件总结',
         'description': '为同一事件的多篇文章生成综合摘要',
         'default_base_url': 'https://api.siliconflow.cn/v1',
-        'default_model': 'deepseek-ai/DeepSeek-V3.2',
+        'default_model': 'deepseek-ai/DeepSeek-V4-Flash',
         'default_enabled': True,
         'params': ['enable_thinking', 'thinking_budget', 'deep_thinking_max_tokens', 'json_response_format'],
         'legacy_field': 'openai',
@@ -63,7 +63,7 @@ AI_ENDPOINTS = {
         'name': '事件排序',
         'description': '全景图推理全局事件优先级排序',
         'default_base_url': 'https://api.siliconflow.cn/v1',
-        'default_model': 'deepseek-ai/DeepSeek-V3.2',
+        'default_model': 'deepseek-ai/DeepSeek-V4-Flash',
         'default_enabled': True,
         'params': ['enable_thinking', 'thinking_budget', 'deep_thinking_max_tokens', 'json_response_format'],
         'legacy_field': 'openai',
@@ -72,7 +72,7 @@ AI_ENDPOINTS = {
         'name': '逻辑链构建',
         'description': '全景图推理识别事件分组并构筑逻辑链',
         'default_base_url': 'https://api.siliconflow.cn/v1',
-        'default_model': 'deepseek-ai/DeepSeek-V3.2',
+        'default_model': 'deepseek-ai/DeepSeek-V4-Flash',
         'default_enabled': True,
         'params': ['enable_thinking', 'thinking_budget', 'deep_thinking_max_tokens', 'json_response_format'],
         'legacy_field': 'openai',
@@ -81,7 +81,7 @@ AI_ENDPOINTS = {
         'name': '关键词提取',
         'description': '从标题+正文提取技术关键词',
         'default_base_url': 'https://api.siliconflow.cn/v1',
-        'default_model': 'Qwen/Qwen3.5-35B-A3B',
+        'default_model': 'deepseek-ai/DeepSeek-V4-Flash',
         'default_enabled': True,
         'params': ['enable_thinking', 'json_response_format'],
         'legacy_field': 'simple',
@@ -90,7 +90,7 @@ AI_ENDPOINTS = {
         'name': '话题分类',
         'description': 'AI 分类文章主题领域',
         'default_base_url': 'https://api.siliconflow.cn/v1',
-        'default_model': 'Qwen/Qwen3.5-35B-A3B',
+        'default_model': 'deepseek-ai/DeepSeek-V4-Flash',
         'default_enabled': True,
         'params': ['enable_thinking', 'json_response_format'],
         'legacy_field': 'simple',
@@ -99,7 +99,7 @@ AI_ENDPOINTS = {
         'name': '优先级评分',
         'description': 'AI 评估文章优先级（百分制 0~100）',
         'default_base_url': 'https://api.siliconflow.cn/v1',
-        'default_model': 'Qwen/Qwen3.5-35B-A3B',
+        'default_model': 'deepseek-ai/DeepSeek-V4-Flash',
         'default_enabled': True,
         'params': ['enable_thinking', 'json_response_format'],
         'legacy_field': 'simple',
@@ -335,20 +335,39 @@ def test_ai_endpoint(endpoint_key: str) -> dict:
             'model': ep_config.get('model', ''),
         }
 
-    # rss_prefilter 尚未接入
-    if endpoint_key == 'rss_prefilter':
-        return {
-            'endpoint_key': endpoint_key,
-            'ok': None,
-            'skipped': True,
-            'reason': AI_ENDPOINTS['rss_prefilter'].get('test_reason', '入口尚未接入'),
-        }
-
     import time as _time
     started = _time.monotonic()
 
     try:
-        if endpoint_key == 'translation':
+        if endpoint_key == 'rss_prefilter':
+            # 用一组模拟标题测试筛选逻辑
+            test_articles = [
+                (1, 'OpenAI releases GPT-5 with breakthrough reasoning capabilities', 'TechCrunch'),
+                (2, 'NVIDIA announces Blackwell Ultra GPU architecture for AI training', 'AnandTech'),
+                (3, 'Best gaming headsets for Elden Ring DLC 2024', 'IGN'),
+                (4, 'TSMC begins mass production of 2nm chips', 'Reuters'),
+                (5, 'How to beat Malenia in Elden Ring - complete guide', 'GameSpot'),
+            ]
+            from pipeline.ai_filter import filter_batch
+            result_ids = filter_batch(test_articles, model=ep_config.get('model'))
+            elapsed_ms = int((_time.monotonic() - started) * 1000)
+            if result_ids is None:
+                return {
+                    'endpoint_key': endpoint_key,
+                    'ok': False,
+                    'model': ep_config.get('model', ''),
+                    'error': 'API 调用失败',
+                    'elapsed_ms': elapsed_ms,
+                }
+            approved = [a[1] for a in test_articles if a[0] in result_ids]
+            return {
+                'endpoint_key': endpoint_key,
+                'ok': True,
+                'model': ep_config.get('model', ''),
+                'response': f'保留 {len(result_ids)} 篇: ' + '; '.join(approved[:3]),
+                'elapsed_ms': elapsed_ms,
+            }
+        elif endpoint_key == 'translation':
             test_text = "The quick brown fox jumps over the lazy dog."
             result = translate_to_chinese(test_text)
             elapsed_ms = int((_time.monotonic() - started) * 1000)

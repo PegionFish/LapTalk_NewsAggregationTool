@@ -1,7 +1,7 @@
 """
 OpenAI 兼容 API 客户端封装。
-面向 SiliconFlow DeepSeek V3.2，支持 160K 上下文、深度思考与结构化 JSON 输出。
-内容清洗已切回 SiliconFlow，大 HTML 自动拆分绕开上下文限制。
+支持大上下文窗口、深度思考与结构化 JSON 输出。
+超长 HTML 自动在块级元素边界拆分后分别处理。
 """
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ _DEEP_THINKING_INSTRUCTION = (
 
 
 def get_client() -> OpenAI:
-    """获取 AI 分析专用 OpenAI 兼容客户端（SiliconFlow）。"""
+    """获取 AI 分析专用 OpenAI 兼容客户端。"""
     global _active_client
     client = OpenAI(
         base_url=config.openai_base_url,
@@ -63,7 +63,7 @@ def close_active_client() -> None:
 
 
 def _thinking_enabled(enable_thinking: bool | None) -> bool:
-    """判断本次请求是否启用 SiliconFlow enable_thinking。"""
+    """判断本次请求是否启用深度思考。"""
     if enable_thinking is None:
         return config.ai_enable_thinking
     return bool(enable_thinking)
@@ -274,7 +274,7 @@ def build_chain_title(events_text: str) -> str:
 
 
 def analyze_article(title: str, text: str) -> str:
-    """对单篇科技新闻文章生成中文分析摘要。HTML 提取纯文本后传入 160K 上下文。"""
+    """对单篇科技新闻文章生成中文分析摘要。HTML 提取纯文本后利用大上下文窗口做全量分析。"""
     content = _prepare_content(text)
     return chat(
         _with_deep_thinking(
@@ -300,11 +300,11 @@ def analyze_article(title: str, text: str) -> str:
 
 
 # ══════════════════════════════════════════════════════════════
-# HTML 拆分 — 绕开 160K 上下文限制
+# HTML 拆分 — 极端大文件在块级元素边界拆分后分别清洗
 # ══════════════════════════════════════════════════════════════
 
 _HTML_CHARS_PER_TOKEN = 2.0        # 英文 HTML 约 2 字符/token（保守估计）
-_HTML_MAX_CHUNK_CHARS = 180_000    # 每块约 90K tokens，为系统提示+输出预留 70K
+_HTML_MAX_CHUNK_CHARS = 1_800_000  # 每块约 900K tokens，为系统提示+输出预留 100K
 
 
 def _split_html_at_blocks(html: str, max_chars: int = _HTML_MAX_CHUNK_CHARS) -> list[str]:
@@ -364,11 +364,11 @@ def _split_html_at_blocks(html: str, max_chars: int = _HTML_MAX_CHUNK_CHARS) -> 
 def clean_article_content(html: str, on_stream: "Callable[[str, int, int], None] | None" = None) -> str:
     """将文章 HTML 送入 LLM，提取纯净正文（去广告/导航/侧栏/弹窗/评论）。
 
-    使用 SiliconFlow DeepSeek V3.2 (160K 上下文)。对于超大 HTML（>180K 字符），
-    自动在块级元素边界拆分为多块分别清洗后合并，绕开上下文窗口限制。
+    利用大上下文窗口做全量清洗。对于超大 HTML，自动在块级元素边界拆分为多块
+    分别清洗后合并。
 
     返回仅含文章正文的 HTML 片段，不包含 <html>/<head>/<body>。
-    传入 on_stream(text, content_chars, thinking_chars) 回调启用 SSE 流式（小文件）。
+    传入 on_stream(text, content_chars, thinking_chars) 回调启用 SSE 流式。
     """
     system_prompt = (
         "你是一个新闻文章内容提取专家。"
@@ -383,7 +383,7 @@ def clean_article_content(html: str, on_stream: "Callable[[str, int, int], None]
         "不要添加解释说明。不要包含 <html>/<head>/<body> 标签。"
     )
 
-    # ── 大文件拆分清洗 ──
+    # ── 超大文件拆分清洗 ──
     if len(html) > _HTML_MAX_CHUNK_CHARS:
         chunks = _split_html_at_blocks(html)
         if on_stream:
@@ -410,7 +410,6 @@ def clean_article_content(html: str, on_stream: "Callable[[str, int, int], None]
                     temperature=0.05,
                     enable_thinking=True,
                     model=config.clean_model,
-                    # client 默认 get_client() → SiliconFlow
                 )
                 if result and len(result.strip()) > 50:
                     cleaned_parts.append(result.strip())
@@ -430,7 +429,7 @@ def clean_article_content(html: str, on_stream: "Callable[[str, int, int], None]
 
         return "\n".join(cleaned_parts)
 
-    # ── 小文件直接清洗（原逻辑）──
+    # ── 常规文件直接清洗 ──
     prompt = (
         "从以下 HTML 页面中提取文章正文内容。\n"
         "保留的 HTML 标签：标题 (h1-h6)、段落 (p)、带 href 的链接 (a)、"
@@ -442,8 +441,7 @@ def clean_article_content(html: str, on_stream: "Callable[[str, int, int], None]
         f"{html}"
     )
 
-    # 清洗是结构性提取任务，深度思考对质量提升微乎其微但大幅增加推理 token。
-    # 模型已切回 SiliconFlow DeepSeek V3.2（160K），大文件走上方拆分路径。
+    # 清洗是结构性提取任务，深度思考对质量提升有限但增加推理 token。
     return chat(
         prompt,
         system_prompt=system_prompt,
@@ -453,7 +451,6 @@ def clean_article_content(html: str, on_stream: "Callable[[str, int, int], None]
         stream_log=on_stream is not None,
         on_stream_chunk=on_stream,
         model=config.clean_model,
-        # client 默认 get_client() → SiliconFlow
     )
 
 
@@ -493,7 +490,7 @@ def extract_keywords_ai(title: str, text: str = "", source: str = "", model: str
 
 
 def classify_article_ai(title: str, text: str, model: str | None = None) -> dict | None:
-    """AI 分类文章主题。HTML 提取纯文本后传入 160K 上下文。model=None 使用全局 openai_model。"""
+    """AI 分类文章主题。利用大上下文窗口做全量分类。"""
     content = _prepare_content(text)
     result = _ai_json(
         f"标题：{title}\n正文：{content}\n\n"
@@ -513,7 +510,7 @@ def classify_article_ai(title: str, text: str, model: str | None = None) -> dict
 
 
 def score_priority_ai(title: str, text: str, source: str, days_old: int = 0, model: str | None = None) -> dict | None:
-    """AI 评估文章优先级（百分制 0~100）。HTML 提取纯文本后传入 160K 上下文。model=None 使用全局 openai_model。"""
+    """AI 评估文章优先级（百分制 0~100）。利用大上下文窗口做全量评估。"""
     content = _prepare_content(text)
     result = _ai_json(
         f"标题：{title}\n来源：{source}\n发布天数：{days_old}\n正文：{content}\n\n"
@@ -528,6 +525,82 @@ def score_priority_ai(title: str, text: str, source: str, days_old: int = 0, mod
     )
     if isinstance(result, dict) and "score" in result:
         return result
+    return None
+
+
+def extract_keywords_classify_score_ai(
+    title: str, text: str = "", source: str = "", days_old: int = 0,
+    model: str | None = None,
+) -> dict | None:
+    """一次 API 调用同时完成关键词提取、话题分类和优先级评分。
+
+    利用大上下文窗口合并三个轻量任务，减少 API 调用次数。
+    返回 {keywords, category, tags, score, label, reason} 或 None。
+    """
+    content = _prepare_content(text)
+    result = _ai_json(
+        f"标题：{title}\n来源：{source}\n发布天数：{days_old}\n正文：{content}\n\n"
+        "请一次性完成以下三项任务，输出一个 JSON 对象：\n"
+        "{\n"
+        '  "keywords": ["技术关键词1","关键词2",...] (5-15个，按重要性排序，技术名词保留英文),\n'
+        '  "category": "细分领域（AI/LLM, PC/Hardware, Mobile, Gaming, Security, Semiconductors, Enterprise, Automotive, Space, Chip/Wafer, OpenSource, Regulation, Other）",\n'
+        '  "tags": ["标签1","标签2","标签3","标签4","标签5"],\n'
+        '  "score": 0-100 的整数（来源权威性30% + 内容重要性40% + 时效性30%），\n'
+        '  "label": "high/medium/low（high:>=70, medium:35-69, low:<35）",\n'
+        '  "reason": "30字以内评分理由"\n'
+        "}",
+        "你是科技新闻分析引擎。一次完成关键词提取、话题分类和优先级评分。只输出 JSON。",
+        max_tokens=4096,
+        temperature=0.05,
+        enable_thinking=False,
+        model=model,
+    )
+    if isinstance(result, dict) and "keywords" in result:
+        return result
+    return None
+
+
+def extract_keywords_batch(articles: list[dict], model: str | None = None) -> list[list[str]] | None:
+    """批量提取多篇文章关键词，一次 API 调用处理多篇文章。
+
+    Args:
+        articles: [{"id": int, "title": str, "text": str, "source": str}, ...]
+        model: 可选模型覆写
+
+    Returns:
+        [[kw1, kw2, ...], ...] 与输入顺序对应的关键词列表；失败返回 None
+    """
+    if not articles:
+        return []
+
+    # 组装批量 prompt
+    items = []
+    for a in articles:
+        content = _prepare_content(a.get("text", ""))
+        items.append(
+            f"[ID:{a['id']}] 标题：{a.get('title', '')}\n"
+            f"来源：{a.get('source', '')}\n"
+            f"正文：{content[:3000]}\n"  # 批量模式下正文截取前 3000 字
+        )
+
+    prompt = (
+        "请为以下每篇文章提取 5-15 个技术关键词。\n"
+        "输出 JSON 数组的数组，按文章顺序排列：\n"
+        '[[文章1的关键词], [文章2的关键词], ...]\n'
+        "关键词应覆盖：产品名、公司名、技术名、核心概念。技术名词保留英文原文。\n\n"
+        + "\n---\n".join(items)
+    )
+
+    result = _ai_json(
+        prompt,
+        "你是科技新闻关键词批量提取引擎。只输出 JSON 数组的数组，不输出其他内容。",
+        max_tokens=8192,
+        temperature=0.05,
+        enable_thinking=False,
+        model=model,
+    )
+    if isinstance(result, list) and len(result) == len(articles):
+        return [[str(k) for k in kw_list if isinstance(k, str)] for kw_list in result]
     return None
 
 
@@ -621,31 +694,55 @@ def generate_event_summary_ai(titles_block: str) -> str:
 
 
 # ══════════════════════════════════════════════════════════════
-# 蒸馏数据全景图 — 利用 160K 上下文做全局推理
+# 全景图全局推理 — 利用大上下文窗口一次性传入全部事件数据
 # ══════════════════════════════════════════════════════════════
 
 
 def build_panoramic_context(conn) -> str:
-    """从数据库组装蒸馏后的事件全景图：事件列表 + 关键词 + 已有关系。"""
+    """从数据库组装完整事件全景图：每个事件含全部关联文章的标题、日期、评分、关键词及已有关系。
+
+    利用大上下文窗口一次性传入全部数据，让 AI 有充足信息做高质量全局推理。
+    """
     import json
 
     # 活跃事件（按文章数降序）
     events = conn.execute("""
-        SELECT e.id, e.title, e.article_count, e.first_seen, e.ai_summary
+        SELECT e.id, e.title, e.article_count, e.first_seen, e.last_seen, e.ai_summary
         FROM events e
         WHERE e.status = 'active' AND e.article_count >= 1
         ORDER BY e.article_count DESC
     """).fetchall()
 
+    # 每个事件的关联文章列表（含标题、发布日期、优先级）
+    event_articles: dict[int, list[dict]] = {}
+    for evt_id, _, _, _, _, _ in events:
+        rows = conn.execute("""
+            SELECT a.title, a.published_date, a.priority_score, a.priority_label,
+                   a.ai_keywords, a.keywords
+            FROM news_articles a
+            JOIN news_article_events ae ON ae.article_id = a.id
+            WHERE ae.event_id = ?
+            ORDER BY a.published_date DESC
+        """, (evt_id,)).fetchall()
+        articles = []
+        for title, pub_date, score, label, ai_kw, kw in rows:
+            articles.append({
+                'title': title,
+                'date': pub_date or '',
+                'score': score or 0.0,
+                'label': label or '',
+            })
+        event_articles[evt_id] = articles
+
     # 每个事件的关键词聚合
-    event_kws = {}
-    for evt_id, _, _, _, _ in events:
+    event_kws: dict[int, set[str]] = {}
+    for evt_id, _, _, _, _, _ in events:
         rows = conn.execute("""
             SELECT a.ai_keywords, a.keywords FROM news_articles a
             JOIN news_article_events ae ON ae.article_id = a.id
             WHERE ae.event_id = ?
         """, (evt_id,)).fetchall()
-        kws = set()
+        kws: set[str] = set()
         for (ai_kw, kw) in rows:
             for src in (ai_kw, kw):
                 try:
@@ -654,8 +751,7 @@ def build_panoramic_context(conn) -> str:
                             kws.add(k)
                 except (json.JSONDecodeError, TypeError):
                     pass
-        if kws:
-            event_kws[evt_id] = kws
+        event_kws[evt_id] = kws
 
     # 已有事件关系
     relations = conn.execute("""
@@ -663,19 +759,31 @@ def build_panoramic_context(conn) -> str:
         FROM event_relations r
     """).fetchall()
 
-    # 组装结构化文本
-    lines = []
+    # 组装结构化文本 — 全量数据，不截断
+    lines: list[str] = []
     lines.append(f"=== 事件全景图（共 {len(events)} 个活跃事件）===\n")
 
-    for evt_id, title, count, first_seen, summary in events:
+    for evt_id, title, count, first_seen, last_seen, summary in events:
         kws = event_kws.get(evt_id, set())
         kw_str = ", ".join(sorted(kws)) if kws else "无"
-        summary_str = f" | 摘要: {summary[:300]}" if summary else ""
-        lines.append(f"[#{evt_id}] {title} (文章×{count}, 首次:{first_seen})")
-        lines.append(f"  关键词: {kw_str}{summary_str}")
+        lines.append(f"[#{evt_id}] {title}")
+        lines.append(f"  文章数: {count} | 首次出现: {first_seen} | 最后更新: {last_seen}")
+        lines.append(f"  关键词: {kw_str}")
+        if summary:
+            lines.append(f"  摘要: {summary}")
+
+        # 列出所有关联文章
+        articles = event_articles.get(evt_id, [])
+        if articles:
+            lines.append(f"  关联文章 ({len(articles)} 篇):")
+            for a in articles:
+                score_str = f" [评分:{a['score']:.0f}/{a['label']}]" if a['score'] else ""
+                date_str = f" ({a['date']})" if a['date'] else ""
+                lines.append(f"    - {a['title']}{date_str}{score_str}")
+        lines.append("")
 
     if relations:
-        lines.append(f"\n=== 已有事件关系（共 {len(relations)} 条）===")
+        lines.append(f"=== 已有事件关系（共 {len(relations)} 条）===")
         for from_id, to_id, rel in relations:
             lines.append(f"  #{from_id} --{rel}--> #{to_id}")
 
@@ -693,7 +801,7 @@ def rank_events_panoramic(context: str) -> list[dict] | None:
             "同一家公司/产品的连续报道应整体排高。已有关系的事件组应相邻排列。"
         ),
         "你是资深科技新闻编辑，负责全局事件优先级排序。只输出 JSON 数组，不输出其他内容。",
-        max_tokens=8192,
+        max_tokens=262144,
         temperature=0.1,
     )
     if isinstance(result, list):
@@ -717,7 +825,7 @@ def build_chains_panoramic(context: str) -> list[dict] | None:
             "4. 仅标题相似但无实质关联的事件不要强行分组"
         ),
         "你是资深科技新闻编辑，擅长识别事件之间的深层关联。只输出 JSON 数组，不输出其他内容。",
-        max_tokens=8192,
+        max_tokens=262144,
         temperature=0.1,
     )
     if isinstance(result, list):

@@ -8,27 +8,30 @@ DEFAULT_CONFIG = {
                   '(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
     'openai_base_url': 'https://api.siliconflow.cn/v1',
     'openai_api_key': '',
-    'openai_model': 'deepseek-ai/DeepSeek-V3.2',
-    'simple_model': 'Qwen/Qwen3.5-35B-A3B',       # 关键词/分类/评分等轻量任务
-    'clean_model': 'nex-agi/Nex-N2-Pro',            # 内容清洗专用（SiliconFlow 平台）
-    'clean_base_url': 'https://api.siliconflow.cn/v1',  # 清洗 API 地址（已切回 SiliconFlow）
-    'clean_api_key': '',                                 # 清洗 API 密钥（空=复用 openai_api_key）
-    'pipeline_model': 'deepseek-ai/DeepSeek-V3.1-Terminus',  # 分析/分类/评分等线性管道
+    'openai_model': 'deepseek-ai/DeepSeek-V4-Flash',
+    'simple_model': 'deepseek-ai/DeepSeek-V4-Flash',
+    'clean_model': 'deepseek-ai/DeepSeek-V4-Flash',
+    'clean_base_url': 'https://api.siliconflow.cn/v1',
+    'clean_api_key': '',                                 # 空=复用 openai_api_key
+    'pipeline_model': 'deepseek-ai/DeepSeek-V4-Flash',
     'ai_enable_thinking': True,
     'ai_thinking_budget': 32768,
     'ai_deep_thinking_max_tokens': 8192,
     'ai_json_response_format': True,
+    # 大上下文窗口配置 — 用于自适应调整输入/拆分阈值
+    'ai_context_limit': 1_000_000,         # 模型上下文窗口大小（tokens）
+    'ai_max_input_chars': 1_800_000,       # 单次 API 调用最大输入字符数（~2 chars/token 估算）
     'pipeline_schedule_enabled': True,
     'pipeline_cron_hours': [10, 17],      # 数据采集每天运行的小时数（0-23）
     'pipeline_cron_minutes': [0, 0],      # 对应每个小时的分钟数
     'ai_cron_enabled': True,              # AI 全流程定时开关
     'ai_cron_hours': [15, 22],            # AI 全流程每天运行的小时数（0-23）
     'ai_cron_minutes': [0, 0],            # 对应每个小时的分钟数
-    # 翻译 API — 独立配置，默认指向硅基流动 DeepSeek V3.2
+    # 翻译 API — 独立配置
     'translation_enabled': False,
     'translation_base_url': 'https://api.siliconflow.cn/v1',
     'translation_api_key': '',
-    'translation_model': 'deepseek-ai/DeepSeek-V3.2',
+    'translation_model': 'deepseek-ai/DeepSeek-V4-Flash',
     'translation_target_lang': 'zh-CN',
     # 内容缓存目录 — 默认为 DB 同级的 content/ 目录
     'content_cache_path': '',

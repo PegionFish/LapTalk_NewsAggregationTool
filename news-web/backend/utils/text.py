@@ -1,11 +1,11 @@
 """
-文本提取和语言检测 — 供 fetch_content 和 API 层共用
+文本提取和语言检测 — 供 fetch_content 和 API 层共用。
 """
 import re
 import html as html_mod
 
-# DeepSeek V3.2 160K 上下文下，正文提取默认保留更完整内容；极端页面仍保留上限防止异常请求。
-FULL_TEXT_MAX_LENGTH = 120000
+# 大上下文窗口下正文提取保留完整内容；极端页面仍设上限防止异常请求。
+FULL_TEXT_MAX_LENGTH = 1_000_000
 
 
 def extract_text_from_html(html: str, max_length: int = FULL_TEXT_MAX_LENGTH) -> str:

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-AI 预筛选 — 用 DeepSeek V3.2 判断文章是否值得缓存。
+AI 预筛选 — 批量判断文章标题是否值得缓存。
 先筛标题，再下载，避免浪费时间缓存不需要的内容。
 
 流程：
   1. 查询 DB 中 local_path='' 且 ai_filtered=0 的文章
-  2. 每批 30 个标题发给 DeepSeek
-  3. DeepSeek 返回保留/拒绝列表
+  2. 每批 200 个标题发给 AI
+  3. AI 返回保留/拒绝列表
   4. 更新 DB 的 ai_filtered 字段
 """
 import sys, os, json, sqlite3, time
@@ -17,7 +17,7 @@ from config import config
 from ai_client import chat
 from db.news_db import NewsDB
 
-BATCH_SIZE = 30
+BATCH_SIZE = 200
 
 FILTER_PROMPT = """你是新闻筛选助手。根据以下标题列表，判断哪些文章值得下载全文阅读。
 
@@ -47,8 +47,12 @@ FILTER_PROMPT = """你是新闻筛选助手。根据以下标题列表，判断�
 例如：1,3,5,8"""
 
 
-def filter_batch(news_articles: list) -> set | None:
+def filter_batch(news_articles: list, model: str | None = None) -> set | None:
     """对一批文章标题调用 AI 筛选，返回保留的 ID 集合。
+
+    Args:
+        news_articles: [(id, title, source), ...] 待筛选文章列表
+        model: 可选，指定使用的模型 ID（None 使用 config.openai_model）
 
     Returns:
         set: AI 判定应保留的文章 ID
@@ -60,7 +64,7 @@ def filter_batch(news_articles: list) -> set | None:
     prompt = FILTER_PROMPT + "\n\n" + "\n".join(lines)
 
     try:
-        result = chat(prompt, system_prompt="你是精准的新闻筛选器。只输出ID列表。", max_tokens=200)
+        result = chat(prompt, system_prompt="你是精准的新闻筛选器。只输出ID列表。", max_tokens=200, model=model)
         ids = set()
         for part in result.replace('，', ',').split(','):
             part = part.strip().strip('[]').strip()
@@ -81,6 +85,14 @@ def run_ai_filter(db_path: str = None):
         print("⚠️ 未配置 AI API Key，跳过筛选")
         return
 
+    # 读取 rss_prefilter 入口配置的模型
+    try:
+        from ai_config import to_ai_endpoint_config
+        ep_config = to_ai_endpoint_config().get('ai_endpoints', {}).get('rss_prefilter', {})
+        filter_model = ep_config.get('model')
+    except Exception:
+        filter_model = None
+
     # 用 NewsDB 触发迁移（确保 ai_filtered 列存在）
     db = NewsDB(db_path)
     conn = db._conn()
@@ -98,13 +110,13 @@ def run_ai_filter(db_path: str = None):
         conn.close()
         return
 
-    print(f"📋 待筛选文章: {len(rows)} 篇")
+    print(f"📋 待筛选文章: {len(rows)} 篇 (模型: {filter_model or config.openai_model})")
     approved = 0
     rejected = 0
 
     for i in range(0, len(rows), BATCH_SIZE):
         batch = rows[i:i + BATCH_SIZE]
-        batch_ids = filter_batch(batch)
+        batch_ids = filter_batch(batch, model=filter_model)
 
         if batch_ids is None:
             # API 调用失败 — 保持 ai_filtered=0，等待下次重试，不标记为拒绝
