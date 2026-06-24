@@ -215,7 +215,7 @@ export default function Dashboard() {
             <div style={{ flex: 1 }}>
               <div style={{ fontWeight: 700, fontSize: 15 }}>一键全流程 AI 处理</div>
               <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                翻译 → 分析 → 关键词 → 分类 → 评分 → 聚类 → 摘要 → 构筑逻辑链
+                清洗 ∥ 翻译+分析+聚类+摘要+排序+链 ∥ KCS(关键词+分类+评分合并)
               </div>
             </div>
             <Button

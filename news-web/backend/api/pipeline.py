@@ -977,6 +977,9 @@ def _batch_ai_kcs():
                    source, fetched_at
             FROM news_articles
             WHERE content_status IN ('fetched', 'translated')
+              AND (ai_keywords IS NULL OR ai_keywords = ''
+                   OR ai_category IS NULL OR ai_category = ''
+                   OR ai_priority_score IS NULL OR ai_priority_score = 0.0)
             ORDER BY id DESC
         """).fetchall(); db.close()
         if not rows: _kcs_state["running"] = False; return
@@ -1417,7 +1420,7 @@ def start_batch_kcs():
     if _kcs_state.get("running"): return {"ok": False, "message": "KCS 已在运行中"}
     ok, msg = _check_and_lock('kcs')
     if not ok: return {"ok": False, "message": msg}
-    db = _conn(); n = db.execute("SELECT COUNT(*) FROM news_articles WHERE content_status IN ('fetched', 'translated')").fetchone()[0]; db.close()
+    db = _conn(); n = db.execute("SELECT COUNT(*) FROM news_articles WHERE content_status IN ('fetched', 'translated') AND (ai_keywords IS NULL OR ai_keywords = '' OR ai_category IS NULL OR ai_category = '' OR ai_priority_score IS NULL OR ai_priority_score = 0.0)").fetchone()[0]; db.close()
     task_state.init_state('kcs', total=n)
     _kcs_state["running"] = True
     _kcs_state["total"] = n
