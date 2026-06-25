@@ -1,6 +1,6 @@
 """文章级管线 API — 缓存→清洗→翻译→分析+KCS"""
 import threading, logging, time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED, TimeoutError as FuturesTimeoutError
 from datetime import datetime
 from fastapi import APIRouter
 
@@ -74,35 +74,55 @@ def _run_batch():
     # process_article 每步即时写 DB，并行仅加速 AI 调用
     # 降低并发数减少 SQLite WAL 写锁竞争（50→10），避免事件循环阻塞
     done = 0; failed = 0
+    balance_paused = False
     MAX_WORKERS = 10
+    ARTICLE_TIMEOUT = 180  # 单篇文章最长处理时间（秒），超时跳过
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         future_to_aid = {executor.submit(process_article, aid): aid for (aid,) in rows}
-        for future in as_completed(future_to_aid):
-            aid = future_to_aid[future]
-            try:
-                r = future.result()
-                if r["ok"]:
-                    done += 1
-                    DashboardStream.publish("article_done", {"id": aid, "ok": True, "steps": r.get("steps", {})})
-                else:
+        pending = set(future_to_aid)
+        while pending:
+            done_now, pending = wait(pending, timeout=ARTICLE_TIMEOUT, return_when=FIRST_COMPLETED)
+            if not done_now:
+                # 超时：所有剩余 future 都卡住了，标记为失败
+                for future in pending:
+                    aid = future_to_aid[future]
+                    future.cancel()
                     failed += 1
-                    err = r.get('error', '')[:100]
+                    _article_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] #{aid} ❌ 超时({ARTICLE_TIMEOUT}s)")
+                    DashboardStream.publish("article_failed", {"id": aid, "error": f"超时({ARTICLE_TIMEOUT}s)", "step": "timeout"})
+                _article_state["done"] = done
+                _article_state["failed"] = failed
+                _article_state["current"] = f"{done+failed}/{total}"
+                break
+            for future in done_now:
+                aid = future_to_aid[future]
+                try:
+                    r = future.result()
+                    if r["ok"]:
+                        done += 1
+                        DashboardStream.publish("article_done", {"id": aid, "ok": True, "steps": r.get("steps", {})})
+                    else:
+                        failed += 1
+                        err = r.get('error', '')[:100]
+                        _article_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] #{aid} ❌ {err}")
+                        DashboardStream.publish("article_failed", {"id": aid, "error": err, "step": "unknown"})
+                except Exception as e:
+                    from ai_client import BalanceInsufficientError
+                    if isinstance(e, BalanceInsufficientError):
+                        _article_state["current"] = "余额不足，已暂停"
+                        _article_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] ⏸️ 余额不足，管线暂停")
+                        DashboardStream.publish("article_paused", {"error": str(e)})
+                        balance_paused = True
+                        break
+                    failed += 1
+                    err = str(e)[:100]
                     _article_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] #{aid} ❌ {err}")
-                    DashboardStream.publish("article_failed", {"id": aid, "error": err, "step": "unknown"})
-            except Exception as e:
-                from ai_client import BalanceInsufficientError
-                if isinstance(e, BalanceInsufficientError):
-                    _article_state["current"] = "余额不足，已暂停"
-                    _article_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] ⏸️ 余额不足，管线暂停")
-                    DashboardStream.publish("article_paused", {"error": str(e)})
-                    break  # 停止提交新任务，已提交的会自然完成
-                failed += 1
-                err = str(e)[:100]
-                _article_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] #{aid} ❌ {err}")
-                DashboardStream.publish("article_failed", {"id": aid, "error": err, "step": "thread"})
-            _article_state["done"] = done
-            _article_state["failed"] = failed
-            _article_state["current"] = f"{done+failed}/{total}"
+                    DashboardStream.publish("article_failed", {"id": aid, "error": err, "step": "thread"})
+                _article_state["done"] = done
+                _article_state["failed"] = failed
+                _article_state["current"] = f"{done+failed}/{total}"
+            if balance_paused:
+                break
 
     _article_state["current"] = "完成"
     DashboardStream.publish("article_batch_done", {"done": done, "failed": failed})

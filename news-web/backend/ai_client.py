@@ -37,7 +37,7 @@ def get_client() -> OpenAI:
     client = OpenAI(
         base_url=config.openai_base_url,
         api_key=config.openai_api_key or 'sk-placeholder',
-        timeout=1800.0,  # 30 分钟 — 适配慢速模型 token 生成
+        timeout=120.0,  # 120 秒 — 超时抛异常让上层正常处理，避免线程永久挂起
     )
     _active_client = client
     return client

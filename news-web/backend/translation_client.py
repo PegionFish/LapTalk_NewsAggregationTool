@@ -22,7 +22,7 @@ def get_client() -> OpenAI:
     return OpenAI(
         base_url=config.translation_base_url,
         api_key=config.translation_api_key or 'sk-placeholder',
-        timeout=1800.0,
+        timeout=120.0,  # 120 秒 — 超时抛异常让上层正常处理
     )
 
 
