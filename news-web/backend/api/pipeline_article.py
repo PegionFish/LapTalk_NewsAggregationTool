@@ -72,8 +72,9 @@ def _run_batch():
         return
 
     # process_article 每步即时写 DB，并行仅加速 AI 调用
+    # 降低并发数减少 SQLite WAL 写锁竞争（50→10），避免事件循环阻塞
     done = 0; failed = 0
-    MAX_WORKERS = 50
+    MAX_WORKERS = 10
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         future_to_aid = {executor.submit(process_article, aid): aid for (aid,) in rows}
         for future in as_completed(future_to_aid):

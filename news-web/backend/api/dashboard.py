@@ -119,9 +119,10 @@ async def dashboard_stream(request: Request):
     """SSE 端点 — 推送仪表盘所有状态事件。"""
     async def event_generator():
         q = DashboardStream.subscribe()
+        loop = asyncio.get_event_loop()
         try:
-            # 初始快照：stats + 当前管线状态
-            stats = _get_stats_snapshot()
+            # 初始快照：stats + 当前管线状态（run_in_executor 避免阻塞事件循环）
+            stats = await loop.run_in_executor(None, _get_stats_snapshot)
             yield f"event: stats\ndata: {json.dumps(stats, ensure_ascii=False)}\n\n"
             # 推送当前文章管线状态（懒导入避免循环引用）
             try:
@@ -137,7 +138,6 @@ async def dashboard_stream(request: Request):
             except Exception:
                 pass
             last_stats = datetime.now()
-            loop = asyncio.get_event_loop()
             while True:
                 if await request.is_disconnected():
                     break
@@ -148,7 +148,7 @@ async def dashboard_stream(request: Request):
                 except asyncio.TimeoutError:
                     now = datetime.now()
                     if (now - last_stats).total_seconds() >= 10:
-                        stats = _get_stats_snapshot()
+                        stats = await loop.run_in_executor(None, _get_stats_snapshot)
                         yield f"event: stats\ndata: {json.dumps(stats, ensure_ascii=False)}\n\n"
                         last_stats = now
         finally:
