@@ -114,7 +114,7 @@ async def _run_pipeline_job():
 
 
 # ── SQLite backup (daily 03:00, keep 7 days) ─────────────
-async def _backup_db():
+def _backup_db_sync():
     """VACUUM INTO a date-stamped backup, prune older than 7 days."""
     if not config.db_path or not os.path.exists(config.db_path):
         logger.warning("Backup skipped: db_path not configured or file missing")
@@ -159,20 +159,20 @@ def start_scheduler():
         return
 
     if not scheduler.running:
-        # 数据采集管道
+        # 数据采集管道（使用同步版本，BackgroundScheduler 在线程池中运行）
         if pipeline_enabled:
             triggers = _build_cron_triggers()
             for trigger in triggers:
-                scheduler.add_job(_run_pipeline_job, trigger)
+                scheduler.add_job(_run_pipeline_job_sync, trigger)
         # 事件管线
         if ai_enabled:
             ai_triggers = _build_ai_cron_triggers()
             for trigger in ai_triggers:
-                scheduler.add_job(_run_ai_full_job, trigger)
+                scheduler.add_job(_run_ai_full_job_sync, trigger)
         # Daily backup at 03:00
-        scheduler.add_job(_backup_db, CronTrigger(hour=3, minute=0))
+        scheduler.add_job(_backup_db_sync, CronTrigger(hour=3, minute=0))
         # pending_cluster 批处理每天 02:30
-        scheduler.add_job(_run_pending_cluster_job, CronTrigger(hour=2, minute=30))
+        scheduler.add_job(_process_pending_cluster, CronTrigger(hour=2, minute=30))
         scheduler.start()
 
         parts = []
@@ -225,14 +225,14 @@ def reload_scheduler():
     if pipeline_enabled:
         triggers = _build_cron_triggers()
         for trigger in triggers:
-            scheduler.add_job(_run_pipeline_job, trigger)
+            scheduler.add_job(_run_pipeline_job_sync, trigger)
     if ai_enabled:
         ai_triggers = _build_ai_cron_triggers()
         for trigger in ai_triggers:
-            scheduler.add_job(_run_ai_full_job, trigger)
-    scheduler.add_job(_backup_db, CronTrigger(hour=3, minute=0))
+            scheduler.add_job(_run_ai_full_job_sync, trigger)
+    scheduler.add_job(_backup_db_sync, CronTrigger(hour=3, minute=0))
     # pending_cluster 批处理每天 02:30
-    scheduler.add_job(_run_pending_cluster_job, CronTrigger(hour=2, minute=30))
+    scheduler.add_job(_process_pending_cluster, CronTrigger(hour=2, minute=30))
 
     scheduler.start()
 
