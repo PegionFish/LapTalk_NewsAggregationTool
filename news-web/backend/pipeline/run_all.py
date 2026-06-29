@@ -75,6 +75,9 @@ def run_pipeline(db_path: str = "", user_agent: str = "", callback=None, run_typ
     # 浏览器渲染兜底 — 对 HTTP 无法获取的文章使用 Playwright 重试
     steps.append(('browser_capture.py', '浏览器渲染兜底'))
 
+    # 暂存 RSS/热搜的抓取信息，等 collect_data 跑完后补全 articles_new
+    pending_fetch_info = {}
+
     for idx, (script, label) in enumerate(steps, 1):
         script_path = os.path.join(PIPELINE_DIR, script)
         if not os.path.exists(script_path):
@@ -108,26 +111,37 @@ def run_pipeline(db_path: str = "", user_agent: str = "", callback=None, run_typ
                 callback('error', f"{progress} {label} 异常: {str(e)[:100]}")
             return False
 
-        # 记录 fetch_logs
+        # 从抓取脚本输出中提取抓取总数，暂存；articles_new 等 collect_data 后补全
         if script in ('fetch_english_news.py', 'fetch_platform_hotlists.py') and db_path:
-            try:
-                from datetime import datetime as _dt
-                from db.news_db import NewsDB as _NDB_
-                _ndb2 = _NDB_(db_path)
-                status = 'ok' if proc.returncode == 0 else 'failed'
-                error_msg = ''
-                stderr_out = ''
+            fm = re.search(r'总条目[：:]\s*(\d+)', full_output or '')
+            fetched = int(fm.group(1)) if fm else 0
+            source_name = 'RSS' if script == 'fetch_english_news.py' else '平台热搜'
+            source_type = 'rss' if script == 'fetch_english_news.py' else 'hotlist'
+            pending_fetch_info[script] = {
+                'source_name': source_name, 'source_type': source_type,
+                'fetched': fetched, 'status': 'ok' if proc.returncode == 0 else 'failed',
+                'error_msg': '', 'run_type': run_type,
+            }
+            if proc.returncode != 0:
                 try:
-                    stderr_out = proc.stderr.read() if proc.stderr else ''
+                    pending_fetch_info[script]['error_msg'] = proc.stderr.read()[:200] if proc.stderr else ''
                 except Exception:
                     pass
-                if proc.returncode != 0:
-                    error_msg = stderr_out[:200]
-                fm = re.search(r'总条目[：:]\s*(\d+)', full_output or '')
-                fetched = int(fm.group(1)) if fm else 0
-                source_name = 'RSS' if script == 'fetch_english_news.py' else '平台热搜'
-                source_type = 'rss' if script == 'fetch_english_news.py' else 'hotlist'
-                _ndb2.log_fetch(source_name, source_type, fetched, 0, status, error_msg, 0, run_type)
+
+        # 从 collect_data.py 输出中解析实际新增数，补全 fetch_log
+        if script == 'collect_data.py' and db_path:
+            try:
+                from db.news_db import NewsDB as _NDB_
+                _ndb2 = _NDB_(db_path)
+                for key, info in pending_fetch_info.items():
+                    cat = 'rss_news' if info['source_type'] == 'rss' else 'platform_hotlists'
+                    fm = re.search(r'DB ↑ ' + re.escape(cat) + r'[：:]\s*(\d+)', full_output or '')
+                    articles_new = int(fm.group(1)) if fm else 0
+                    _ndb2.log_fetch(
+                        info['source_name'], info['source_type'],
+                        info['fetched'], articles_new,
+                        info['status'], info['error_msg'], 0, info['run_type'],
+                    )
             except Exception as _fe:
                 logger.warning(f"fetch_logs write failed: {_fe}")
 

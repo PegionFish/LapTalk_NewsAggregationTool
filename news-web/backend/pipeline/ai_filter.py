@@ -128,7 +128,8 @@ def run_ai_filter(db_path: str = None):
                 conn.execute("UPDATE news_articles SET ai_filtered=1 WHERE id=?", (aid,))
                 approved += 1
             else:
-                conn.execute("UPDATE news_articles SET ai_filtered=-1 WHERE id=?", (aid,))
+                # AI 预筛选拒绝的文章直接删除（丢失个别新闻无伤大雅）
+                conn.execute("DELETE FROM news_articles WHERE id=?", (aid,))
                 rejected += 1
 
         conn.commit()
