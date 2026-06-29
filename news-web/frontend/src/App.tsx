@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard';
 import Workspace from './pages/Workspace';
 import ArticleSearch from './pages/ArticleSearch';
 import ChainList from './pages/ChainList';
+import ChainTimelinePage from './pages/ChainTimeline';
 import Settings from './pages/Settings';
 import Login from './pages/Login';
 import ArticleReader from './pages/ArticleReader';
@@ -69,10 +70,11 @@ function AuthedApp() {
       <main style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         <Routes>
           <Route path="/" element={<Dashboard />} />
-          {/* 逻辑链 — /chains 列表, /chains/new 新建工作台, /chains/:id 编辑 */}
+          {/* 逻辑链 — /chains 列表, /chains/:id 时间线, /chains/:id/edit 画布编辑 */}
           <Route path="/chains" element={<ChainList />} />
           <Route path="/chains/new" element={<WorkspaceRoute />} />
-          <Route path="/chains/:chainId" element={<WorkspaceRoute />} />
+          <Route path="/chains/:chainId/edit" element={<WorkspaceRoute />} />
+          <Route path="/chains/:chainId" element={<ChainTimelinePage />} />
           {/* 旧路由兼容 */}
           <Route path="/workspace" element={<Workspace />} />
           <Route path="/articles/:id" element={<ArticleReader />} />

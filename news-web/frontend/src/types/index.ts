@@ -89,6 +89,15 @@ export interface ChainEvent {
   article_count: number;
   position: number;
   note: string;
+  articles?: {
+    id: number;
+    title: string;
+    source: string;
+    published_date: string;
+    url: string;
+    priority_score: number;
+    priority_label?: string;
+  }[];
 }
 
 export interface ArticleContent {

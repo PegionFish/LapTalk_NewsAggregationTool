@@ -86,12 +86,19 @@ export default function ChainList() {
                 alignItems: 'flex-start',
               }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{
-                    fontWeight: 600,
-                    fontSize: 15,
-                    marginBottom: 6,
-                    color: 'var(--text-primary)',
-                  }}>
+                  <div
+                    onClick={() => navigate(`/chains/${chain.id}`)}
+                    style={{
+                      fontWeight: 600,
+                      fontSize: 15,
+                      marginBottom: 6,
+                      color: 'var(--text-primary)',
+                      cursor: 'pointer',
+                      transition: 'color 0.15s',
+                    }}
+                    onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = 'var(--accent)'}
+                    onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'var(--text-primary)'}
+                  >
                     {chain.title}
                   </div>
                   {chain.description && (
@@ -131,7 +138,7 @@ export default function ChainList() {
                     variant="ghost"
                     size="xs"
                     icon="fa-pen"
-                    onClick={() => navigate(`/chains/${chain.id}`)}
+                    onClick={(e) => { e.stopPropagation(); navigate(`/chains/${chain.id}/edit`); }}
                   >
                     编辑
                   </Button>
