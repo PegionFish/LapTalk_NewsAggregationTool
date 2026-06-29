@@ -204,25 +204,33 @@ def _run_build_chains():
         for group in groups:
             if _chain_state.get("cancelled"):
                 break
-            event_ids = group.get("events", [])
+            event_specs = group.get("events", [])
             chain_title = group.get("title", "")
             reason = group.get("reason", "")
-            if len(event_ids) < 2 or not chain_title:
+            # 兼容旧格式 [id, ...] 和新格式 [{id, role}, ...]
+            if not event_specs or len(event_specs) < 2 or not chain_title:
                 continue
             valid = []
-            for eid in event_ids:
+            for spec in event_specs:
+                if isinstance(spec, dict):
+                    eid = spec.get("id")
+                    role = spec.get("role", "")
+                else:
+                    eid = spec
+                    role = ""
                 r = db.execute("SELECT id FROM events WHERE id=? AND status='active'", (eid,)).fetchone()
                 if r:
-                    valid.append(eid)
+                    valid.append((eid, role))
             if len(valid) < 2:
                 continue
-            # Check for existing chains covering these events
-            placeholders = ','.join('?' * len(valid))
-            existing = db.execute(
-                f"SELECT DISTINCT chain_id FROM chain_events WHERE event_id IN ({placeholders})",
-                valid
-            ).fetchall()
-            if existing:
+            # 增量更新：新链不覆盖已有链中的事件，但允许部分重叠（≤50%）
+            valid_ids = [v[0] for v in valid]
+            placeholders = ','.join('?' * len(valid_ids))
+            overlap = db.execute(
+                f"SELECT COUNT(DISTINCT event_id) FROM chain_events WHERE event_id IN ({placeholders})",
+                valid_ids
+            ).fetchone()[0]
+            if overlap >= len(valid_ids):  # 完全重叠则跳过
                 continue
             now = datetime.now().isoformat(timespec='seconds')
             cur = db.execute(
@@ -230,10 +238,11 @@ def _run_build_chains():
                 (chain_title[:100], f"AI 全景推理 — {reason}", now, now)
             )
             chain_id = cur.lastrowid
-            for pos, eid in enumerate(valid):
+            for pos, (eid, role) in enumerate(valid):
+                note = f"角色: {role}" if role else f"AI: {reason}"
                 db.execute(
                     "INSERT INTO chain_events (chain_id, event_id, position, note) VALUES (?,?,?,?)",
-                    (chain_id, eid, pos, f"AI: {reason}"[:200])
+                    (chain_id, eid, pos, note[:200])
                 )
             _chain_state["chains_created"] += 1
             _chain_state["log"].append(f"✅ {chain_title} ({len(valid)} 事件) — {reason}")

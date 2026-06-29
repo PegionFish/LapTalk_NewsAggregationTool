@@ -63,7 +63,7 @@ def get_chain(chain_id: int):
         if not chain:
             raise HTTPException(404, "chain_not_found")
 
-        # Get direct events
+        # Get direct events with their articles
         events = conn.execute("""
             SELECT e.id, e.title, e.first_seen, e.last_seen, e.article_count, ce.position, ce.note
             FROM chain_events ce
@@ -71,6 +71,31 @@ def get_chain(chain_id: int):
             WHERE ce.chain_id=?
             ORDER BY ce.position
         """, (chain_id,)).fetchall()
+
+        event_list = []
+        for r in events:
+            eid = r[0]
+            # 获取该事件下的文章（按发布日期降序，取前 10 篇）
+            articles = conn.execute("""
+                SELECT a.id, a.title, a.source, a.published_date, a.url,
+                       a.priority_score, a.priority_label
+                FROM news_article_events ae
+                JOIN news_articles a ON a.id = ae.article_id
+                WHERE ae.event_id = ?
+                ORDER BY a.published_date DESC, a.priority_score DESC
+                LIMIT 10
+            """, (eid,)).fetchall()
+
+            event_list.append({
+                'id': eid, 'title': r[1], 'first_seen': r[2], 'last_seen': r[3],
+                'article_count': r[4], 'position': r[5], 'note': r[6],
+                'articles': [
+                    {'id': a[0], 'title': a[1], 'source': a[2],
+                     'published_date': a[3], 'url': a[4],
+                     'priority_score': a[5], 'priority_label': a[6]}
+                    for a in articles
+                ]
+            })
 
         # Get sub-chains
         sub_chains = conn.execute("""
@@ -84,11 +109,7 @@ def get_chain(chain_id: int):
     return {
         'id': chain[0], 'title': chain[1], 'description': chain[2],
         'created_at': chain[3], 'updated_at': chain[4], 'created_by': chain[5],
-        'events': [
-            {'id': r[0], 'title': r[1], 'first_seen': r[2], 'last_seen': r[3],
-             'article_count': r[4], 'position': r[5], 'note': r[6]}
-            for r in events
-        ],
+        'events': event_list,
         'sub_chains': [
             {'id': r[0], 'title': r[1], 'position': r[2]} for r in sub_chains
         ]
@@ -106,7 +127,7 @@ def get_chain_timeline(chain_id: int):
             raise HTTPException(404, "chain_not_found")
 
         def collect_events(cid: int, prefix_pos: tuple = ()):
-            """Recursively collect events from chain and its sub-chains."""
+            """Recursively collect events from chain and its sub-chains, with articles."""
             events = conn.execute("""
                 SELECT e.id, e.title, e.first_seen, e.last_seen, e.article_count, ce.position, ce.note
                 FROM chain_events ce
@@ -116,10 +137,22 @@ def get_chain_timeline(chain_id: int):
 
             results = []
             for evt in events:
+                eid = evt[0]
+                articles = conn.execute("""
+                    SELECT a.id, a.title, a.source, a.published_date, a.url, a.priority_score
+                    FROM news_article_events ae
+                    JOIN news_articles a ON a.id = ae.article_id
+                    WHERE ae.event_id = ? ORDER BY a.published_date DESC LIMIT 10
+                """, (eid,)).fetchall()
                 results.append({
-                    'id': evt[0], 'title': evt[1], 'first_seen': evt[2], 'last_seen': evt[3],
+                    'id': eid, 'title': evt[1], 'first_seen': evt[2], 'last_seen': evt[3],
                     'article_count': evt[4], 'position': evt[5], 'note': evt[6],
                     'sort_key': prefix_pos + (evt[5],), 'chain_id': cid,
+                    'articles': [
+                        {'id': a[0], 'title': a[1], 'source': a[2],
+                         'published_date': a[3], 'url': a[4], 'priority_score': a[5]}
+                        for a in articles
+                    ]
                 })
 
             sub_chains = conn.execute("""
