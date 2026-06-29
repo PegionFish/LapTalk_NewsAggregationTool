@@ -44,12 +44,11 @@ def _run_batch():
     # 恢复异常中断的文章
     recover_stuck_articles()
 
-    # 查询待处理（已有 HTML 缓存的文章）
+    # 查询待处理（标题通道：pending 无缓存也可处理，KCS+事件匹配基于标题）
     db = _conn()
     rows = db.execute("""
         SELECT id FROM news_articles
-        WHERE content_status IN ('fetched', 'translated')
-          AND local_path != '' AND local_path NOT LIKE '[ERR:%'
+        WHERE content_status IN ('pending', 'fetched', 'translated')
           AND (ai_filtered IS NULL OR ai_filtered != -1)
           AND (ai_analyzed = 0 OR (ai_cleaned_content IS NULL OR ai_cleaned_content = '') AND ai_cleaned_content != '[EMPTY]'
                OR (translated_content IS NULL OR translated_content = '') AND translated_content != '[EMPTY]'
@@ -149,11 +148,11 @@ def start_article_batch():
         return {"ok": False, "message": msg}
     from utils.db import get_db_connection
     db = get_db_connection(config.db_path)
+    # 标题通道：pending 文章也可直接处理
     n = db.execute("""
         SELECT COUNT(*) FROM news_articles
-        WHERE content_status IN ('fetched', 'translated')
+        WHERE content_status IN ('pending', 'fetched', 'translated')
           AND ai_filtered != -1
-          AND (local_path != '' OR text_content != '')
           AND (ai_analyzed = 0 OR ai_cleaned_content IS NULL OR ai_cleaned_content = ''
                OR translated_content IS NULL OR translated_content = ''
                OR ai_keywords IS NULL OR ai_keywords = '')
