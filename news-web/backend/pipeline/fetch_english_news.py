@@ -196,6 +196,20 @@ RSS_FEEDS = [
         'lang': 'en',
         'credible': True,
     },
+    {
+        'name': 'The Verge',
+        'url': 'https://www.theverge.com/rss/index.xml',
+        'tag': 'The Verge',
+        'lang': 'en',
+        'credible': True,
+    },
+    {
+        'name': 'TechRadar',
+        'url': 'https://www.techradar.com/feeds/news',
+        'tag': 'TechRadar',
+        'lang': 'en',
+        'credible': True,
+    },
     # 硬件 / GPU / CPU 垂类
     {
         'name': "Tom's Hardware",
@@ -244,6 +258,28 @@ RSS_FEEDS = [
         'name': 'TechPowerUp',
         'url': 'https://www.techpowerup.com/rss/news',
         'tag': 'TechPowerUp',
+        'lang': 'en',
+        'credible': True,
+    },
+    # GPU / 硬件爆料
+    {
+        'name': 'VideoCardz',
+        'url': 'https://videocardz.com/feed',
+        'tag': 'VideoCardz',
+        'lang': 'en',
+        'credible': True,
+    },
+    {
+        'name': 'DSOGaming',
+        'url': 'https://www.dsogaming.com/feed/',
+        'tag': 'DSOGaming',
+        'lang': 'en',
+        'credible': True,
+    },
+    {
+        'name': 'ExtremeTech',
+        'url': 'https://www.extremetech.com/feed',
+        'tag': 'ExtremeTech',
         'lang': 'en',
         'credible': True,
     },
@@ -341,7 +377,8 @@ RSS_FEEDS = [
 
 TIMEOUT = 30  # 秒
 HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    # Discordbot UA — 绕过 Cloudflare 的 JS 挑战（VideoCardz/ExtremeTech 等源要求浏览器 UA 白名单）
+    'User-Agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)',
     'Accept-Language': 'en-US,en;q=0.9',
     'Accept': 'application/rss+xml, application/xml, text/xml, */*;q=0.1',
 }
