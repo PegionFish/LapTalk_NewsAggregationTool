@@ -145,6 +145,7 @@ def _run_summarize():
             HAVING cnt >= 2
         """).fetchall()
         _es_state["total"] = len(events)
+        logger.info(f"summarize: {len(events)} 个事件待生成摘要（≥2篇关联文章）")
         db.close()
         for (eid, _cnt) in events:
             if _es_state.get("cancelled"):
@@ -176,6 +177,7 @@ def _run_summarize():
             time.sleep(0.1)
     finally:
         _es_state["running"] = False
+        logger.info(f"summarize: 完成 — {_es_state.get('done', 0)}/{_es_state.get('total', 0)} 成功, {_es_state.get('failed', 0)} 失败")
         task_lock.release('summarize_events')
 
 
@@ -187,14 +189,18 @@ def _run_build_chains():
         from ai_client import build_panoramic_context, build_chains_panoramic
         db = get_db_connection(config.db_path)
         context = build_panoramic_context(db)
-        _chain_state["log"].append("全景图已构建，请求 AI 识别逻辑链...")
+        event_count = context.count('\n[#')
+        _chain_state["log"].append(f"全景图已构建（{event_count} 个活跃事件≥2篇），请求 AI 识别逻辑链...")
+        logger.info(f"build_chains: 全景图 {event_count} 个活跃事件，开始 AI 推理...")
         groups = build_chains_panoramic(context)
         if not groups:
-            _chain_state["log"].append("⚠️ AI 未返回有效分组")
+            _chain_state["log"].append("⚠️ AI 未返回有效分组（可能原因：json_object 格式与数组输出冲突 / AI 无合适分组 / 响应解析失败）")
+            logger.warning("build_chains: AI 未返回有效分组 — 无逻辑链生成。请检查 ai_json_response_format 配置与模型输出格式是否兼容。")
             db.close()
             _chain_state["running"] = False
             return
         _chain_state["total_groups"] = len(groups)
+        logger.info(f"build_chains: AI 返回 {len(groups)} 个候选分组，开始验证事件有效性...")
         for group in groups:
             if _chain_state.get("cancelled"):
                 break
@@ -233,6 +239,7 @@ def _run_build_chains():
             _chain_state["log"].append(f"✅ {chain_title} ({len(valid)} 事件) — {reason}")
         safe_commit(db)
         db.close()
+        logger.info(f"build_chains: 完成 — {_chain_state['chains_created']}/{_chain_state['total_groups']} 条逻辑链已入库")
     except Exception as e:
         logger.error(f"build_chains: {e}")
     finally:

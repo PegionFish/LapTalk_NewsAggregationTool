@@ -206,6 +206,10 @@ def _strip_json(raw: str) -> str:
     return raw.strip()
 
 
+# 哨兵对象 — 区分"未传参"和"显式传 None 禁用"
+_JSON_FORMAT_UNSET = object()
+
+
 def _ai_json(
     prompt: str,
     system_prompt: str,
@@ -213,12 +217,21 @@ def _ai_json(
     temperature: float = 0.1,
     enable_thinking: bool | None = None,
     thinking_budget: int | None = None,
-    response_format: dict[str, Any] | None = None,
+    response_format: dict[str, Any] | None = _JSON_FORMAT_UNSET,
     model: str | None = None,
 ) -> dict | list | None:
-    """调用 AI 并解析 JSON 返回；失败时返回 None。遇到 429 等 60s 重试。"""
-    if response_format is None and config.ai_json_response_format:
-        response_format = {"type": "json_object"}
+    """调用 AI 并解析 JSON 返回；失败时返回 None。遇到 429 等 60s 重试。
+
+    response_format:
+      - 未传 (默认): 根据 config.ai_json_response_format 决定是否启用 json_object
+      - None: 显式禁用输出格式约束（用于需要数组输出的场景）
+      - dict: 直接传递给 API
+    """
+    if response_format is _JSON_FORMAT_UNSET:
+        if config.ai_json_response_format:
+            response_format = {"type": "json_object"}
+        else:
+            response_format = None
 
     for attempt in range(3):
         try:
@@ -498,6 +511,7 @@ def extract_keywords_ai(title: str, text: str = "", source: str = "", model: str
         max_tokens=4096,          # Qwen 会自然停，不用抠 token
         temperature=0.05,
         enable_thinking=False,
+        response_format=None,     # 显式禁用 json_object，需要数组输出
         model=model,
     )
     if isinstance(result, list) and len(result) > 0:
@@ -619,6 +633,7 @@ def extract_keywords_batch(articles: list[dict], model: str | None = None) -> li
         max_tokens=8192,
         temperature=0.05,
         enable_thinking=False,
+        response_format=None,     # 显式禁用 json_object，需要数组输出
         model=model,
     )
     if isinstance(result, list) and len(result) == len(articles):
