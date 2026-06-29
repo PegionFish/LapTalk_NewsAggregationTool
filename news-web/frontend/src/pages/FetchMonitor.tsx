@@ -52,7 +52,7 @@ export default function FetchMonitor() {
   const [toast, setToast] = useState('');
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 3500); };
 
-  const [pipelineStatus, setPipelineStatus] = useState<{ running: boolean; last_run: string | null; last_status: string | null; current_step: string | null }>({ running: false, last_run: null, last_status: null, current_step: null });
+  const [pipelineStatus, setPipelineStatus] = useState<{ running: boolean; total: number; done: number; failed: number; current: string; log: string[] }>({ running: false, total: 0, done: 0, failed: 0, current: '', log: [] });
   const [quickActionLoading, setQuickActionLoading] = useState(''); // 'pipeline' | 'retry'
 
   const [sourceFilter, setSourceFilter] = useState('');
@@ -1368,7 +1368,7 @@ export default function FetchMonitor() {
             </div>
             <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>
               {pipelineStatus.running
-                ? `采集管道运行中: ${pipelineStatus.current_step || '处理中...'}`
+                ? `文章管线运行中: ${pipelineStatus.current || '处理中...'} (${pipelineStatus.done}/${pipelineStatus.total})`
                 : `数据采集完成后，前往仪表盘进行 AI 翻译、分析、分类、评分等全流程处理`}
             </div>
           </div>
@@ -1382,11 +1382,11 @@ export default function FetchMonitor() {
               <>
                 <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                   管道: 空闲
-                  {pipelineStatus.last_run && (
-                    <> · 上次: {formatTime(pipelineStatus.last_run)}</>
+                  {pipelineStatus.total > 0 && (
+                    <> · 上次: {pipelineStatus.done}/{pipelineStatus.total} 完成</>
                   )}
-                  {pipelineStatus.last_status && (
-                    <> · {pipelineStatus.last_status === 'success' ? '成功' : '失败'}</>
+                  {pipelineStatus.failed > 0 && (
+                    <> · {pipelineStatus.failed} 失败</>
                   )}
                 </span>
                 <Button variant="green" size="sm" icon="fa-robot"

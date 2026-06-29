@@ -189,9 +189,10 @@ export const api = {
   updateSettings: (data: Record<string, string | number | boolean>) =>
     fetchJSON<{ db_path: string; user_agent: string }>('/settings', { method: 'PUT', body: JSON.stringify(data) }),
 
-  triggerPipeline: () => fetchJSON<{ status: string }>('/pipeline/run', { method: 'POST' }),
+  // 旧版 triggerPipeline / getPipelineStatus 已重定向到文章管线（新版拆分后无 /pipeline/run 端点）
+  triggerPipeline: () => fetchJSON<{ ok: boolean; message: string; pending: number }>('/pipeline/article/batch-process', { method: 'POST' }),
 
-  getPipelineStatus: () => fetchJSON<{ running: boolean; last_run: string | null; last_status: string | null; current_step: string | null; steps: { name: string; status: string; duration_ms: number }[] }>('/pipeline/status'),
+  getPipelineStatus: () => fetchJSON<{ running: boolean; total: number; done: number; failed: number; current: string; log: string[] }>('/pipeline/article/status'),
 
 
   // Article pipeline (new)

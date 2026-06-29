@@ -6,7 +6,7 @@ interface Props {
   userAgent: string; setUserAgent: Dispatch<SetStateAction<string>>;
   pipelineEnabled: boolean; setPipelineEnabled: Dispatch<SetStateAction<boolean>>;
   pipelineRunning: boolean;
-  pipelineStatus: { last_run?: string | null; last_status?: string | null };
+  pipelineStatus: { running: boolean; total: number; done: number; failed: number; current: string; log: string[] };
   onTriggerPipeline: () => void;
   proxyEnabled: boolean; setProxyEnabled: Dispatch<SetStateAction<boolean>>;
   proxyUrl: string; setProxyUrl: Dispatch<SetStateAction<string>>;
@@ -71,14 +71,17 @@ export default function GeneralSettings({
               <i className={`fas fa-${pipelineRunning ? 'spinner fa-spin' : 'sync-alt'}`} />
               {' '}{pipelineRunning ? '抓取中...' : '手动抓取'}
             </button>
-            {pipelineStatus.last_run && (
+            {pipelineStatus.running && (
               <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-secondary)' }}>
-                <i className="fas fa-history" /> 上次运行: {pipelineStatus.last_run?.slice(0, 19).replace('T', ' ')}
-                <span style={{ marginLeft: 8, color: pipelineStatus.last_status === 'success' ? 'var(--accent-tertiary)' :
-                  pipelineStatus.last_status === 'failed' ? 'var(--accent-red)' : 'var(--accent-orange)' }}>
-                  {pipelineStatus.last_status === 'success' ? '✅ 成功' :
-                   pipelineStatus.last_status === 'failed' ? '❌ 失败' : '⏳ 运行中'}
-                </span>
+                <i className="fas fa-spinner fa-spin" /> 处理中: {pipelineStatus.done}/{pipelineStatus.total}
+                {pipelineStatus.current && <span style={{ marginLeft: 8 }}>· {pipelineStatus.current}</span>}
+                {pipelineStatus.failed > 0 && <span style={{ marginLeft: 8, color: 'var(--accent-red)' }}>· 失败: {pipelineStatus.failed}</span>}
+              </div>
+            )}
+            {!pipelineStatus.running && pipelineStatus.total > 0 && (
+              <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-secondary)' }}>
+                <i className="fas fa-check-circle" style={{ color: 'var(--accent-tertiary)' }} /> 上次处理完成: {pipelineStatus.done - pipelineStatus.failed}/{pipelineStatus.total} 成功
+                {pipelineStatus.failed > 0 && <span style={{ marginLeft: 8, color: 'var(--accent-red)' }}>· {pipelineStatus.failed} 失败</span>}
               </div>
             )}
           </div>

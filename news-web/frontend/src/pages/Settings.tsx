@@ -40,7 +40,7 @@ export default function Settings() {
   const [userAgent, setUserAgent] = useState('');
   const [pipelineEnabled, setPipelineEnabled] = useState(true);
   const [pipelineRunning, setPipelineRunning] = useState(false);
-  const [pipelineStatus, setPipelineStatus] = useState<{ last_run?: string | null; last_status?: string | null }>({});
+  const [pipelineStatus, setPipelineStatus] = useState<{ running: boolean; total: number; done: number; failed: number; current: string; log: string[] }>({ running: false, total: 0, done: 0, failed: 0, current: '', log: [] });
 
   // 缓存
   const [cachePath, setCachePath] = useState('');
