@@ -62,22 +62,23 @@ def process_article(article_id: int) -> dict:
         safe_commit(db)
 
         html = ""
+        has_full_content = False
         if local_path and not local_path.startswith('[ERR:') and os.path.exists(local_path):
             with open(local_path, encoding='utf-8', errors='replace') as f:
                 html = f.read()
+            has_full_content = bool(html and len(html.strip()) >= 100)
         elif text_content:
             html = text_content
-        if not html or len(html.strip()) < 100:
-            db.execute("UPDATE news_articles SET content_status='pending' WHERE id=?", (aid,))
-            safe_commit(db); db.close()
-            return {"ok": False, "error": "无有效 HTML，需先缓存", "steps": result["steps"]}
+            has_full_content = bool(html and len(html.strip()) >= 100)
+        # 无缓存内容时仍继续处理 — 标题通道：清洗/翻译跳过，KCS+事件匹配基于标题
 
-        # Step 1: 清洗
+        # Step 1: 清洗（仅在有缓存内容时执行）
         if _is_not_empty(ex_clean) and len(ex_clean.strip()) > 50:
             result["steps"]["cleaned"] = f"{len(ex_clean)} chars"
         elif _is_not_empty(ex_trans) and len(ex_trans.strip()) > 50:
-            # 翻译已完成，跳过清洗——分析步骤可直接用 text_content
             result["steps"]["cleaned"] = "skipped (翻译已完成)"
+        elif not has_full_content:
+            result["steps"]["cleaned"] = "skipped (无缓存内容，标题通道)"
         else:
             try:
                 c = clean_article_content(html)
@@ -92,9 +93,11 @@ def process_article(article_id: int) -> dict:
                 result["steps"]["cleaned"] = f"error: {e}"
                 logger.warning(f"#{aid} 清洗: {e}")
 
-        # Step 2: 翻译
+        # Step 2: 翻译（仅在有缓存内容时执行）
         if _is_not_empty(ex_trans) and len(ex_trans.strip()) > 50:
             result["steps"]["translated"] = f"{len(ex_trans)} chars"
+        elif not has_full_content:
+            result["steps"]["translated"] = "skipped (无缓存内容，标题通道)"
         else:
             try:
                 t = translate_html_preserve_structure(html) if (config.translation_enabled and config.translation_api_key) else translate_html(html)
@@ -110,6 +113,9 @@ def process_article(article_id: int) -> dict:
         # Step 3: 分析+KCS
         row3 = db.execute("SELECT ai_cleaned_content, text_content FROM news_articles WHERE id=?", (aid,)).fetchone()
         content = (row3[0] or row3[1]) if row3 else html
+        # 无缓存内容时用标题作为摘要素材
+        if not content or len(content.strip()) < 50:
+            content = title
 
         if _is_not_empty(ex_summary) and len(ex_summary.strip()) > 50:
             result["steps"]["analyzed"] = True
@@ -133,6 +139,7 @@ def process_article(article_id: int) -> dict:
                 if fetched_at:
                     try: days = max(0, (datetime.now() - datetime.fromisoformat(fetched_at)).days)
                     except Exception: pass
+                # 标题通道：KCS 可基于标题+来源完成关键词提取和分类
                 k = extract_keywords_classify_score_ai(title, content, source or "", days)
                 if k:
                     for col, val in [("keywords", _json.dumps(k.get("keywords",[]), ensure_ascii=False)),
@@ -189,9 +196,8 @@ def process_all_pending() -> dict:
     db = _conn()
     rows = db.execute("""
         SELECT id FROM news_articles
-        WHERE content_status IN ('fetched', 'translated')
+        WHERE content_status IN ('pending', 'fetched', 'translated')
           AND (ai_filtered IS NULL OR ai_filtered != -1)
-          AND (local_path != '' OR text_content != '')
           AND (ai_analyzed = 0 OR (ai_cleaned_content IS NULL OR ai_cleaned_content = '') AND ai_cleaned_content != '[EMPTY]'
                OR translated_content IS NULL OR translated_content = ''
                OR ai_keywords IS NULL OR ai_keywords = ''

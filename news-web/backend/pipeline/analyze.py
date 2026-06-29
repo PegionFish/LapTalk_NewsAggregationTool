@@ -29,10 +29,11 @@ def analyze_events(db_path: str) -> tuple:
 
     try:
         # ── 0. AI 关键词提取（批量模式）─────────────────────
+        # 标题通道：pending 文章也可基于标题提取关键词，正文缺失时用标题替代
         pending_news_articles = conn.execute("""
             SELECT a.id, a.title, a.text_content, a.source
             FROM news_articles a
-            WHERE content_status IN ('fetched', 'translated')
+            WHERE content_status IN ('pending', 'fetched', 'translated')
               AND (a.ai_keywords IS NULL OR a.ai_keywords = '')
             ORDER BY a.id DESC LIMIT 100
         """).fetchall()
