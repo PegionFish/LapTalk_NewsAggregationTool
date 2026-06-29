@@ -11,7 +11,11 @@ from db.news_db import NewsDB
 router = APIRouter(prefix="/api/cache", tags=["cache"])
 
 # 页面 HTML 缓存范围：只处理 AI 已通过筛选的普通 RSS 文章
-_CACHE_SCOPE = "content_status IN ('pending', 'fetched', 'translated')"
+_CACHE_SCOPE = (
+    "content_status IN ('pending', 'fetched', 'translated')"
+    " AND category NOT IN ('platform_hotlists', 'bilibili_videos')"
+    " AND ai_filtered = 1"
+)
 
 # 缓存抓取状态
 _cache_fetch_state = {"running": False, "total": 0, "done": 0, "failed": 0, "current": "", "log": []}

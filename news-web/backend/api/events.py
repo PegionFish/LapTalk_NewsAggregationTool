@@ -107,9 +107,28 @@ def merge_events(event_id: int, body: MergeEvents):
             "SELECT COUNT(*) FROM news_article_events WHERE event_id=?", (body.target_event_id,)
         ).fetchone()[0]
         conn.execute("UPDATE events SET article_count=? WHERE id=?", (tgt_count, body.target_event_id))
-        # Delete source event
-        conn.execute("DELETE FROM events WHERE id=?", (event_id,))
+        # Delete source event — handle all FK dependencies first
+        # 1. Move event_relations that reference source → target
+        conn.execute("UPDATE OR IGNORE event_relations SET from_event_id=? WHERE from_event_id=?",
+                     (body.target_event_id, event_id))
+        conn.execute("UPDATE OR IGNORE event_relations SET to_event_id=? WHERE to_event_id=?",
+                     (body.target_event_id, event_id))
+        # Remove any self-referencing relations after update
+        conn.execute("DELETE FROM event_relations WHERE from_event_id=? AND to_event_id=?",
+                     (body.target_event_id, body.target_event_id))
+        # 2. Move chain_events to target (skip duplicates)
+        conn.execute("INSERT OR IGNORE INTO chain_events (chain_id, event_id, position, note) "
+                     "SELECT chain_id, ?, position, note FROM chain_events WHERE event_id=?",
+                     (body.target_event_id, event_id))
+        conn.execute("DELETE FROM chain_events WHERE event_id=?", (event_id,))
+        # 3. Delete article-event links for source (both old and new schema)
         conn.execute("DELETE FROM news_article_events WHERE event_id=?", (event_id,))
+        try:
+            conn.execute("DELETE FROM article_events WHERE event_id=?", (event_id,))
+        except Exception:
+            pass  # 旧表可能不存在
+        # 4. Now safe to delete source event
+        conn.execute("DELETE FROM events WHERE id=?", (event_id,))
         conn.commit()
     return {'ok': True, 'merged_into': body.target_event_id}
 

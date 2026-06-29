@@ -262,12 +262,12 @@ def test_cache_status_only_counts_ai_approved_rss_articles(client, news_db, test
     resp = client.get("/api/cache/status")
 
     assert resp.status_code == 200
-    assert resp.json()["summary"]["total_articles"] == 1
+    assert resp.json()["summary"]["total_news_articles"] == 1
     assert resp.json()["summary"]["with_url"] == 1
     assert resp.json()["summary"]["pending_download"] == 1
     assert resp.json()["summary"]["failed_download"] == 0
     assert resp.json()["uncached_count"] == 1
-    assert [item["id"] for item in resp.json()["uncached_articles"]] == [1]
+    assert [item["id"] for item in resp.json()["uncached_news_articles"]] == [1]
 
 
 
