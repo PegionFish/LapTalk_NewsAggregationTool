@@ -742,7 +742,7 @@ def build_panoramic_context(conn) -> str:
     """
     import json
 
-    # 活跃事件（按文章数降序）
+    # 活跃事件（按文章数降序，限取 top-100 控制上下文大小）
     events = conn.execute("""
         SELECT e.id, e.title, e.article_count, e.first_seen, e.last_seen, e.ai_summary
         FROM events e
@@ -751,6 +751,7 @@ def build_panoramic_context(conn) -> str:
         GROUP BY e.id
         HAVING COUNT(ae.article_id) >= 2
         ORDER BY e.article_count DESC
+        LIMIT 100
     """).fetchall()
 
     # 每个事件的关联文章列表（含标题、发布日期、优先级）
