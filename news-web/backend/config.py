@@ -6,14 +6,14 @@ DEFAULT_CONFIG = {
     'db_path': '',
     'user_agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 '
                   '(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-    'openai_base_url': 'https://api.siliconflow.cn/v1',
+    'openai_base_url': 'https://api.deepseek.com',
     'openai_api_key': '',
-    'openai_model': 'deepseek-ai/DeepSeek-V4-Flash',
-    'simple_model': 'deepseek-ai/DeepSeek-V4-Flash',
-    'clean_model': 'deepseek-ai/DeepSeek-V4-Flash',
-    'clean_base_url': 'https://api.siliconflow.cn/v1',
+    'openai_model': 'deepseek-v4-flash',
+    'simple_model': 'deepseek-v4-flash',
+    'clean_model': 'deepseek-v4-flash',
+    'clean_base_url': 'https://api.deepseek.com',
     'clean_api_key': '',                                 # 空=复用 openai_api_key
-    'pipeline_model': 'deepseek-ai/DeepSeek-V4-Flash',
+    'pipeline_model': 'deepseek-v4-flash',
     'ai_enable_thinking': True,
     'ai_thinking_budget': 32768,
     'ai_deep_thinking_max_tokens': 8192,
@@ -29,9 +29,9 @@ DEFAULT_CONFIG = {
     'ai_cron_minutes': [0, 0],            # 对应每个小时的分钟数
     # 翻译 API — 独立配置
     'translation_enabled': False,
-    'translation_base_url': 'https://api.siliconflow.cn/v1',
+    'translation_base_url': 'https://api.deepseek.com',
     'translation_api_key': '',
-    'translation_model': 'deepseek-ai/DeepSeek-V4-Flash',
+    'translation_model': 'deepseek-v4-flash',
     'translation_target_lang': 'zh-CN',
     # 内容缓存目录 — 默认为 DB 同级的 content/ 目录
     'content_cache_path': '',

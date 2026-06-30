@@ -15,8 +15,8 @@ AI_ENDPOINTS = {
     'title_filter': {
         'name': '标题初筛',
         'description': 'RSS 抓取后的标题批量筛选，判断文章是否值得缓存',
-        'default_model': 'deepseek-ai/DeepSeek-V4-Flash',
-        'default_base_url': 'https://api.siliconflow.cn/v1',
+        'default_model': 'deepseek-v4-flash',
+        'default_base_url': 'https://api.deepseek.com',
         'default_enabled': True,
         'params': ['enable_thinking', 'json_response_format'],
         'legacy_field': None,
@@ -24,8 +24,8 @@ AI_ENDPOINTS = {
     'article_processing': {
         'name': '文章处理',
         'description': '内容清洗、翻译、分析摘要、KCS（关键词+分类+评分）',
-        'default_model': 'deepseek-ai/DeepSeek-V4-Flash',
-        'default_base_url': 'https://api.siliconflow.cn/v1',
+        'default_model': 'deepseek-v4-flash',
+        'default_base_url': 'https://api.deepseek.com',
         'default_enabled': True,
         'params': ['enable_thinking', 'thinking_budget'],
         'legacy_field': None,
@@ -33,8 +33,8 @@ AI_ENDPOINTS = {
     'event_pipeline': {
         'name': '事件管线',
         'description': '事件聚类、摘要生成、逻辑链构建',
-        'default_model': 'deepseek-ai/DeepSeek-V4-Flash',
-        'default_base_url': 'https://api.siliconflow.cn/v1',
+        'default_model': 'deepseek-v4-flash',
+        'default_base_url': 'https://api.deepseek.com',
         'default_enabled': True,
         'params': ['enable_thinking', 'thinking_budget'],
         'legacy_field': None,
@@ -63,7 +63,7 @@ def _get_endpoint_base_url(endpoint_key: str) -> str:
         return config.openai_base_url
     elif endpoint_key == 'event_pipeline':
         return config.openai_base_url
-    return AI_ENDPOINTS.get(endpoint_key, {}).get('default_base_url', 'https://api.siliconflow.cn/v1')
+    return AI_ENDPOINTS.get(endpoint_key, {}).get('default_base_url', 'https://api.deepseek.com')
 
 
 def _get_endpoint_api_key(endpoint_key: str) -> str:

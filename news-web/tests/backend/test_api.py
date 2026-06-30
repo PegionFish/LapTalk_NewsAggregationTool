@@ -176,8 +176,8 @@ def test_chat_sends_deep_thinking_params(monkeypatch):
     result = chat("分析这篇文章", max_tokens=128)
 
     assert result == "OK"
-    assert captured["extra_body"]["enable_thinking"] is True
-    assert captured["extra_body"]["thinking_budget"] == 32768
+    assert captured["extra_body"]["thinking"] == {"type": "enabled"}
+    assert captured["extra_body"]["reasoning_effort"] == "high"
     assert "response_format" not in captured  # chat() 不再强制 JSON 格式
 
 
@@ -202,8 +202,8 @@ def test_ai_json_strips_markdown_and_uses_json_object(monkeypatch):
 
     assert result == {"ok": True}
     assert captured["response_format"] == {"type": "json_object"}
-    assert captured["extra_body"]["enable_thinking"] is True
-    assert captured["extra_body"]["thinking_budget"] == 32768
+    assert captured["extra_body"]["thinking"] == {"type": "enabled"}
+    assert captured["extra_body"]["reasoning_effort"] == "high"
 
 
 def test_extract_keywords_ai_sends_full_text(monkeypatch):

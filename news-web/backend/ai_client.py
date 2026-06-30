@@ -106,10 +106,9 @@ def _request_options(
     enabled = _thinking_enabled(enable_thinking)
     budget = _thinking_budget(thinking_budget)
     extra_body: dict[str, Any] = {}
-    # 始终显式设置 enable_thinking，避免模型默认行为与预期不符
-    extra_body["enable_thinking"] = enabled
+    extra_body["thinking"] = {"type": "enabled"} if enabled else {"type": "disabled"}
     if enabled and budget is not None:
-        extra_body["thinking_budget"] = budget
+        extra_body["reasoning_effort"] = "high"
     options["extra_body"] = extra_body
 
     # 仅当调用方显式传入 response_format 时才施加 JSON 格式；

@@ -184,7 +184,7 @@ export default function AISettings(_props: Props) {
                       <label className="form-label"><i className="fas fa-link" /> API 地址</label>
                       <input className="form-control" value={ep.base_url || ''}
                         onChange={e => handleSaveEndpoint(key, { base_url: e.target.value })}
-                        placeholder="https://api.siliconflow.cn/v1" />
+                        placeholder="https://api.deepseek.com" />
                     </div>
 
                     <div className="form-group">
@@ -208,7 +208,7 @@ export default function AISettings(_props: Props) {
                       <label className="form-label"><i className="fas fa-robot" /> 模型</label>
                       <input className="form-control" value={ep.model || ''}
                         onChange={e => handleSaveEndpoint(key, { model: e.target.value })}
-                        placeholder="deepseek-ai/DeepSeek-V3.2" />
+                        placeholder="deepseek-v4-flash" />
                     </div>
 
                     {/* 高级参数折叠区 */}
