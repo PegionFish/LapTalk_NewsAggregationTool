@@ -9,31 +9,27 @@
 利用大上下文窗口，绝大多数文章一次调用完成翻译。
 """
 import time
-from openai import OpenAI
 from config import config
+from ai_client import get_client as get_ai_client
 from utils.text import extract_text_from_html
 
 # 纯文本分段上限（字符数）— 绝大多数文章不触发分段
 _TEXT_CHUNK_SIZE = 1_000_000
 
 
-def get_client() -> OpenAI:
-    """获取翻译专用 OpenAI 兼容客户端。"""
-    return OpenAI(
-        base_url=config.translation_base_url,
-        api_key=config.translation_api_key or 'sk-placeholder',
-        timeout=120.0,  # 120 秒 — 超时抛异常让上层正常处理
-    )
+def get_client():
+    """获取翻译专用 OpenAI 兼容客户端（复用统一 AI client）。"""
+    return get_ai_client()
 
 
-def _call_translate(client: OpenAI, content: str, system_prompt: str, max_tokens: int = 131072) -> str:
+def _call_translate(client, content: str, system_prompt: str, max_tokens: int = 131072) -> str:
     """单次 API 调用。遇到 429 等 60s 重试，最多 3 次。"""
     from openai import RateLimitError, AuthenticationError
 
     for attempt in range(3):
         try:
             resp = client.chat.completions.create(
-                model=config.translation_model,
+                model=config.openai_model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": content},
@@ -50,7 +46,7 @@ def _call_translate(client: OpenAI, content: str, system_prompt: str, max_tokens
                 raise
         except AuthenticationError as e:
             raise RuntimeError(
-                f"翻译 API 认证失败（401），请检查 translation_api_key 是否有效。错误: {e}"
+                f"翻译 API 认证失败（401），请检查 openai_api_key 是否有效。错误: {e}"
             ) from e
 
 
@@ -74,7 +70,7 @@ def translate_html(html: str) -> str:
     流程：HTML → extract_text_from_html → 分段翻译 → 拼接返回纯文本。
     不再保留 HTML 标签结构（前端通过 iframe 显示原始 HTML，翻译仅作阅读参考）。
     """
-    if not config.translation_api_key:
+    if not config.openai_api_key:
         return ""
     if not html or len(html.strip()) < 100:
         return ""
@@ -94,7 +90,7 @@ def translate_html_preserve_structure(html: str) -> str:
 
     超长 HTML 自动分段处理。
     """
-    if not config.translation_api_key:
+    if not config.openai_api_key:
         return ""
     if not html or len(html.strip()) < 100:
         return ""
@@ -115,7 +111,7 @@ def translate_html_preserve_structure(html: str) -> str:
 
 def translate_to_chinese(text: str) -> str:
     """纯文本翻译 — 超长文本自动分段。"""
-    if not config.translation_api_key:
+    if not config.openai_api_key:
         return ""
     if not text or len(text.strip()) < 10:
         return ""
