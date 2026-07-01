@@ -27,6 +27,7 @@ DEFAULT_CONFIG = {
     'ai_cron_enabled': True,              # AI 全流程定时开关
     'ai_cron_hours': [1],            # 事件管线每天运行的小时数（0-23）
     'ai_cron_minutes': [0, 0],            # 对应每个小时的分钟数
+    'ai_workers': 10,                          # AI 并发 worker 数（范围 1-50）
     # 翻译 API — 独立配置
     'translation_enabled': False,
     'translation_base_url': 'https://api.deepseek.com',
@@ -111,7 +112,7 @@ class AppConfig:
 
     @property
     def clean_model(self) -> str:
-        return self._data.get('clean_model', self.openai_model)
+        return self.openai_model  # 已废弃：统一回退到 openai_model
 
     @clean_model.setter
     def clean_model(self, val: str):
@@ -120,7 +121,7 @@ class AppConfig:
 
     @property
     def clean_base_url(self) -> str:
-        return self._data.get('clean_base_url', self.openai_base_url)
+        return self.openai_base_url  # 已废弃：统一回退到 openai_base_url
 
     @clean_base_url.setter
     def clean_base_url(self, val: str):
@@ -129,7 +130,7 @@ class AppConfig:
 
     @property
     def clean_api_key(self) -> str:
-        return self._data.get('clean_api_key', '') or self.openai_api_key
+        return self.openai_api_key  # 已废弃：统一回退到 openai_api_key
 
     @clean_api_key.setter
     def clean_api_key(self, val: str):
@@ -138,7 +139,7 @@ class AppConfig:
 
     @property
     def simple_model(self) -> str:
-        return self._data.get('simple_model', self.openai_model)
+        return self.openai_model  # 已废弃：统一回退到 openai_model
 
     @simple_model.setter
     def simple_model(self, val: str):
@@ -147,11 +148,25 @@ class AppConfig:
 
     @property
     def pipeline_model(self) -> str:
-        return self._data.get('pipeline_model', DEFAULT_CONFIG['pipeline_model'])
+        return self.openai_model  # 已废弃：统一回退到 openai_model
 
     @pipeline_model.setter
     def pipeline_model(self, val: str):
         self._data['pipeline_model'] = val
+        self.save()
+
+    # ── AI 并发 Worker 数 ────────────────────────────────────
+    @property
+    def ai_workers(self) -> int:
+        val = self._data.get('ai_workers', 10)
+        try:
+            return max(1, min(50, int(val)))
+        except (TypeError, ValueError):
+            return 10
+
+    @ai_workers.setter
+    def ai_workers(self, val: int):
+        self._data['ai_workers'] = max(1, min(50, int(val)))
         self.save()
 
     @property
@@ -378,6 +393,7 @@ class AppConfig:
         d['pipeline_cron_minutes'] = self.pipeline_cron_minutes
         d['ai_cron_hours'] = self.ai_cron_hours
         d['ai_cron_minutes'] = self.ai_cron_minutes
+        d['ai_workers'] = self.ai_workers
         return d
 
 config = AppConfig()
