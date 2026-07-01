@@ -10,7 +10,7 @@ import re
 import time
 from typing import Any
 
-from openai import OpenAI, RateLimitError, PermissionDeniedError
+from openai import OpenAI, RateLimitError, PermissionDeniedError, AuthenticationError
 
 from config import config
 from utils.text import extract_text_from_html
@@ -194,6 +194,10 @@ def chat(
                     "API 余额不足，管线已暂停。请充值后重新触发。"
                 ) from e
             raise
+        except AuthenticationError as e:
+            raise BalanceInsufficientError(
+                f"API 认证失败（401），请检查 API Key 是否有效。错误: {e}"
+            ) from e
 
 
 def _strip_json(raw: str) -> str:
@@ -262,6 +266,10 @@ def _ai_json(
                     "API 余额不足，管线已暂停。请充值后重新触发。"
                 ) from e
             return None
+        except AuthenticationError as e:
+            raise BalanceInsufficientError(
+                f"API 认证失败（401），请检查 API Key 是否有效。错误: {e}"
+            ) from e
         except Exception as e:
             import logging
             logging.getLogger(__name__).warning(

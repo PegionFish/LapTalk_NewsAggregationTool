@@ -28,7 +28,7 @@ def get_client() -> OpenAI:
 
 def _call_translate(client: OpenAI, content: str, system_prompt: str, max_tokens: int = 131072) -> str:
     """单次 API 调用。遇到 429 等 60s 重试，最多 3 次。"""
-    from openai import RateLimitError
+    from openai import RateLimitError, AuthenticationError
 
     for attempt in range(3):
         try:
@@ -48,6 +48,10 @@ def _call_translate(client: OpenAI, content: str, system_prompt: str, max_tokens
                 time.sleep(60)
             else:
                 raise
+        except AuthenticationError as e:
+            raise RuntimeError(
+                f"翻译 API 认证失败（401），请检查 translation_api_key 是否有效。错误: {e}"
+            ) from e
 
 
 _TRANSLATE_SYSTEM_PROMPT = (

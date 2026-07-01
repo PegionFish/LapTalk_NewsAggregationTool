@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { useToast } from '../contexts/ToastContext';
 import { api } from '../api/client';
 import GeneralSettings from './settings/GeneralSettings';
 import AISettings from './settings/AISettings';
@@ -28,6 +29,7 @@ const SECTIONS: SectionDef[] = [
 
 export default function Settings() {
   const { user } = useAuth();
+  const { showToast } = useToast();
   const [activeSection, setActiveSection] = useState<Section>('general');
 
   // 仅管理员可访问
@@ -80,8 +82,10 @@ export default function Settings() {
         proxy_url: proxyUrl,
       });
       setMessage('配置已保存');
+      showToast('配置已保存', 'success');
     } catch (e) {
       setMessage('保存失败: ' + (e as Error).message);
+      showToast('保存失败: ' + (e as Error).message, 'error');
     }
     setSaving(false);
   };
@@ -104,8 +108,10 @@ export default function Settings() {
     try {
       await api.triggerPipeline();
       pollPipelineStatus();
+      showToast('抓取管道已启动', 'success');
     } catch (e) {
       setMessage('启动失败: ' + (e as Error).message);
+      showToast('启动失败: ' + (e as Error).message, 'error');
       setPipelineRunning(false);
     }
   };

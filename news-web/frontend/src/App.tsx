@@ -1,6 +1,8 @@
 import { Component, type ReactNode, useEffect } from 'react';
 import { Routes, Route, Navigate, useParams, useSearchParams } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { ToastProvider } from './contexts/ToastContext';
+import ToastContainer from './components/ToastContainer';
 import NavSidebar from './components/NavSidebar';
 import Dashboard from './pages/Dashboard';
 import Workspace from './pages/Workspace';
@@ -66,6 +68,7 @@ function AuthedApp() {
 
   return (
     <div style={{ display: 'flex', height: '100vh' }}>
+      <ToastContainer />
       <NavSidebar />
       <main style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         <Routes>
@@ -96,7 +99,9 @@ export default function App() {
   return (
     <ErrorBoundary>
       <AuthProvider>
-        <AuthedApp />
+        <ToastProvider>
+          <AuthedApp />
+        </ToastProvider>
       </AuthProvider>
     </ErrorBoundary>
   );

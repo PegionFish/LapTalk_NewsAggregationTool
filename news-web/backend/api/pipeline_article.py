@@ -74,7 +74,7 @@ def _run_batch():
     # 降低并发数减少 SQLite WAL 写锁竞争（50→10），避免事件循环阻塞
     done = 0; failed = 0
     balance_paused = False
-    MAX_WORKERS = 10
+    MAX_WORKERS = 1
     ARTICLE_TIMEOUT = 180  # 单篇文章最长处理时间（秒），超时跳过
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         future_to_aid = {executor.submit(process_article, aid): aid for (aid,) in rows}

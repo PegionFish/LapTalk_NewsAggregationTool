@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Dispatch, SetStateAction } from 'react';
 import { api } from '../../api/client';
+import { useToast } from '../../contexts/ToastContext';
 import type { BatchRetryState } from '../../types';
 
 interface CacheStatus {
@@ -40,6 +41,7 @@ interface Props {
 
 export default function CacheSettings({ cachePath, setCachePath }: Props) {
   const navigate = useNavigate();
+  const { showToast } = useToast();
   const [status, setStatus] = useState<CacheStatus | null>(null);
   const [checking, setChecking] = useState(false);
   const [cleaning, setCleaning] = useState(false);
@@ -57,7 +59,8 @@ export default function CacheSettings({ cachePath, setCachePath }: Props) {
     try {
       const d = await api.getCacheStatus();
       setStatus(d as unknown as CacheStatus);
-    } catch { setStatus(null); }
+      showToast('缓存状态检查完成', 'success');
+    } catch { setStatus(null); showToast('缓存状态检查失败', 'error'); }
     setChecking(false);
   };
 
@@ -65,7 +68,7 @@ export default function CacheSettings({ cachePath, setCachePath }: Props) {
     setVerifying(true);
     const r = await fetch('/api/cache/verify', { method: 'POST' });
     const d = await r.json();
-    alert(d.message || '开始校验');
+    showToast(d.message || '开始校验', 'info');
     setVerifying(false);
   };
 
@@ -74,7 +77,7 @@ export default function CacheSettings({ cachePath, setCachePath }: Props) {
     setCleaning(true);
     const r = await fetch('/api/cache/orphan', { method: 'DELETE' });
     const d = await r.json();
-    alert(d.message || '清理完成');
+    showToast(d.message || '清理完成', 'success');
     handleCheck();
     setCleaning(false);
   };

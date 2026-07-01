@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../../api/client';
+import { useToast } from '../../contexts/ToastContext';
 import type { AiEndpointConfig, AiEndpointTestResult, AiSettingsResponse } from '../../types';
 
 // 入口元数据（中文名 + 描述）
@@ -13,6 +14,7 @@ const GROUP_ORDER = ['数据采集', '文章处理', '事件管线'];
 interface Props {}
 
 export default function AISettings(_props: Props) {
+  const { showToast } = useToast();
   const [aiSettings, setAiSettings] = useState<AiSettingsResponse | null>(null);
   const [testResults, setTestResults] = useState<AiEndpointTestResult[]>([]);
   const [testingAll, setTestingAll] = useState(false);
@@ -38,10 +40,12 @@ export default function AISettings(_props: Props) {
     try {
       const resp = await api.updateAiSettings({ ai_endpoints: updated });
       setAiSettings(resp);
+      showToast(`${ENDPOINT_META[key]?.name || key} 配置已保存`, 'success');
     } catch (e) {
       console.error('保存失败:', e);
+      showToast(`保存失败: ${(e as Error).message}`, 'error');
     }
-  }, [endpoints]);
+  }, [endpoints, showToast]);
 
   // 测试所有入口
   const handleTestAll = async () => {
@@ -50,8 +54,11 @@ export default function AISettings(_props: Props) {
     try {
       const resp = await api.testAiEndpoints();
       setTestResults(resp.results);
+      const successCount = resp.results.filter((r: AiEndpointTestResult) => r.ok).length;
+      showToast(`测试完成: ${successCount}/${resp.results.length} 通过`, successCount === resp.results.length ? 'success' : 'info');
     } catch (e) {
       console.error('测试失败:', e);
+      showToast(`测试失败: ${(e as Error).message}`, 'error');
     }
     setTestingAll(false);
   };
@@ -65,8 +72,14 @@ export default function AISettings(_props: Props) {
         const filtered = prev.filter(r => r.endpoint_key !== key);
         return [...filtered, ...resp.results];
       });
+      const result = resp.results[0];
+      showToast(
+        result.ok ? `${ENDPOINT_META[key]?.name} 连接成功` : `${ENDPOINT_META[key]?.name} 连接失败`,
+        result.ok ? 'success' : 'error'
+      );
     } catch (e) {
       console.error('测试失败:', e);
+      showToast(`测试失败: ${(e as Error).message}`, 'error');
     }
     setTestingSingle(null);
   };

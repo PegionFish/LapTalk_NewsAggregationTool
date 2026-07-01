@@ -1,5 +1,6 @@
 import { useState, type Dispatch, type SetStateAction } from 'react';
 import { api } from '../../api/client';
+import { useToast } from '../../contexts/ToastContext';
 
 interface Props {
   dbPath: string; setDbPath: Dispatch<SetStateAction<string>>;
@@ -17,6 +18,7 @@ export default function GeneralSettings({
   pipelineEnabled, setPipelineEnabled, pipelineRunning, pipelineStatus, onTriggerPipeline,
   proxyEnabled, setProxyEnabled, proxyUrl, setProxyUrl,
 }: Props) {
+  const { showToast } = useToast();
   const [testingProxy, setTestingProxy] = useState(false);
   const [proxyTestResult, setProxyTestResult] = useState('');
 
@@ -28,8 +30,10 @@ export default function GeneralSettings({
       setProxyTestResult(r.ok
         ? `✅ ${r.message || '连接成功'}`
         : `❌ ${r.error || '连接失败'}`);
+      showToast(r.ok ? (r.message || '代理连接成功') : (r.error || '代理连接失败'), r.ok ? 'success' : 'error');
     } catch (e) {
       setProxyTestResult(`❌ 请求失败: ${(e as Error).message}`);
+      showToast(`代理测试失败: ${(e as Error).message}`, 'error');
     }
     setTestingProxy(false);
   };

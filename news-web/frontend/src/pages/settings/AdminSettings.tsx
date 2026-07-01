@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getAuthHeaders } from '../../contexts/AuthContext';
+import { useToast } from '../../contexts/ToastContext';
 
 interface UserInfo {
   id: number; username: string; display_name: string; role: string;
@@ -7,6 +8,7 @@ interface UserInfo {
 }
 
 export default function AdminSettings() {
+  const { showToast } = useToast();
   const [users, setUsers] = useState<UserInfo[]>([]);
   const [isAdmin, setIsAdmin] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -29,12 +31,14 @@ export default function AdminSettings() {
       body: JSON.stringify({ role }),
     });
     loadUsers();
+    showToast('用户角色已更新', 'success');
   };
 
   const handleDeleteUser = async (userId: number) => {
     if (!confirm('确认删除该用户？此操作不可撤销。')) return;
     await fetch(`/api/auth/users/${userId}`, { method: 'DELETE', headers: getAuthHeaders() });
     loadUsers();
+    showToast('用户已删除', 'success');
   };
 
   // 导出用户为 JSON
@@ -46,6 +50,7 @@ export default function AdminSettings() {
     const a = document.createElement('a');
     a.href = url; a.download = `users_export_${new Date().toISOString().slice(0, 10)}.json`;
     a.click(); URL.revokeObjectURL(url);
+    showToast('用户列表已导出', 'success');
   };
 
   // 导入用户
@@ -56,7 +61,7 @@ export default function AdminSettings() {
       const text = await file.text();
       const json = JSON.parse(text);
       const users = json.users || json;
-      if (!Array.isArray(users)) { alert('无效格式：需要 users 数组'); return; }
+      if (!Array.isArray(users)) { showToast('无效格式：需要 users 数组', 'error'); return; }
       const onConflict = confirm('导入模式选择：\n\n点"确定"= 跳过已存在的用户名\n点"取消"= 更新已存在的用户') ? 'skip' : 'update';
       const r = await fetch('/api/auth/users/import', {
         method: 'POST',
@@ -64,9 +69,9 @@ export default function AdminSettings() {
         body: JSON.stringify({ users, on_conflict: onConflict }),
       });
       const result = await r.json();
-      alert(result.message || '导入完成');
+      showToast(result.message || '导入完成', 'success');
       loadUsers();
-    } catch { alert('导入失败：文件格式错误'); }
+    } catch { showToast('导入失败：文件格式错误', 'error'); }
     e.target.value = ''; // 清空以允许重新选择同一文件
   };
 
