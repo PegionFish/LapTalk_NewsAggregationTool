@@ -12,13 +12,14 @@ sys.path.insert(0, os.path.dirname(SCRIPT_DIR))
 from config import config
 from ai_client import clean_article_content, analyze_article, extract_keywords_classify_score_ai
 from translation_client import translate_html_preserve_structure, translate_html
+from dbwriter.db_writer import get_db_writer
 from utils.db import safe_commit
 
 logger = logging.getLogger(__name__)
 
 
 def _conn():
-    from utils.db import get_db_connection, safe_commit
+    from utils.db import get_db_connection
     return get_db_connection(config.db_path)
 
 
@@ -27,6 +28,29 @@ def _is_not_empty(val) -> bool:
     if isinstance(val, str): return len(val.strip()) > 0
     if isinstance(val, (int, float)): return val > 0
     return bool(val)
+
+
+def _write_and_wait(sql: str, params: tuple = (), timeout: float = 30.0) -> bool:
+    """通过 Writer 写 DB 并等待确认。超时返回 False 由调用方处理。"""
+    try:
+        writer = get_db_writer()
+    except RuntimeError:
+        # Writer 未初始化，降级为直连
+        logger.warning("DbWriter 未初始化，降级为直连 safe_commit")
+        db = _conn()
+        try:
+            db.execute(sql, params)
+            from utils.db import safe_commit
+            safe_commit(db)
+        finally:
+            db.close()
+        return True
+
+    event = writer.submit(sql, params)
+    if not event.wait(timeout=timeout):
+        logger.error(f"DbWriter 确认超时 ({timeout}s)，SQL: {sql[:100]}")
+        return False
+    return True
 
 
 def recover_stuck_articles():
@@ -58,8 +82,7 @@ def process_article(article_id: int) -> dict:
         ex_clean, ex_trans, ex_summary = row[6], row[7], row[8]
         ex_kw, ex_cat, ex_score = row[9], row[10], row[11]
 
-        db.execute("UPDATE news_articles SET content_status='processing' WHERE id=?", (aid,))
-        safe_commit(db)
+        _write_and_wait("UPDATE news_articles SET content_status='processing' WHERE id=?", (aid,))
 
         html = ""
         has_full_content = False
@@ -83,12 +106,11 @@ def process_article(article_id: int) -> dict:
             try:
                 c = clean_article_content(html)
                 if c and len(c.strip()) > 50:
-                    db.execute("UPDATE news_articles SET ai_cleaned_content=? WHERE id=?", (c, aid))
+                    _write_and_wait("UPDATE news_articles SET ai_cleaned_content=? WHERE id=?", (c, aid))
                     result["steps"]["cleaned"] = f"{len(c)} chars"
                 else:
-                    db.execute("UPDATE news_articles SET ai_cleaned_content='[EMPTY]' WHERE id=?", (aid,))
+                    _write_and_wait("UPDATE news_articles SET ai_cleaned_content='[EMPTY]' WHERE id=?", (aid,))
                     result["steps"]["cleaned"] = "empty"
-                safe_commit(db)
             except Exception as e:
                 result["steps"]["cleaned"] = f"error: {e}"
                 logger.warning(f"#{aid} 清洗: {e}")
@@ -102,8 +124,7 @@ def process_article(article_id: int) -> dict:
             try:
                 t = translate_html_preserve_structure(html) if (config.translation_enabled and config.translation_api_key) else translate_html(html)
                 if t:
-                    db.execute("UPDATE news_articles SET translated_content=? WHERE id=?", (t, aid))
-                    safe_commit(db)
+                    _write_and_wait("UPDATE news_articles SET translated_content=? WHERE id=?", (t, aid))
                     result["steps"]["translated"] = f"{len(t)} chars"
                 else:
                     result["steps"]["translated"] = "empty"
@@ -123,8 +144,7 @@ def process_article(article_id: int) -> dict:
             try:
                 s = analyze_article(title, content)
                 if s:
-                    db.execute("UPDATE news_articles SET ai_summary=?, ai_analyzed=1 WHERE id=?", (s, aid))
-                    safe_commit(db)
+                    _write_and_wait("UPDATE news_articles SET ai_summary=?, ai_analyzed=1 WHERE id=?", (s, aid))
                     result["steps"]["analyzed"] = True
                 else:
                     result["steps"]["analyzed"] = False
@@ -150,8 +170,7 @@ def process_article(article_id: int) -> dict:
                                       ("priority_label", k.get("label","medium")),
                                       ("ai_priority_score", k.get("score",0))]:
                         if val is not None:
-                            db.execute(f"UPDATE news_articles SET {col}=? WHERE id=?", (val, aid))
-                    safe_commit(db)
+                            _write_and_wait(f"UPDATE news_articles SET {col}=? WHERE id=?", (val, aid))
                     result["steps"]["kcs"] = f"{k.get('category','?')} {k.get('label','medium')}({k.get('score',0):.0f})"
                 else:
                     result["steps"]["kcs"] = "empty"
@@ -179,8 +198,7 @@ def process_article(article_id: int) -> dict:
             final_status = "pending_cluster"
         else:
             final_status = "fetched"
-        db.execute("UPDATE news_articles SET content_status=? WHERE id=?", (final_status, aid))
-        safe_commit(db)
+        _write_and_wait("UPDATE news_articles SET content_status=? WHERE id=?", (final_status, aid))
     except Exception as e:
         from ai_client import BalanceInsufficientError
         if isinstance(e, BalanceInsufficientError):
