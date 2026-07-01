@@ -24,6 +24,7 @@ class _Task:
     kwargs: dict
     event: threading.Event = field(default_factory=threading.Event)
     cancelled: bool = False
+    _running: bool = False
     result: Any = None
     error: Exception | None = None
 
@@ -47,6 +48,7 @@ class TaskScheduler:
         self._tasks: dict[str, _Task] = {}
         self._lock = threading.Lock()
         self._active_types: set[str] = set()
+        self._cv = threading.Condition(self._lock)
         self._running = True
         self._workers: list[threading.Thread] = []
         self._start_workers()
@@ -77,8 +79,8 @@ class TaskScheduler:
             task = self._tasks.get(task_id)
             if task is None:
                 return False
-            if task.event.is_set():
-                return False  # 已在执行或已完成
+            if task._running:
+                return False  # 正在执行，无法取消
             task.cancelled = True
             logger.info(f"[TaskScheduler] 取消任务: {task_id}")
             return True
@@ -93,19 +95,23 @@ class TaskScheduler:
                 t = threading.Thread(target=self._worker_loop, daemon=True)
                 t.start()
                 self._workers.append(t)
+        elif n < old:
+            for _ in range(old - n):
+                self._queue.put(None)
         logger.info(f"[TaskScheduler] Worker 数: {old} → {n}")
 
     @property
     def status(self) -> dict:
         """当前队列状态。"""
         with self._lock:
-            pending = sum(1 for t in self._tasks.values() if not t.event.is_set() and not t.cancelled)
+            pending = sum(1 for t in self._tasks.values() if not t._running and not t.cancelled)
             active = list(self._active_types)
+            worker_count = sum(1 for w in self._workers if w.is_alive())
         return {
             "pending_tasks": pending,
             "active_types": active,
             "max_workers": self._max_workers,
-            "worker_count": len(self._workers),
+            "worker_count": worker_count,
         }
 
     def shutdown(self):
@@ -124,10 +130,6 @@ class TaskScheduler:
             t.start()
             self._workers.append(t)
 
-    def _can_run(self, task_type: str) -> bool:
-        """检查该类型任务是否可以开始执行。同类型互斥。"""
-        return task_type not in self._active_types
-
     def _worker_loop(self):
         """Worker 主循环 — 从队列取任务并执行。"""
         while self._running:
@@ -139,29 +141,21 @@ class TaskScheduler:
             if task is None:  # 哨兵
                 break
 
-            # 检查是否已取消
             if task.cancelled:
                 continue
 
-            # 等待同类型互斥锁
-            while self._running and not self._can_run(task.task_type):
-                # 将任务放回队尾等待
-                self._queue.put(task)
-                try:
-                    task = self._queue.get(timeout=2)
-                except Empty:
-                    task = None
-                    break
-                if task is None or task.cancelled:
-                    break
-                continue
-
-            if task is None or task.cancelled:
-                continue
-
-            # 标记类型活跃
-            with self._lock:
+            # 原子操作：检查同类型互斥 + 预留类型 + 标记运行
+            with self._cv:
+                if task.task_type in self._active_types:
+                    self._queue.put(task)
+                    self._cv.wait(timeout=2)
+                    if not self._running:
+                        break
+                    continue
+                if task.cancelled:
+                    continue
                 self._active_types.add(task.task_type)
+                task._running = True
 
             try:
                 logger.info(f"[TaskScheduler] 开始执行: {task.task_id}")
@@ -171,10 +165,11 @@ class TaskScheduler:
                 logger.error(f"[TaskScheduler] 任务失败: {task.task_id} — {e}")
                 task.error = e
             finally:
-                with self._lock:
+                with self._cv:
                     self._active_types.discard(task.task_type)
                     if task.task_id in self._tasks:
                         del self._tasks[task.task_id]
+                    self._cv.notify_all()
                 task.event.set()
 
 
