@@ -6,6 +6,8 @@ from datetime import datetime, timedelta
 from config import config
 from ai_client import match_article_to_events_ai
 from utils.db import get_db_connection, safe_commit
+# 通过 DbWriter 串行写入，避免 50 线程并发时的 SQLite 写锁竞争
+from pipeline.process_article import _write_and_wait
 
 logger = logging.getLogger(__name__)
 
@@ -122,11 +124,7 @@ def match_article_to_event(article_id: int, db=None) -> int | None:
 
         if not candidates:
             logger.info(f"#{aid} 无候选事件，标记 pending_cluster")
-            db.execute(
-                "UPDATE news_articles SET content_status = 'pending_cluster' WHERE id = ?",
-                (aid,)
-            )
-            safe_commit(db)
+            _write_and_wait("UPDATE news_articles SET content_status = 'pending_cluster' WHERE id = ?", (aid,))
             return None
 
         # AI 语义匹配
@@ -135,8 +133,8 @@ def match_article_to_event(article_id: int, db=None) -> int | None:
         if result and result.get('event_id'):
             event_id = result['event_id']
             confidence = result.get('confidence', 0.0)
-            # 写入关联
-            db.execute(
+            # 写入关联 — 通过 DbWriter 串行写入避免写锁竞争
+            _write_and_wait(
                 "INSERT OR IGNORE INTO news_article_events (article_id, event_id, relevance) VALUES (?, ?, ?)",
                 (aid, event_id, round(confidence, 2))
             )
@@ -146,11 +144,10 @@ def match_article_to_event(article_id: int, db=None) -> int | None:
                 (aid,)
             ).fetchone()
             event_date = (row_date[0] or row_date[1])[:10] if row_date else datetime.now().strftime('%Y-%m-%d')
-            db.execute(
+            _write_and_wait(
                 "UPDATE events SET last_seen = MAX(last_seen, ?), article_count = article_count + 1 WHERE id = ?",
                 (event_date, event_id)
             )
-            safe_commit(db)
             logger.info(
                 f"#{aid} AI 匹配 → Event#{event_id} (置信度: {confidence:.2f}) — {result.get('reason', '')}"
             )
@@ -158,22 +155,14 @@ def match_article_to_event(article_id: int, db=None) -> int | None:
         else:
             # AI 无法确定归属
             logger.info(f"#{aid} AI 无法确定归属，标记 pending_cluster")
-            db.execute(
-                "UPDATE news_articles SET content_status = 'pending_cluster' WHERE id = ?",
-                (aid,)
-            )
-            safe_commit(db)
+            _write_and_wait("UPDATE news_articles SET content_status = 'pending_cluster' WHERE id = ?", (aid,))
             return None
 
     except Exception as e:
         logger.error(f"match_article_to_event #{article_id} 异常: {e}")
         # 失败时不阻塞文章处理，标记 pending_cluster 等待下次批处理
         try:
-            db.execute(
-                "UPDATE news_articles SET content_status = 'pending_cluster' WHERE id = ?",
-                (article_id,)
-            )
-            safe_commit(db)
+            _write_and_wait("UPDATE news_articles SET content_status = 'pending_cluster' WHERE id = ?", (article_id,))
         except Exception:
             pass
         return None

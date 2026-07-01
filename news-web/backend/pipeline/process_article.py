@@ -46,9 +46,12 @@ def _write_and_wait(sql: str, params: tuple = (), timeout: float = 30.0) -> bool
             db.close()
         return True
 
-    event = writer.submit(sql, params)
-    if not event.wait(timeout=timeout):
+    req = writer.submit(sql, params)
+    if not req.event.wait(timeout=timeout):
         logger.error(f"DbWriter 确认超时 ({timeout}s)，SQL: {sql[:100]}")
+        return False
+    if req.result is not None:
+        logger.error(f"DbWriter 写入失败: {req.result}\nSQL: {sql[:100]}")
         return False
     return True
 
@@ -82,7 +85,9 @@ def process_article(article_id: int) -> dict:
         ex_clean, ex_trans, ex_summary = row[6], row[7], row[8]
         ex_kw, ex_cat, ex_score = row[9], row[10], row[11]
 
-        _write_and_wait("UPDATE news_articles SET content_status='processing' WHERE id=?", (aid,))
+        if not _write_and_wait("UPDATE news_articles SET content_status='processing' WHERE id=?", (aid,)):
+            logger.error(f"#{aid} 写入 processing 状态失败")
+            db.close(); return {"ok": False, "error": "写入 processing 状态失败"}
 
         html = ""
         has_full_content = False
@@ -105,12 +110,20 @@ def process_article(article_id: int) -> dict:
         else:
             try:
                 c = clean_article_content(html)
+                step_ok = True
                 if c and len(c.strip()) > 50:
-                    _write_and_wait("UPDATE news_articles SET ai_cleaned_content=? WHERE id=?", (c, aid))
-                    result["steps"]["cleaned"] = f"{len(c)} chars"
+                    step_ok = _write_and_wait("UPDATE news_articles SET ai_cleaned_content=? WHERE id=?", (c, aid))
+                    if step_ok:
+                        result["steps"]["cleaned"] = f"{len(c)} chars"
                 else:
-                    _write_and_wait("UPDATE news_articles SET ai_cleaned_content='[EMPTY]' WHERE id=?", (aid,))
-                    result["steps"]["cleaned"] = "empty"
+                    step_ok = _write_and_wait("UPDATE news_articles SET ai_cleaned_content='[EMPTY]' WHERE id=?", (aid,))
+                    if step_ok:
+                        result["steps"]["cleaned"] = "empty"
+                if not step_ok:
+                    logger.error(f"#{aid} 清洗结果写入失败")
+                    result["steps"]["cleaned"] = "write_failed"
+                    result["ok"] = False; result["error"] = "清洗结果写入失败"
+                    db.close(); return result
             except Exception as e:
                 result["steps"]["cleaned"] = f"error: {e}"
                 logger.warning(f"#{aid} 清洗: {e}")
@@ -122,10 +135,15 @@ def process_article(article_id: int) -> dict:
             result["steps"]["translated"] = "skipped (无缓存内容，标题通道)"
         else:
             try:
-                t = translate_html_preserve_structure(html) if (config.translation_enabled and config.translation_api_key) else translate_html(html)
+                t = translate_html_preserve_structure(html) if (config.translation_enabled and config.openai_api_key) else translate_html(html)
                 if t:
-                    _write_and_wait("UPDATE news_articles SET translated_content=? WHERE id=?", (t, aid))
-                    result["steps"]["translated"] = f"{len(t)} chars"
+                    if _write_and_wait("UPDATE news_articles SET translated_content=? WHERE id=?", (t, aid)):
+                        result["steps"]["translated"] = f"{len(t)} chars"
+                    else:
+                        logger.error(f"#{aid} 翻译结果写入失败")
+                        result["steps"]["translated"] = "write_failed"
+                        result["ok"] = False; result["error"] = "翻译结果写入失败"
+                        db.close(); return result
                 else:
                     result["steps"]["translated"] = "empty"
             except Exception as e:
@@ -144,8 +162,13 @@ def process_article(article_id: int) -> dict:
             try:
                 s = analyze_article(title, content)
                 if s:
-                    _write_and_wait("UPDATE news_articles SET ai_summary=?, ai_analyzed=1 WHERE id=?", (s, aid))
-                    result["steps"]["analyzed"] = True
+                    if _write_and_wait("UPDATE news_articles SET ai_summary=?, ai_analyzed=1 WHERE id=?", (s, aid)):
+                        result["steps"]["analyzed"] = True
+                    else:
+                        logger.error(f"#{aid} 分析摘要写入失败")
+                        result["steps"]["analyzed"] = "write_failed"
+                        result["ok"] = False; result["error"] = "分析摘要写入失败"
+                        db.close(); return result
                 else:
                     result["steps"]["analyzed"] = False
             except Exception as e:
@@ -162,6 +185,7 @@ def process_article(article_id: int) -> dict:
                 # 标题通道：KCS 可基于标题+来源完成关键词提取和分类
                 k = extract_keywords_classify_score_ai(title, content, source or "", days)
                 if k:
+                    all_kcs_ok = True
                     for col, val in [("keywords", _json.dumps(k.get("keywords",[]), ensure_ascii=False)),
                                       ("ai_keywords", _json.dumps(k.get("keywords",[]), ensure_ascii=False)),
                                       ("ai_category", k.get("category","")),
@@ -170,8 +194,16 @@ def process_article(article_id: int) -> dict:
                                       ("priority_label", k.get("label","medium")),
                                       ("ai_priority_score", k.get("score",0))]:
                         if val is not None:
-                            _write_and_wait(f"UPDATE news_articles SET {col}=? WHERE id=?", (val, aid))
-                    result["steps"]["kcs"] = f"{k.get('category','?')} {k.get('label','medium')}({k.get('score',0):.0f})"
+                            if not _write_and_wait(f"UPDATE news_articles SET {col}=? WHERE id=?", (val, aid)):
+                                all_kcs_ok = False
+                                logger.error(f"#{aid} KCS 列 {col} 写入失败")
+                    if all_kcs_ok:
+                        result["steps"]["kcs"] = f"{k.get('category','?')} {k.get('label','medium')}({k.get('score',0):.0f})"
+                    else:
+                        logger.error(f"#{aid} KCS 写入失败，中止处理")
+                        result["steps"]["kcs"] = "write_failed"
+                        result["ok"] = False; result["error"] = "KCS 写入失败"
+                        db.close(); return result
                 else:
                     result["steps"]["kcs"] = "empty"
             except Exception as e:
@@ -198,7 +230,9 @@ def process_article(article_id: int) -> dict:
             final_status = "pending_cluster"
         else:
             final_status = "fetched"
-        _write_and_wait("UPDATE news_articles SET content_status=? WHERE id=?", (final_status, aid))
+        if not _write_and_wait("UPDATE news_articles SET content_status=? WHERE id=?", (final_status, aid)):
+            logger.error(f"#{aid} 最终状态写入失败")
+            result["ok"] = False; result["error"] = "最终状态写入失败"
     except Exception as e:
         from ai_client import BalanceInsufficientError
         if isinstance(e, BalanceInsufficientError):

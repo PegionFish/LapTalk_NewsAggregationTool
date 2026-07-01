@@ -67,8 +67,9 @@ class DbWriter:
         self._thread.join(timeout=10)
         logger.info("DbWriter 已停止")
 
-    def submit(self, sql: str, params: tuple = ()) -> threading.Event:
-        """提交写请求，返回 Event 对象。调用方 await event.wait() 等待确认。
+    def submit(self, sql: str, params: tuple = ()) -> WriteRequest:
+        """提交写请求，返回 WriteRequest 对象。调用方需 await req.event.wait()，
+        然后检查 req.result 判断是否写入成功（None 为成功，非 None 为异常）。
 
         Raises:
             RuntimeError: Writer 已停止
@@ -77,7 +78,7 @@ class DbWriter:
             raise RuntimeError("Writer 已停止，拒绝新请求")
         req = WriteRequest(sql=sql, params=params)
         self._queue.put(req)
-        return req.event
+        return req
 
     def _process(self, item, conn):
         """处理一个队列项。"""

@@ -915,7 +915,7 @@ def get_balance() -> dict | None:
         return None
 
     base_url = config.openai_base_url.rstrip('/')
-    balance_url = f"{base_url}/user/balance"
+    balance_url = f"{base_url}/user/balance"  # DeepSeek 专属端点；其他后端可能返回 404
 
     try:
         resp = requests.get(

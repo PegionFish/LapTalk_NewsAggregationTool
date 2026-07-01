@@ -37,8 +37,8 @@ def test_scheduler_type_mutual_exclusion():
     sched.submit("test", slow_task, "B")
 
     time.sleep(0.4)
-    # A 和 B 应该串行执行（同类型互斥），0.4s 后最多完成 2 个
-    assert len(completed) <= 2
+    # A 和 B 应该串行执行（同类型互斥），0.4s 后最多完成 1 个（仅 A 应已完成）
+    assert len(completed) <= 1
 
     sched.shutdown()
 

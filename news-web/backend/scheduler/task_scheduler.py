@@ -81,8 +81,11 @@ class TaskScheduler:
             if task._running:
                 return False  # 正在执行，无法取消
             task.cancelled = True
+            # 从 _tasks 字典中移除已取消的任务，防止内存泄漏
+            del self._tasks[task_id]
             logger.info(f"[TaskScheduler] 取消任务: {task_id}")
-            return True
+        task.event.set()  # 通知 submitter 任务已被取消
+        return True
 
     def set_workers(self, n: int):
         """动态调整 worker 数。"""
@@ -141,6 +144,11 @@ class TaskScheduler:
                 break
 
             if task.cancelled:
+                # 清理已取消任务的 _tasks 条目，防止内存泄漏
+                with self._cv:
+                    if task.task_id in self._tasks:
+                        del self._tasks[task.task_id]
+                task.event.set()
                 continue
 
             # 原子操作：检查同类型互斥 + 预留类型 + 标记运行

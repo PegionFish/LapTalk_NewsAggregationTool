@@ -10,17 +10,19 @@ def test_db_writer_submit_and_ack(tmp_path):
     writer = DbWriter(db_path)
     writer.start()
 
-    event = writer.submit(
+    req = writer.submit(
         "CREATE TABLE IF NOT EXISTS test (id INTEGER, name TEXT)",
         ()
     )
-    assert event.wait(timeout=5), "Writer 应在 5s 内确认"
+    assert req.event.wait(timeout=5), "Writer 应在 5s 内确认"
+    assert req.result is None, "写入应成功"
 
-    event2 = writer.submit(
+    req2 = writer.submit(
         "INSERT INTO test VALUES (?, ?)",
         (1, "hello")
     )
-    assert event2.wait(timeout=5)
+    assert req2.event.wait(timeout=5)
+    assert req2.result is None, "写入应成功"
 
     # 验证数据已写入（使用相同文件路径，确保读到 Writer 写入的内容）
     conn = sqlite3.connect(db_path)
@@ -35,9 +37,9 @@ def test_db_writer_timeout_triggers_fallback():
     """Writer 不响应时 event.wait 超时返回 False"""
     writer = DbWriter(":memory:")
     # 不启动 writer，直接 submit
-    event = writer.submit("SELECT 1", ())
+    req = writer.submit("SELECT 1", ())
     # 30s 太长，传自定义 timeout
-    assert not event.wait(timeout=0.5), "Writer 未启动，应超时"
+    assert not req.event.wait(timeout=0.5), "Writer 未启动，应超时"
 
 
 def test_db_writer_stop_flushes_pending():
@@ -45,17 +47,17 @@ def test_db_writer_stop_flushes_pending():
     writer = DbWriter(":memory:")
     writer.start()
 
-    events = []
+    reqs = []
     for i in range(20):
-        events.append(writer.submit(
+        reqs.append(writer.submit(
             "CREATE TABLE IF NOT EXISTS batch{}(id INTEGER)".format(i), ()
         ))
 
     writer.stop()  # stop 内部会处理完队列
 
     # 所有请求应已完成
-    for e in events:
-        assert e.is_set(), "stop 后所有请求应完成"
+    for r in reqs:
+        assert r.event.is_set(), "stop 后所有请求应完成"
 
 
 def test_db_writer_submit_after_stop_raises():

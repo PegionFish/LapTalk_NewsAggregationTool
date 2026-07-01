@@ -1,4 +1,10 @@
-"""事件管线测试"""
+"""事件管线测试
+
+注意：test_start_nightly_response 提交后台任务后不等待完成即返回，
+teardown_module 的 shutdown(timeout=5) 不能保证清理在 5s 后仍运行的
+daemon 线程，可能导致孤儿 DB/AI 连接泄漏到后续测试。这是当前架构的局限，
+可接受。"Todo: 后台任务应提供同步确认机制。""
+"""
 import pytest
 from fastapi.testclient import TestClient
 from main import app

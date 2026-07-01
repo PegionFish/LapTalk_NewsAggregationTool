@@ -10,7 +10,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from config import config
 from pipeline.run_all import run_pipeline
-from api.pipeline_event import _nightly
+from api.pipeline_event import _nightly, _event_state
 from utils.task_state import task_state
 
 logger = logging.getLogger(__name__)
@@ -329,6 +329,12 @@ def _run_ai_full_job_sync():
     if _ai_full_state.get('running'):
         _add_schedule_log(f"事件管线启动失败: 已有事件管线在运行")
         logger.warning(f"Event pipeline skipped: already running")
+        return
+
+    # 双重守卫：检查 _nightly() 是否已通过 API 或 TaskScheduler 在运行
+    if _event_state.get('running'):
+        _add_schedule_log(f"事件管线启动失败: _nightly 已在 api.pipeline_event 中运行")
+        logger.warning(f"Event pipeline skipped: _nightly already running in api.pipeline_event")
         return
 
     _ai_full_state.update(running=True)
