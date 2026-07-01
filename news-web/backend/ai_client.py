@@ -6,7 +6,9 @@ OpenAI 兼容 API 客户端封装。
 from __future__ import annotations
 
 import json
+import logging
 import re
+import requests
 import time
 from typing import Any
 
@@ -14,6 +16,9 @@ from openai import OpenAI, RateLimitError, PermissionDeniedError, Authentication
 
 from config import config
 from utils.text import extract_text_from_html
+
+
+logger = logging.getLogger(__name__)
 
 
 def _prepare_content(text: str) -> str:
@@ -888,3 +893,40 @@ def build_chains_panoramic(context: str) -> list[dict] | None:
     if isinstance(result, list):
         return result
     return None
+
+
+def get_balance() -> dict | None:
+    """查询 DeepSeek 账户余额。
+
+    GET https://api.deepseek.com/user/balance
+
+    Returns:
+        {
+            "is_available": bool,
+            "balance_infos": [
+                {"currency": "CNY", "total_balance": "110.00",
+                 "granted_balance": "10.00", "topped_up_balance": "100.00"}
+            ]
+        }
+        失败返回 None
+    """
+    api_key = config.openai_api_key
+    if not api_key:
+        return None
+
+    base_url = config.openai_base_url.rstrip('/')
+    balance_url = f"{base_url}/user/balance"
+
+    try:
+        resp = requests.get(
+            balance_url,
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            return resp.json()
+        logger.warning(f"余额查询失败: HTTP {resp.status_code} — {resp.text[:200]}")
+        return None
+    except Exception as e:
+        logger.warning(f"余额查询异常: {e}")
+        return None
