@@ -188,4 +188,5 @@ def init_scheduler(max_workers: int = 10) -> TaskScheduler:
     if _scheduler is not None:
         _scheduler.shutdown()
     _scheduler = TaskScheduler(max_workers=max_workers)
+    logger.info(f"[TaskScheduler] Worker 数: {max_workers}")
     return _scheduler
