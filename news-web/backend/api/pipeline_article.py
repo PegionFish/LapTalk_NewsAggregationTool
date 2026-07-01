@@ -1,11 +1,11 @@
 """文章级管线 API — 缓存→清洗→翻译→分析+KCS"""
-import threading, logging, time
-from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED, TimeoutError as FuturesTimeoutError
+import logging
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from datetime import datetime
 from fastapi import APIRouter
 
 from config import config
-from utils.task_lock import task_lock
+from scheduler.task_scheduler import get_scheduler
 from utils.task_state import task_state
 from api.dashboard import DashboardStream
 
@@ -17,7 +17,7 @@ _article_state = {"running": False, "total": 0, "done": 0, "failed": 0, "current
 
 def _reset_state():
     _article_state.clear()
-    _article_state.update({"running": True, "total": 0, "done": 0, "failed": 0, "current": "", "log": []})
+    _article_state.update({"running": True, "total": 0, "done": 0, "failed": 0, "cancelled": False, "current": "", "log": []})
 
 
 def _run_single(aid: int):
@@ -66,7 +66,6 @@ def _run_batch():
     if total == 0:
         _article_state["running"] = False
         DashboardStream.publish("article_batch_done", {"done": 0, "failed": 0})
-        task_lock.release('article')
         task_state.finish('article', success=True)
         return
 
@@ -74,12 +73,24 @@ def _run_batch():
     # 降低并发数减少 SQLite WAL 写锁竞争（50→10），避免事件循环阻塞
     done = 0; failed = 0
     balance_paused = False
-    MAX_WORKERS = 1
+    MAX_WORKERS = config.ai_workers
     ARTICLE_TIMEOUT = 180  # 单篇文章最长处理时间（秒），超时跳过
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         future_to_aid = {executor.submit(process_article, aid): aid for (aid,) in rows}
         pending = set(future_to_aid)
         while pending:
+            # 取消检查
+            if _article_state.get("cancelled"):
+                for future in pending:
+                    future.cancel()
+                    aid = future_to_aid[future]
+                    failed += 1
+                    _article_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] #{aid} ⏹️ 用户取消")
+                _article_state["done"] = done
+                _article_state["failed"] = failed
+                _article_state["current"] = f"{done+failed}/{total}"
+                break
+
             done_now, pending = wait(pending, timeout=ARTICLE_TIMEOUT, return_when=FIRST_COMPLETED)
             if not done_now:
                 # 超时：所有剩余 future 都卡住了，标记为失败
@@ -126,7 +137,6 @@ def _run_batch():
     _article_state["current"] = "完成"
     DashboardStream.publish("article_batch_done", {"done": done, "failed": failed})
     _article_state["running"] = False
-    task_lock.release('article')
     task_state.finish('article', success=True)
 
 
@@ -143,9 +153,12 @@ def start_article_batch():
     global _article_state
     if _article_state.get("running"):
         return {"ok": False, "message": "文章处理已在运行中"}
-    ok, msg = task_lock.acquire('article')
-    if not ok:
-        return {"ok": False, "message": msg}
+    try:
+        scheduler = get_scheduler()
+    except RuntimeError:
+        return {"ok": False, "message": "调度器尚未初始化，无法启动文章批量处理"}
+    if "article_batch" in scheduler.status["active_types"]:
+        return {"ok": False, "message": "文章处理已在运行中"}
     from utils.db import get_db_connection
     db = get_db_connection(config.db_path)
     # 标题通道：pending 文章也可直接处理
@@ -161,10 +174,21 @@ def start_article_batch():
     task_state.init_state('article', total=n)
     _article_state["running"] = True
     _article_state["total"] = n
-    threading.Thread(target=_run_batch, daemon=True).start()
+    scheduler.submit("article_batch", _run_batch)
     return {"ok": True, "message": f"启动文章批量处理，预计 {n} 篇", "pending": n}
 
 
 @router.get("/status")
 def get_article_status():
     return dict(_article_state)
+
+
+@router.post("/cancel")
+def cancel_article_batch():
+    """取消文章批处理。正在处理的文章将继续完成，未开始的跳过。"""
+    global _article_state
+    if not _article_state.get("running"):
+        return {"ok": False, "message": "没有正在运行的文章处理"}
+    _article_state["cancelled"] = True
+    _article_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] ⏹️ 用户取消")
+    return {"ok": True, "message": "取消信号已发送"}
