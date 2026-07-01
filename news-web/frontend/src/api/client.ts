@@ -246,6 +246,17 @@ export const api = {
       method: 'POST', body: JSON.stringify({ endpoint: endpoint || null }),
     }),
 
+  getAiBalance: () =>
+    fetchJSON<{ ok: boolean; balance: string; total_used: number; model: string }>('/settings/ai/balance'),
+
+  setAiWorkers: (workers: number) =>
+    fetchJSON<{ ok: boolean; workers: number }>('/settings/ai/workers', {
+      method: 'POST', body: JSON.stringify({ workers }),
+    }),
+
+  cancelArticleBatch: () =>
+    fetchJSON<{ ok: boolean; message: string }>('/pipeline/article/cancel', { method: 'POST' }),
+
   // AI API 连通性测试（旧接口保留兼容）
   testAi: () => fetchJSON<{ ok: boolean; response?: string; error?: string; model?: string }>('/settings/test-ai', { method: 'POST' }),
 
