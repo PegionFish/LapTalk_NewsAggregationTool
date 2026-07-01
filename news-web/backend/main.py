@@ -10,6 +10,8 @@ from config import config
 from db.migrations import ensure_schema
 from scheduler import start_scheduler, stop_scheduler, trigger_pipeline_manual, trigger_ai_full_manual, get_pipeline_status
 from utils.task_state import task_state
+from dbwriter.db_writer import init_db_writer, get_db_writer
+from scheduler.task_scheduler import init_scheduler, get_scheduler
 
 # ── Logging ──────────────────────────────────────────────
 LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'logs')
@@ -29,6 +31,9 @@ async def lifespan(app: FastAPI):
     if config.db_path:
         ensure_schema(config.db_path)
         task_state.set_db_path(config.db_path)
+    # 初始化 DbWriter（后台写入队列）和 TaskScheduler（任务调度器）
+    init_db_writer(config.db_path)
+    init_scheduler(config.ai_workers)
     if os.environ.get('NEWS_WEB_TESTING', '0') not in ('1', 'true', 'yes'):
         try:
             start_scheduler()
@@ -37,6 +42,14 @@ async def lifespan(app: FastAPI):
     yield
     if os.environ.get('NEWS_WEB_TESTING', '0') not in ('1', 'true', 'yes'):
         stop_scheduler()
+    try:
+        get_scheduler().shutdown()
+    except Exception:
+        pass
+    try:
+        get_db_writer().stop()
+    except Exception:
+        pass
 
 app = FastAPI(title="News Aggregation Web", lifespan=lifespan)
 
