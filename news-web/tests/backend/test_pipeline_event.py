@@ -2,8 +2,19 @@
 import pytest
 from fastapi.testclient import TestClient
 from main import app
+from scheduler.task_scheduler import init_scheduler, get_scheduler
+
+# 初始化 TaskScheduler（pipeline_event 端点依赖 get_scheduler()）
+init_scheduler(max_workers=5)
 
 client = TestClient(app)
+
+
+def teardown_module(module):
+    try:
+        get_scheduler().shutdown()
+    except Exception:
+        pass
 
 
 def test_get_event_status_idle():

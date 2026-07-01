@@ -1,10 +1,10 @@
 """事件级管线 API — 聚类→摘要→逻辑链。凌晨 1:00 定时 / 管理员手动触发。"""
-import threading, logging, time
+import logging, time
 from datetime import datetime
 from fastapi import APIRouter
 
 from config import config
-from utils.task_lock import task_lock
+from scheduler.task_scheduler import get_scheduler
 from utils.task_state import task_state
 from utils.db import get_db_connection, safe_commit
 from api.dashboard import DashboardStream
@@ -72,7 +72,6 @@ def _nightly():
         DashboardStream.publish("event_done", {"steps": _event_state["steps"]})
         _event_state["running"] = False
         _event_state["current"] = "完成"
-        task_lock.release('event')
         task_state.finish('event', success=not any_failed)
 
 
@@ -125,7 +124,6 @@ def _run_recluster():
         logger.error(f"recluster: {e}")
     finally:
         _recl_state["running"] = False
-        task_lock.release('recluster')
 
 
 def _run_summarize():
@@ -178,7 +176,6 @@ def _run_summarize():
     finally:
         _es_state["running"] = False
         logger.info(f"summarize: 完成 — {_es_state.get('done', 0)}/{_es_state.get('total', 0)} 成功, {_es_state.get('failed', 0)} 失败")
-        task_lock.release('summarize_events')
 
 
 def _run_build_chains():
@@ -253,7 +250,6 @@ def _run_build_chains():
         logger.error(f"build_chains: {e}")
     finally:
         _chain_state["running"] = False
-        task_lock.release('build_chains')
 
 
 # ── 主端点 ──
@@ -263,12 +259,12 @@ def start_nightly():
     global _event_state
     if _event_state.get("running"):
         return {"ok": False, "message": "事件管线已在运行中"}
-    ok, msg = task_lock.acquire('event')
-    if not ok:
-        return {"ok": False, "message": msg}
+    scheduler = get_scheduler()
+    if "event_nightly" in scheduler.status["active_types"]:
+        return {"ok": False, "message": "事件管线已在运行中"}
     task_state.init_state('event')
-    threading.Thread(target=_nightly, daemon=True).start()
-    return {"ok": True, "message": "事件管线已启动（聚类→摘要→逻辑链）"}
+    scheduler.submit("event_nightly", _nightly)
+    return {"ok": True, "message": "事件管线已启动（摘要→逻辑链）"}
 
 
 @router.get("/status")
@@ -296,10 +292,10 @@ def start_recluster():
     global _recl_state
     if _recl_state.get("running"):
         return {"ok": False, "message": "重聚类已在运行中"}
-    ok, msg = task_lock.acquire('recluster')
-    if not ok:
-        return {"ok": False, "message": msg}
-    threading.Thread(target=_run_recluster, daemon=True).start()
+    scheduler = get_scheduler()
+    if "recluster" in scheduler.status["active_types"]:
+        return {"ok": False, "message": "重聚类已在运行中"}
+    scheduler.submit("recluster", _run_recluster)
     return {"ok": True, "message": "事件重聚类已启动"}
 
 
@@ -313,10 +309,10 @@ def start_summarize():
     global _es_state
     if _es_state.get("running"):
         return {"ok": False, "message": "摘要已在运行中"}
-    ok, msg = task_lock.acquire('summarize_events')
-    if not ok:
-        return {"ok": False, "message": msg}
-    threading.Thread(target=_run_summarize, daemon=True).start()
+    scheduler = get_scheduler()
+    if "summarize_events" in scheduler.status["active_types"]:
+        return {"ok": False, "message": "摘要已在运行中"}
+    scheduler.submit("summarize_events", _run_summarize)
     return {"ok": True, "message": "事件摘要已启动"}
 
 
@@ -330,10 +326,10 @@ def start_build_chains():
     global _chain_state
     if _chain_state.get("running"):
         return {"ok": False, "message": "逻辑链构建已在运行中"}
-    ok, msg = task_lock.acquire('build_chains')
-    if not ok:
-        return {"ok": False, "message": msg}
-    threading.Thread(target=_run_build_chains, daemon=True).start()
+    scheduler = get_scheduler()
+    if "build_chains" in scheduler.status["active_types"]:
+        return {"ok": False, "message": "逻辑链构建已在运行中"}
+    scheduler.submit("build_chains", _run_build_chains)
     return {"ok": True, "message": "逻辑链构建已启动"}
 
 
