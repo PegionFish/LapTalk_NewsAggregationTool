@@ -55,10 +55,14 @@ export default function Dashboard() {
 
     es.addEventListener('event_state', (e) => {
       const d = JSON.parse(e.data);
-      setEventRunning(true);
-      setEventState({ running: true, total: d.steps?.length || 0, done: 0, failed: 0, current: '', steps: d.steps || [] });
+      if (d.running) {
+        setEventRunning(true);
+        setEventState({ running: true, total: 0, done: 0, failed: 0, current: '', steps: d.steps || [] });
+      } else {
+        setEventRunning(false);
+        setEventState(prev => ({ ...prev, running: false, steps: d.steps || [] }));
+      }
     });
-
     es.addEventListener('article_batch_start', (e) => {
       const d = JSON.parse(e.data);
       setArticleRunning(true);
@@ -110,14 +114,6 @@ export default function Dashboard() {
         }
         return { ...prev, steps, running: true };
       });
-    });
-
-    es.addEventListener('event_state', (e) => {
-      const d = JSON.parse(e.data);
-      if (d.running) {
-        setEventRunning(true);
-        setEventState({ running: true, total: 0, done: 0, failed: 0, current: '', steps: d.steps || [] });
-      }
     });
 
     es.addEventListener('event_done', (e) => {
