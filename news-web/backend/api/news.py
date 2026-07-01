@@ -414,22 +414,118 @@ def _sanitize_html(html: str) -> str:
     return html
 
 
+def _build_error_diag_html(
+    article_id: int, url: str, title: str, source: str,
+    local_path: str, content_status: str, diag: dict,
+) -> str:
+    """构建详细诊断 HTML 页面，展示所有获取步骤的失败信息。"""
+    now = __import__('datetime').datetime.now().isoformat(timespec='seconds')
+    import os
+    cache_exists = False
+    if local_path and not local_path.startswith('[ERR:'):
+        full_path = os.path.join(config.content_cache_path, os.path.basename(local_path))
+        cache_exists = os.path.isfile(full_path)
+
+    http_status = diag.get('http_status', 'N/A')
+    http_error = diag.get('http_error', 'N/A')
+    http_time = diag.get('http_time', 'N/A')
+    pw_status = diag.get('pw_status', 'N/A')
+    pw_error = diag.get('pw_error', 'N/A')
+    pw_time = diag.get('pw_time', 'N/A')
+    exc_info = diag.get('exception', None)
+
+    exc_html = ""
+    if exc_info:
+        exc_html = f'<pre class="exc">{__import__("html").escape(exc_info)}</pre>'
+
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>内容获取失败 - #{article_id}</title>
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         background: #1a1a2e; color: #e0e0e0; padding: 32px 24px; line-height: 1.6; }}
+  h1 {{ font-size: 22px; color: #ff6b6b; margin-bottom: 8px; }}
+  h1 small {{ font-size: 13px; color: #888; font-weight: 400; }}
+  .sub {{ color: #aaa; font-size: 13px; margin-bottom: 24px; }}
+  .card {{ background: #16213e; border: 1px solid #0f3460; border-radius: 10px;
+           padding: 20px; margin-bottom: 16px; }}
+  .card h2 {{ font-size: 14px; color: #00d4ff; margin-bottom: 12px;
+              text-transform: uppercase; letter-spacing: 0.5px; }}
+  .row {{ display: flex; padding: 6px 0; border-bottom: 1px solid #0f3460; }}
+  .row:last-child {{ border-bottom: none; }}
+  .label {{ width: 160px; flex-shrink: 0; color: #888; font-size: 13px; }}
+  .value {{ flex: 1; font-size: 13px; word-break: break-all; }}
+  .value a {{ color: #00d4ff; }}
+  .badge {{ display: inline-block; padding: 2px 8px; border-radius: 4px;
+            font-size: 11px; font-weight: 600; }}
+  .badge-ok {{ background: #1b4332; color: #52b788; }}
+  .badge-fail {{ background: #4a1a1a; color: #ff6b6b; }}
+  .badge-challenge {{ background: #4a3a1a; color: #e6a800; }}
+  .badge-skip {{ background: #2a2a3a; color: #888; }}
+  pre.exc {{ background: #0d1117; color: #f88; padding: 14px; border-radius: 6px;
+             font-size: 12px; overflow-x: auto; white-space: pre-wrap; margin-top: 8px; }}
+  .btn {{ display: inline-block; margin-top: 16px; padding: 10px 24px;
+          background: #00d4ff; color: #0d1117; border-radius: 8px;
+          text-decoration: none; font-size: 14px; font-weight: 600; }}
+  .btn:hover {{ background: #00b8e6; }}
+</style></head><body>
+  <h1>无法获取文章内容 <small>#{article_id}</small></h1>
+  <p class="sub">服务器尝试了 HTTP 下载和 Playwright 浏览器渲染两种方式，均未能获取到文章内容。</p>
+
+  <div class="card">
+    <h2>基本信息</h2>
+    <div class="row"><span class="label">文章 ID</span><span class="value">{article_id}</span></div>
+    <div class="row"><span class="label">标题</span><span class="value">{__import__("html").escape(title or "(无标题)")}</span></div>
+    <div class="row"><span class="label">来源</span><span class="value">{__import__("html").escape(source or "N/A")}</span></div>
+    <div class="row"><span class="label">URL</span><span class="value"><a href="{__import__("html").escape(url or "")}" target="_blank">{__import__("html").escape(url or "N/A")}</a></span></div>
+    <div class="row"><span class="label">content_status</span><span class="value"><code>{__import__("html").escape(content_status or "N/A")}</code></span></div>
+    <div class="row"><span class="label">local_path</span><span class="value"><code>{__import__("html").escape(local_path or "(空)")}</code> <span class="badge {'badge-ok' if cache_exists else 'badge-fail'}">{('磁盘文件存在' if cache_exists else '磁盘文件不存在')}</span></span></div>
+    <div class="row"><span class="label">诊断生成时间</span><span class="value">{now}</span></div>
+  </div>
+
+  <div class="card">
+    <h2>步骤 1：HTTP 下载</h2>
+    <div class="row"><span class="label">状态</span><span class="value"><span class="badge {'badge-ok' if http_status == 'success' else 'badge-fail' if http_status in ('failed','error') else 'badge-skip'}">{http_status}</span></span></div>
+    <div class="row"><span class="label">错误信息</span><span class="value">{__import__("html").escape(http_error[:1000] if http_error else 'N/A')}</span></div>
+    <div class="row"><span class="label">时间</span><span class="value">{http_time}</span></div>
+  </div>
+
+  <div class="card">
+    <h2>步骤 2：Playwright 浏览器渲染</h2>
+    <div class="row"><span class="label">状态</span><span class="value"><span class="badge {'badge-ok' if pw_status == 'success' else 'badge-challenge' if pw_status == 'challenge' else 'badge-fail' if pw_status in ('failed','error') else 'badge-skip'}">{pw_status}</span></span></div>
+    <div class="row"><span class="label">错误信息</span><span class="value">{__import__("html").escape(pw_error[:1000] if pw_error else 'N/A')}</span></div>
+    <div class="row"><span class="label">时间</span><span class="value">{pw_time}</span></div>
+  </div>
+
+  {exc_html}
+
+  <div style="margin-top: 8px;">
+    <a class="btn" href="{__import__("html").escape(url or "")}" target="_blank" rel="noopener">在浏览器中打开原文</a>
+  </div>
+</body></html>"""
+
+
 @router.get("/{article_id}/html")
-async def serve_article_html(article_id: int):
-    """返回文章 HTML — 本地缓存优先，未缓存时按需下载并存盘。"""
+async def serve_article_html(article_id: int, fresh: int = Query(0, ge=0, le=1)):
+    """返回文章 HTML — 跳过本地缓存，优先 HTTP 下载，失败时降级到 Playwright 浏览器渲染。
+
+    每次请求都会尝试重新获取内容（而非返回缓存），确保获取到最新页面。
+    当所有方式均失败时，返回包含详细诊断信息的 HTML 页面。
+    """
     from fastapi.responses import HTMLResponse
-    import os, sqlite3 as _sqlite3
+    import os, sqlite3 as _sqlite3, traceback
     from datetime import datetime
 
     db = get_db()
     with db._conn() as conn:
         row = conn.execute(
-            "SELECT url, local_path FROM news_articles WHERE id=?", (article_id,)
+            "SELECT id, url, title, source, local_path, content_status FROM news_articles WHERE id=?",
+            (article_id,)
         ).fetchone()
     if not row:
         raise HTTPException(404, "article_not_found")
 
-    url, local_path = row
+    aid, url, title, source, local_path, content_status = row
 
     # 通用安全头：明确禁止脚本执行，消除浏览器扩展注入告警
     _secure_headers = {"Content-Security-Policy": "script-src 'none'; object-src 'none'"}
@@ -441,20 +537,20 @@ async def serve_article_html(article_id: int):
             headers.update(extra_headers)
         return HTMLResponse(content=content, media_type="text/html", headers=headers)
 
-    # 1. 本地 HTML 缓存
-    if local_path and not local_path.startswith('[ERR:'):
-        cache_dir = config.content_cache_path
-        full_path = os.path.join(cache_dir, os.path.basename(local_path))
-        if os.path.isfile(full_path):
-            with open(full_path, 'r', encoding='utf-8') as f:
-                html = f.read()
-            if url:
-                html = _inject_base(html, url)
-            html = _sanitize_html(html)
-            return _mk_response(html)
+    # 收集诊断信息
+    diag = {
+        'http_status': None,
+        'http_error': None,
+        'http_time': None,
+        'pw_status': None,
+        'pw_error': None,
+        'pw_time': None,
+        'exception': None,
+    }
 
-    # 2. 未缓存 → 按需下载并存盘
+    # 1. HTTP 下载
     if url and url.startswith('http'):
+        http_time = datetime.now().isoformat(timespec='seconds')
         try:
             from pipeline.fetch_content import download_page
             result = download_page(url, retries=1)
@@ -484,19 +580,25 @@ async def serve_article_html(article_id: int):
                 if url:
                     html = _inject_base(html, url)
                 html = _sanitize_html(html)
-                return _mk_response(html)
-        except Exception:
-            pass
+                return _mk_response(html, {"X-Capture-Source": "http"})
 
-    # 3. HTTP 下载失败 → Playwright 浏览器渲染兜底（带真实指纹）
+            diag['http_status'] = 'failed'
+            diag['http_error'] = result.get('error', '未返回 HTML 内容')
+            diag['http_time'] = http_time
+        except Exception as e:
+            diag['http_status'] = 'error'
+            diag['http_error'] = f"{type(e).__name__}: {str(e)[:500]}"
+            diag['http_time'] = http_time
+
+    # 2. Playwright 浏览器渲染（带真实指纹）
     if url and url.startswith('http'):
+        pw_time = datetime.now().isoformat(timespec='seconds')
         try:
             from pipeline.browser_capture import fetch_with_fallback, cache_article_html
             pw_result = fetch_with_fallback(url, article_id)
             challenge = pw_result.get('challenge', {})
 
             if pw_result.get('html') and not challenge.get('is_challenge'):
-                # 成功获取 → 缓存并返回
                 cache_article_html(article_id, pw_result['html'])
                 cache_dir = config.content_cache_path
                 file_path = os.path.join(cache_dir, f'{article_id}.html')
@@ -508,7 +610,6 @@ async def serve_article_html(article_id: int):
                     html = _sanitize_html(html)
                     return _mk_response(html, {"X-Capture-Source": pw_result.get('source', 'playwright')})
             elif challenge.get('is_challenge'):
-                # 检测到人机验证 → 返回带验证提示的 fallback 页
                 chal_type = challenge.get('type', 'unknown')
                 chal_reason = challenge.get('reason', '需要人机验证')
                 chal_fallback = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="x-challenge" content="{chal_type}"><style>
@@ -531,21 +632,21 @@ async def serve_article_html(article_id: int):
                     <p class="hint">验证通过后，返回此页面使用"手动粘贴内容"功能即可加载</p>
                 </body></html>"""
                 return _mk_response(chal_fallback, {"X-Challenge-Type": chal_type})
-        except Exception:
-            pass
+            else:
+                diag['pw_status'] = 'failed'
+                diag['pw_error'] = pw_result.get('error', 'Playwright 未返回内容')
+                diag['pw_time'] = pw_time
+        except Exception as e:
+            diag['pw_status'] = 'error'
+            diag['pw_error'] = f"{type(e).__name__}: {str(e)[:500]}"
+            diag['pw_time'] = pw_time
+            diag['exception'] = traceback.format_exc()
 
-    # 4. 全部无法获取 → 返回提示页面（前端会检测并展示 fallback UI）
-    fallback = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-        body {{ font-family: -apple-system, sans-serif; display: flex; align-items: center; justify-content: center;
-               height: 100vh; margin: 0; background: #f5f5f5; color: #666; flex-direction: column; gap: 16px; }}
-        a {{ color: var(--accent, #00d4ff); text-decoration: none; padding: 8px 16px; border: 1px solid currentColor;
-             border-radius: 6px; font-size: 13px; }}
-        a:hover {{ background: rgba(0,212,255,0.1); }}
-    </style></head><body>
-        <p style="font-size:13px;color:#999">服务器无法直接获取此页面内容</p>
-        <a href="{url}" target="_blank" rel="noopener">在浏览器中打开原文 <i class="fas fa-external-link-alt"></i></a>
-    </body></html>"""
-    return _mk_response(fallback)
+    # 3. 全部失败 → 返回详细诊断页面
+    error_html = _build_error_diag_html(
+        article_id, url, title, source, local_path, content_status, diag
+    )
+    return _mk_response(error_html)
 
 
 @router.post("/{article_id}/analyze")
