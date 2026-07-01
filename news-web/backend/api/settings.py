@@ -239,3 +239,42 @@ def test_proxy():
             'error': str(e)[:200],
             'elapsed_ms': elapsed_ms,
         }
+
+
+# ══════════════════════════════════════════════════════════════
+# AI 余额查询 + 并发数动态调整
+# ══════════════════════════════════════════════════════════════
+
+@router.get("/ai/balance")
+def get_ai_balance():
+    """查询 DeepSeek 账户余额。"""
+    from ai_client import get_balance as _get_ai_balance
+    result = _get_ai_balance()
+    if result is None:
+        return {
+            "ok": False,
+            "error": "余额查询失败，请检查 API Key 和网络连接",
+            "cached": False,
+        }
+    return {
+        "ok": True,
+        "data": result,
+        "cached": False,
+    }
+
+
+class WorkersUpdate(BaseModel):
+    workers: int
+
+
+@router.post("/ai/workers")
+def set_ai_workers(body: WorkersUpdate):
+    """动态调整 AI 并发 worker 数。"""
+    n = max(1, min(50, body.workers))
+    config.ai_workers = n
+    try:
+        from scheduler.task_scheduler import get_scheduler
+        get_scheduler().set_workers(n)
+    except RuntimeError:
+        pass  # scheduler 未初始化（如测试环境）
+    return {"ok": True, "workers": n}
