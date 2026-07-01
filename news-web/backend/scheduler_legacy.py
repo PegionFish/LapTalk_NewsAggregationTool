@@ -11,7 +11,6 @@ from apscheduler.triggers.cron import CronTrigger
 from config import config
 from pipeline.run_all import run_pipeline
 from api.pipeline_event import _nightly
-from utils.task_lock import task_lock
 from utils.task_state import task_state
 
 logger = logging.getLogger(__name__)
@@ -271,10 +270,9 @@ def _run_pipeline_job_sync():
     """同步版本的管道执行（在线程池中运行）。"""
     global _pipeline_state
 
-    ok, reason = task_lock.acquire('pipeline')
-    if not ok:
-        _add_schedule_log(f"管道启动失败: {reason}")
-        logger.warning(f"Pipeline skipped: {reason}")
+    if _pipeline_state.get('running'):
+        _add_schedule_log("管道启动失败: 已有管道在运行")
+        logger.warning("Pipeline skipped: already running")
         return
 
     task_state.init_state('pipeline')
@@ -312,7 +310,6 @@ def _run_pipeline_job_sync():
         _pipeline_state['running'] = False
         _pipeline_state['run_type'] = 'scheduled'
         _pipeline_state['last_run'] = datetime.now().isoformat(timespec='seconds')
-        task_lock.release('pipeline')
 
 
 # ══════════════════════════════════════════════════════════
@@ -329,10 +326,9 @@ def _run_ai_full_job_sync():
     """同步版本的事件管线执行（在线程池中运行）。"""
     global _ai_full_state
 
-    ok, reason = task_lock.acquire('event')
-    if not ok:
-        _add_schedule_log(f"事件管线启动失败: {reason}")
-        logger.warning(f"Event pipeline skipped: {reason}")
+    if _ai_full_state.get('running'):
+        _add_schedule_log(f"事件管线启动失败: 已有事件管线在运行")
+        logger.warning(f"Event pipeline skipped: already running")
         return
 
     _ai_full_state.update(running=True)
@@ -340,7 +336,6 @@ def _run_ai_full_job_sync():
     logger.info("Event pipeline starting...")
     try:
         _nightly()
-        # _nightly() 在其 finally 块中调用 task_lock.release('event')
         _ai_full_state['last_status'] = 'success'
         _add_schedule_log("事件管线执行成功")
         logger.info("Event pipeline completed successfully")
@@ -348,8 +343,6 @@ def _run_ai_full_job_sync():
         _ai_full_state['last_status'] = 'error'
         _add_schedule_log(f"事件管线异常: {str(e)[:100]}")
         logger.exception(f"Event pipeline error: {e}")
-        # 异常时确保锁释放（正常路径由 _nightly 自行释放）
-        task_lock.release('event')
     finally:
         _ai_full_state['running'] = False
         _ai_full_state['last_run'] = datetime.now().isoformat(timespec='seconds')

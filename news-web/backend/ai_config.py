@@ -1,82 +1,44 @@
 """
-AI 入口级配置模块 — 按调用入口注册，每个入口独立配置 endpoint/key/model/参数。
+AI 入口级配置模块 — 所有入口返回统一配置。
 
-设计目标（遵循 docs/superpowers/specs/2026-06-23-ai-endpoint-settings-design.md）：
-- 3 个 AI 调用入口各自独立配置
-- 旧字段兼容映射（config.json 旧字段 ↔ 入口级结构）
-- API Key 掩码（*** 不覆盖真实 Key，空字符串明确清空）
-- 统一测试入口，每个入口独立反馈
+三个入口（title_filter / article_processing / event_pipeline）共用
+config.openai_base_url / config.openai_model / config.openai_api_key。
 """
 from config import config
 
-# ── 入口注册表 ──────────────────────────────────────────────
+# ── 入口注册表（用于迭代和展示）────────────────────────────────
 
 AI_ENDPOINTS = {
     'title_filter': {
         'name': '标题初筛',
         'description': 'RSS 抓取后的标题批量筛选，判断文章是否值得缓存',
-        'default_model': 'deepseek-v4-flash',
-        'default_base_url': 'https://api.deepseek.com',
         'default_enabled': True,
-        'params': ['enable_thinking', 'json_response_format'],
-        'legacy_field': None,
     },
     'article_processing': {
         'name': '文章处理',
         'description': '内容清洗、翻译、分析摘要、KCS（关键词+分类+评分）',
-        'default_model': 'deepseek-v4-flash',
-        'default_base_url': 'https://api.deepseek.com',
         'default_enabled': True,
-        'params': ['enable_thinking', 'thinking_budget'],
-        'legacy_field': None,
     },
     'event_pipeline': {
         'name': '事件管线',
         'description': '事件聚类、摘要生成、逻辑链构建',
-        'default_model': 'deepseek-v4-flash',
-        'default_base_url': 'https://api.deepseek.com',
         'default_enabled': True,
-        'params': ['enable_thinking', 'thinking_budget'],
-        'legacy_field': None,
     },
 }
 
-# ── 旧字段 → 入口级字段映射 ────────────────────────────────
 
-_LEGACY_TO_ENDPOINT = {
-    'openai_base_url': 'openai',
-    'openai_api_key': 'openai',
-    'openai_model': 'openai',
-    'simple_model': 'simple',
-    'ai_enable_thinking': None,
-    'ai_thinking_budget': None,
-    'ai_deep_thinking_max_tokens': None,
-    'ai_json_response_format': None,
-}
+def _get_endpoint_base_url(_endpoint_key: str) -> str:
+    """所有入口共用 openai_base_url。"""
+    return config.openai_base_url
 
 
-def _get_endpoint_base_url(endpoint_key: str) -> str:
-    """读取入口的 base_url，回退到默认值。"""
-    if endpoint_key == 'title_filter':
-        return config.openai_base_url
-    elif endpoint_key == 'article_processing':
-        return config.openai_base_url
-    elif endpoint_key == 'event_pipeline':
-        return config.openai_base_url
-    return AI_ENDPOINTS.get(endpoint_key, {}).get('default_base_url', 'https://api.deepseek.com')
-
-
-def _get_endpoint_api_key(endpoint_key: str) -> str:
-    """读取入口的 api_key，回退到 openai_api_key。"""
+def _get_endpoint_api_key(_endpoint_key: str) -> str:
+    """所有入口共用 openai_api_key。"""
     return config.openai_api_key
 
 
-def _get_endpoint_model(endpoint_key: str) -> str:
-    """读取入口的 model。"""
-    if endpoint_key == 'title_filter':
-        return config.simple_model
-    elif endpoint_key in ('article_processing', 'event_pipeline'):
-        return config.openai_model
+def _get_endpoint_model(_endpoint_key: str) -> str:
+    """所有入口共用 openai_model。"""
     return config.openai_model
 
 
@@ -90,45 +52,41 @@ def _mask_key(key: str) -> str:
     return '***' if key else ''
 
 
-def _get_endpoint_params(endpoint_key: str) -> dict:
-    """读取入口支持的高级参数。"""
-    ep_def = AI_ENDPOINTS.get(endpoint_key, {})
-    supported = ep_def.get('params', [])
+def _get_endpoint_params(_endpoint_key: str) -> dict:
+    """读取入口支持的高级参数（全局共享）。"""
     params = {}
-    if 'enable_thinking' in supported:
+    if hasattr(config, 'ai_enable_thinking'):
         params['enable_thinking'] = config.ai_enable_thinking
-    if 'thinking_budget' in supported:
+    if hasattr(config, 'ai_thinking_budget'):
         params['thinking_budget'] = config.ai_thinking_budget
-    if 'json_response_format' in supported:
+    if hasattr(config, 'ai_json_response_format'):
         params['json_response_format'] = config.ai_json_response_format
     return params
 
 
 def to_ai_endpoint_config() -> dict:
-    """从 config._data 读取旧字段，推导每个入口的 endpoint 配置，返回掩码后的结构。"""
-    endpoints = {}
-    for key, ep_def in AI_ENDPOINTS.items():
-        base_url = _get_endpoint_base_url(key)
-        api_key = _get_endpoint_api_key(key)
-        model = _get_endpoint_model(key)
-        enabled = _get_endpoint_enabled(key)
-        params = _get_endpoint_params(key)
+    """从 config 读取统一配置，为每个入口生成相同的配置。"""
+    base_url = _get_endpoint_base_url('')
+    api_key = _get_endpoint_api_key('')
+    model = _get_endpoint_model('')
+    params = _get_endpoint_params('')
 
+    endpoints = {}
+    for key in AI_ENDPOINTS:
         entry = {
-            'enabled': enabled,
+            'enabled': _get_endpoint_enabled(key),
             'base_url': base_url,
             'api_key': _mask_key(api_key),
             'model': model,
         }
         entry.update(params)
-
         endpoints[key] = entry
 
     return {'ai_endpoints': endpoints}
 
 
 def apply_ai_endpoint_config(body: dict) -> dict:
-    """接收入口级配置，写回 config 旧字段，返回掩码后的入口级配置。"""
+    """接收入口级配置，写回 config 统一字段，返回掩码后的配置。"""
     endpoints = body.get('ai_endpoints', {})
     if not isinstance(endpoints, dict):
         return to_ai_endpoint_config()
@@ -139,7 +97,7 @@ def apply_ai_endpoint_config(body: dict) -> dict:
         if not isinstance(ep_data, dict):
             continue
 
-        # 更新 base_url — 所有入口共用 openai_base_url
+        # 更新 base_url
         if 'base_url' in ep_data:
             config.openai_base_url = ep_data['base_url']
 
@@ -147,7 +105,7 @@ def apply_ai_endpoint_config(body: dict) -> dict:
         if 'api_key' in ep_data:
             api_key = ep_data['api_key']
             if api_key == '***':
-                pass  # 不覆盖
+                pass
             elif not api_key:
                 config.openai_api_key = ''
             else:
@@ -155,18 +113,14 @@ def apply_ai_endpoint_config(body: dict) -> dict:
 
         # 更新 model
         if 'model' in ep_data:
-            model = ep_data['model']
-            if key == 'title_filter':
-                config.simple_model = model
-            else:
-                config.openai_model = model
+            config.openai_model = ep_data['model']
 
         # 更新高级参数（全局共享）
-        if 'enable_thinking' in ep_data:
+        if 'enable_thinking' in ep_data and hasattr(config, 'ai_enable_thinking'):
             config.ai_enable_thinking = bool(ep_data['enable_thinking'])
-        if 'thinking_budget' in ep_data:
+        if 'thinking_budget' in ep_data and hasattr(config, 'ai_thinking_budget'):
             config.ai_thinking_budget = int(ep_data['thinking_budget'])
-        if 'json_response_format' in ep_data:
+        if 'json_response_format' in ep_data and hasattr(config, 'ai_json_response_format'):
             config.ai_json_response_format = bool(ep_data['json_response_format'])
 
     return to_ai_endpoint_config()

@@ -9,7 +9,6 @@ from datetime import datetime
 from fastapi import APIRouter
 
 from config import config
-from utils.task_lock import task_lock
 from utils.task_state import task_state
 from utils.db import get_db_connection, safe_commit
 
@@ -71,26 +70,12 @@ def _check_cancelled(state: dict) -> bool:
     return False
 
 
-def _check_and_lock(task_type: str) -> tuple[bool, str]:
-    """检查并获取任务锁。返回 (ok, message)。"""
-    ok, reason = task_lock.acquire(task_type)
-    if not ok:
-        return False, f"无法启动: {reason}"
-    return True, ''
-
-
-def _unlock(task_type: str):
-    """释放任务锁。"""
-    task_lock.release(task_type)
-
-
 def _force_reset(task_type: str, state: dict) -> dict:
     """强制重置卡住的任务状态 — 清除内存状态、锁、DB 持久化。"""
     was_running = state.get("running", False)
     state["running"] = False
     state["current"] = "已强制重置"
     state.setdefault("log", []).append(f"[{datetime.now().strftime('%H:%M:%S')}] 管理员强制重置")
-    task_lock.release(task_type)
     task_state.clear(task_type)
     logger.warning(f"[ForceReset] Task '{task_type}' force-reset (was_running={was_running})")
     return {"ok": True, "message": f"任务 '{task_type}' 已强制重置", "was_running": was_running}
@@ -175,7 +160,6 @@ def _batch_ai_filter():
         logger.error(f"batch-ai-filter: {e}")
     finally:
         _filter_state["running"] = False
-        _unlock('ai_filter')
         task_state.finish('ai_filter', success=True)
 
 
@@ -185,9 +169,6 @@ def start_batch_ai_filter():
     global _filter_state
     if _filter_state.get("running"):
         return {"ok": False, "message": "AI 筛选已在运行中"}
-    ok, msg = _check_and_lock('ai_filter')
-    if not ok:
-        return {"ok": False, "message": msg}
     db = _conn()
     n = db.execute("""
         SELECT COUNT(*) FROM news_articles
