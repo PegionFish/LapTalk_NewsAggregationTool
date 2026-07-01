@@ -365,4 +365,24 @@ export interface AiEndpointTestResponse {
 
 export interface AiSettingsResponse {
   ai_endpoints: Record<string, AiEndpointConfig>;
+  ai_workers?: number;
+}
+
+export interface AiBalanceInfo {
+  currency: string;
+  total_balance: string;
+  granted_balance?: string;
+  topped_up_balance?: string;
+}
+
+export interface AiBalanceData {
+  is_available: boolean;
+  balance_infos: AiBalanceInfo[];
+}
+
+export interface AiBalanceResponse {
+  ok: boolean;
+  data?: AiBalanceData;
+  error?: string;
+  cached?: boolean;
 }

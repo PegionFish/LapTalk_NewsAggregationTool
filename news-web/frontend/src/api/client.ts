@@ -247,7 +247,7 @@ export const api = {
     }),
 
   getAiBalance: () =>
-    fetchJSON<{ ok: boolean; balance: string; total_used: number; model: string }>('/settings/ai/balance'),
+    fetchJSON<import('../types').AiBalanceResponse>('/settings/ai/balance'),
 
   setAiWorkers: (workers: number) =>
     fetchJSON<{ ok: boolean; workers: number }>('/settings/ai/workers', {

@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { api } from '../api/client';
-import type { Stats } from '../types';
+import type { Stats, AiBalanceData } from '../types';
 import DashboardCards from '../components/DashboardCards';
 import { Card, CardHeader, CardBody, Button, ProgressBar, LogPanel } from '../components/ui';
 
@@ -13,6 +13,11 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState('');
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 3000); };
+
+  // AI Balance state
+  const [balanceData, setBalanceData] = useState<AiBalanceData | null>(null);
+  const [balanceLoading, setBalanceLoading] = useState(true);
+  const [balanceError, setBalanceError] = useState('');
 
   // Article pipeline state
   const [articleRunning, setArticleRunning] = useState(false);
@@ -129,6 +134,31 @@ export default function Dashboard() {
   // Stats fallback
   useEffect(() => { api.getStats().then(setStats).catch(() => setStats(null)).finally(() => setLoading(false)); }, []);
 
+  // AI Balance — 首次加载 + 5 分钟轮询
+  const fetchBalance = useCallback(() => {
+    api.getAiBalance()
+      .then(resp => {
+        if (resp.ok && resp.data) {
+          setBalanceData(resp.data);
+          setBalanceError('');
+        } else {
+          setBalanceData(null);
+          setBalanceError(resp.error || '余额查询失败');
+        }
+      })
+      .catch(e => {
+        setBalanceData(null);
+        setBalanceError((e as Error).message || '请求失败');
+      })
+      .finally(() => setBalanceLoading(false));
+  }, []);
+
+  useEffect(() => {
+    fetchBalance();
+    const interval = setInterval(fetchBalance, 300000); // 5 分钟
+    return () => clearInterval(interval);
+  }, [fetchBalance]);
+
   // ── Handlers ──
   const handleArticleBatch = async () => {
     try {
@@ -190,6 +220,77 @@ export default function Dashboard() {
       )}
 
       <DashboardCards stats={stats} loading={loading} />
+
+      {/* AI 余额卡片 */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+        gap: 16,
+        marginTop: 16,
+      }}>
+        <Card>
+          <CardHeader icon="fa-coins" iconColor="var(--accent-orange)" title="AI 余额" desc={balanceLoading ? '查询中...' : balanceData ? 'DeepSeek 账户' : '未获取'} />
+          <CardBody>
+            {balanceLoading ? (
+              <div style={{ padding: '12px 0', fontSize: 13, color: 'var(--text-secondary)' }}>
+                <i className="fas fa-spinner fa-spin" style={{ marginRight: 8 }} />查询余额中...
+              </div>
+            ) : balanceError ? (
+              <div style={{ padding: '12px 0', fontSize: 12, color: 'var(--accent-red)' }}>
+                <i className="fas fa-exclamation-circle" style={{ marginRight: 8 }} />
+                {balanceError}
+                <button className="btn btn-secondary" onClick={fetchBalance}
+                  style={{ marginLeft: 10, padding: '2px 8px', fontSize: 11 }}>
+                  <i className="fas fa-redo" /> 重试
+                </button>
+              </div>
+            ) : balanceData && balanceData.balance_infos && balanceData.balance_infos.length > 0 ? (
+              <div>
+                {balanceData.balance_infos.map((info, idx) => (
+                  <div key={idx} style={{
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    padding: '8px 0', borderBottom: idx < balanceData.balance_infos.length - 1 ? '1px solid var(--border)' : 'none',
+                  }}>
+                    <div>
+                      <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>币种</div>
+                      <div style={{ fontSize: 14, fontWeight: 700 }}>{info.currency}</div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>余额</div>
+                      <div style={{
+                        fontSize: 20, fontWeight: 700,
+                        color: balanceData.is_available ? 'var(--accent-tertiary)' : 'var(--accent-red)',
+                      }}>
+                        {info.total_balance}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                <div style={{
+                  marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--border)',
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  fontSize: 12,
+                }}>
+                  <i className="fas fa-circle" style={{
+                    fontSize: 8,
+                    color: balanceData.is_available ? 'var(--accent-tertiary)' : 'var(--accent-red)',
+                  }} />
+                  <span style={{
+                    color: balanceData.is_available ? 'var(--accent-tertiary)' : 'var(--accent-red)',
+                    fontWeight: 600,
+                  }}>
+                    {balanceData.is_available ? '可用' : '不可用'}
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <div style={{ padding: '12px 0', fontSize: 13, color: 'var(--text-secondary)' }}>
+                <i className="fas fa-info-circle" style={{ marginRight: 8 }} />无余额信息
+              </div>
+            )}
+          </CardBody>
+        </Card>
+      </div>
 
       {/* Pipeline Cards — 运行时全宽展开 */}
       <div style={{ display: 'grid', gridTemplateColumns: (articleRunning || eventRunning) ? '1fr' : 'repeat(auto-fit, minmax(400px, 1fr))', gap: 16, marginTop: 16 }}>

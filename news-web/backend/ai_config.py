@@ -82,7 +82,7 @@ def to_ai_endpoint_config() -> dict:
         entry.update(params)
         endpoints[key] = entry
 
-    return {'ai_endpoints': endpoints}
+    return {'ai_endpoints': endpoints, 'ai_workers': config.ai_workers}
 
 
 def apply_ai_endpoint_config(body: dict) -> dict:
