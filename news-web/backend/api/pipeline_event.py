@@ -44,6 +44,10 @@ def _nightly():
             _event_state["steps"][i]["status"] = "running"
             _event_state["current"] = name
             _event_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] 开始: {name}")
+            DashboardStream.publish("event_log", {
+                "phase": name, "status": "started",
+                "ts": datetime.now().strftime('%H:%M:%S')
+            })
             try:
                 fn()
                 while st.get("running"):
@@ -63,9 +67,19 @@ def _nightly():
                 _event_state["steps"][i]["done"] = st.get("done", 0)
                 _event_state["steps"][i]["total"] = st.get("total", 0)
                 _event_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ {name} 完成 ({st.get('done', 0)}/{st.get('total', 0)})")
+                DashboardStream.publish("event_log", {
+                    "phase": name, "status": "completed",
+                    "done": st.get("done", 0), "total": st.get("total", 0),
+                    "ts": datetime.now().strftime('%H:%M:%S')
+                })
             except Exception as e:
                 _event_state["steps"][i]["status"] = "failed"
                 _event_state["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ {name}: {e}")
+                DashboardStream.publish("event_log", {
+                    "phase": name, "status": "failed",
+                    "error": str(e),
+                    "ts": datetime.now().strftime('%H:%M:%S')
+                })
                 logger.error(f"nightly {name}: {e}")
                 any_failed = True
     finally:
@@ -159,6 +173,18 @@ def _run_summarize():
             if len(titles) < 2:
                 _es_state["failed"] += 1  # 理论上不应到达（HAVING 已过滤），但防御性保留
                 continue
+            _es_state["done"] = _es_state.get("done", 0)
+            done = _es_state["done"]
+            total = _es_state.get("total", 1)
+            if done % 10 == 0 and done > 0:
+                msg = f"summarize: 处理 {done}/{total} — 事件#{eid}"
+                _es_state["log"].append(msg)
+                DashboardStream.publish("event_log", {
+                    "phase": "summarize", "done": done, "total": total,
+                    "current_eid": eid,
+                    "ts": datetime.now().strftime('%H:%M:%S')
+                })
+                logger.info(msg)
             try:
                 block = "\n".join(f"- {t}" for t in titles)
                 summary = generate_event_summary_ai(block)
@@ -242,7 +268,14 @@ def _run_build_chains():
                     (chain_id, eid, pos, note[:200])
                 )
             _chain_state["chains_created"] += 1
-            _chain_state["log"].append(f"✅ {chain_title} ({len(valid)} 事件) — {reason}")
+            _chain_state["log"].append(f"✅ 链#{chain_id} {chain_title} ({len(valid)} 事件) — {reason}")
+            DashboardStream.publish("event_log", {
+                "phase": "build_chains", "event": "chain_created",
+                "chain_id": chain_id, "chain_title": chain_title,
+                "event_count": len(valid), "reason": reason,
+                "ts": datetime.now().strftime('%H:%M:%S')
+            })
+            logger.info(f"build_chains: 创建链 #{chain_id} — {chain_title}")
         safe_commit(db)
         db.close()
         logger.info(f"build_chains: 完成 — {_chain_state['chains_created']}/{_chain_state['total_groups']} 条逻辑链已入库")
