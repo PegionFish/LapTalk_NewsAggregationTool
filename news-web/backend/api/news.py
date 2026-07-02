@@ -6,6 +6,19 @@ from datetime import datetime
 from config import config
 from db.news_db import NewsDB
 from utils.proxy import get_httpx_proxy
+from pipeline.content_processor import process_html_for_local_cache
+
+# Content-Type 反向映射 — ext → MIME type
+_MIME_TO_EXT_REVERSE = {
+    'png': 'image/png',
+    'jpg': 'image/jpeg',
+    'jpeg': 'image/jpeg',
+    'gif': 'image/gif',
+    'webp': 'image/webp',
+    'svg': 'image/svg+xml',
+    'bmp': 'image/bmp',
+    'ico': 'image/x-icon',
+}
 
 router = APIRouter(prefix="/api/news", tags=["news"])
 
@@ -580,6 +593,7 @@ async def serve_article_html(article_id: int, fresh: int = Query(0, ge=0, le=1))
                 if url:
                     html = _inject_base(html, url)
                 html = _sanitize_html(html)
+                html = process_html_for_local_cache(html, url, article_id)
                 return _mk_response(html, {"X-Capture-Source": "http"})
 
             diag['http_status'] = 'failed'
@@ -608,6 +622,7 @@ async def serve_article_html(article_id: int, fresh: int = Query(0, ge=0, le=1))
                     if url:
                         html = _inject_base(html, url)
                     html = _sanitize_html(html)
+                    html = process_html_for_local_cache(html, url, article_id)
                     return _mk_response(html, {"X-Capture-Source": pw_result.get('source', 'playwright')})
             elif challenge.get('is_challenge'):
                 chal_type = challenge.get('type', 'unknown')
@@ -647,6 +662,49 @@ async def serve_article_html(article_id: int, fresh: int = Query(0, ge=0, le=1))
         article_id, url, title, source, local_path, content_status, diag
     )
     return _mk_response(error_html)
+
+
+@router.get("/shared-css/{domain}/{hash}.css")
+async def serve_shared_css(domain: str, hash: str):
+    """返回共享 CSS 文件。Cache-Control: immutable（内容由 hash 标识，永不变）。"""
+    from fastapi.responses import FileResponse
+    import os
+
+    css_path = os.path.join(config.content_cache_path, 'shared', domain, f'{hash}.css')
+    if not os.path.isfile(css_path):
+        raise HTTPException(404, "css_not_found")
+
+    return FileResponse(
+        css_path,
+        media_type='text/css',
+        headers={
+            'Cache-Control': 'max-age=31536000, immutable',
+            'Access-Control-Allow-Origin': '*',
+        },
+    )
+
+
+@router.get("/images/{hash}.{ext}")
+async def serve_cached_image(hash: str, ext: str):
+    """返回本地缓存的图片文件。"""
+    from fastapi.responses import FileResponse
+    import os
+
+    img_path = os.path.join(config.content_cache_path, 'images', f'{hash}.{ext}')
+    if not os.path.isfile(img_path):
+        raise HTTPException(404, "image_not_found")
+
+    # 推断 Content-Type
+    content_type = _MIME_TO_EXT_REVERSE.get(ext, 'application/octet-stream')
+
+    return FileResponse(
+        img_path,
+        media_type=content_type,
+        headers={
+            'Cache-Control': 'max-age=86400',
+            'Access-Control-Allow-Origin': '*',
+        },
+    )
 
 
 @router.post("/{article_id}/analyze")
