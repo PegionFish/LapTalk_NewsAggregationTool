@@ -387,7 +387,6 @@ export default function ArticlePane({ article, onClose }: Props) {
                 ref={iframeRef}
                 src={`/api/news/${article.id}/html`}
                 style={{ width: '100%', height: '100%', border: 'none' }}
-                sandbox="allow-same-origin allow-popups"
                 title={article.title}
                 onLoad={handleIframeOnLoad}
               />
